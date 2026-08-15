@@ -133,7 +133,10 @@ openpwnagotchi-companion/
 │   │   └── feature_request.yml
 │   ├── labels.json
 │   ├── check_plugin.py              # AST-based plugin sanity check (§5.1)
-│   └── check_language.py            # English-only check (§5.1)
+│   ├── check_schemas.py             # JSON Schema validity and framing invariants (§5.1)
+│   ├── check_secrets.py             # generic credential scan (§5.1)
+│   ├── check_language.py            # English-only check (§5.1)
+│   └── language-allowlist.txt       # reviewable exceptions for the above
 └── docs/
     ├── SETUP.md                     # full setup: CA, cert, iOS trust, install, first run
     ├── CERTIFICATES.md              # deep dive on the cert constraints and why
@@ -777,18 +780,35 @@ on-Pi fix, whether from bettercap or gpsd, always wins.
   fails the build, not a warning. `tests/tools/test_certs.py` runs in the same job; the runner
   already has `openssl`.
 - **language-check**: `.github/check_language.py` fails the build on non-English content in
-  tracked source and docs. Implementation: a curated list of common Italian function words and
-  accented forms (`perché`, `già`, `così`, `più`, `della`, `viene`, `questo`, `quando`,
-  `serve`, …) matched case-insensitively on word boundaries in `*.py`, `*.ts`, `*.svelte`,
-  `*.sh`, `*.md`, `*.yml`. Whitelist path: `.github/language-allowlist.txt` for legitimate hits.
-  Report file:line so failures are actionable.
+  tracked source and docs (D16). It matches a curated list of unambiguously Italian words, at
+  least four characters long, on word boundaries, across `*.py`, `*.ts`, `*.svelte`, `*.sh`,
+  `*.md` and `*.yml`, and reports `file:line` so a failure is actionable. The word list lives
+  only in the script — which is excluded from its own scan — so that documenting the rule does
+  not violate it.
+
+  Two exclusions are deliberate and must not be undone: short function words, which collide with
+  identifiers, and Italian words that are also English words (`serve`, `come`, `fare`, `solo`,
+  `prima`), which occur legitimately here. **Accuracy beats coverage**: a check that cries wolf
+  gets ignored, and an ignored check is worse than no check at all. Genuine false positives go
+  in `.github/language-allowlist.txt`, one full line each, rather than being fixed by weakening
+  the list.
 - **frontend**: `npm ci`, `svelte-check`, `tsc --noEmit`, `vitest run`, `npm run build`.
-- **schema-check**: `node tools/gen-protocol-types.mjs --check` — the generated types must be
-  committed and in sync with the schemas.
-- **secret-scan**: a generic scan for key material and credential patterns in the diff. Note
-  what this job **cannot** do: the owner-specific infrastructure denylist lives outside the
-  repository by design (§13), so the personal-infrastructure check is a local pre-commit gate
-  only. CI catches generic secrets; it cannot catch a hostname it is not allowed to know.
+- **schemas**: `.github/check_schemas.py` — every schema is valid draft 2020-12, each message's
+  `type` const matches its filename, incoming messages are flat while outgoing ones wrap their
+  payload under `data` with a `timestamp`, `additionalProperties: false` throughout, every `$ref`
+  resolves, and no definition in `common.json` is left unreferenced.
+- **protocol-types**: `node tools/gen-protocol-types.mjs --check` — the generated types must be
+  committed and in sync with the schemas. Drift here means the plugin and the PWA have stopped
+  agreeing about the wire format, which is the exact failure the schema-first design prevents.
+- **secret scan**: `.github/check_secrets.py` — PEM private keys, provider token shapes, and
+  credential assignments carrying a real literal rather than a placeholder. It also refuses
+  file types that must never be tracked at all. Matched text is never echoed, because the match
+  is the secret. Note what this job **cannot** do: the owner-specific infrastructure denylist
+  lives outside the repository by design (§13), so that check is a local pre-commit gate only.
+  CI catches secrets that look like secrets to anyone; it cannot catch a hostname it is not
+  allowed to know, and a green run is not proof a diff is safe to publish.
+- **no coverage exclusions**: `# pragma: no cover` is banned outright. The 100% branch gate only
+  means something if nobody can opt out of it.
 - **mutation** (scheduled, not a PR gate): `mutmut` over `plugin/`, reported not enforced.
   Mutation testing is too slow to block a pull request and too valuable to skip entirely.
 

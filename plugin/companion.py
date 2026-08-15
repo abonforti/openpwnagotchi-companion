@@ -149,6 +149,26 @@ def _finite(value: Any) -> float | None:
     return number
 
 
+def is_bindable_address(value: Any) -> bool:
+    """Whether a value is a literal IP address this plugin is willing to bind.
+
+    Decision D5 is "bind only the tether interfaces", and two things defeat it:
+    a wildcard, which binds every interface at once, and a hostname, which
+    resolves at bind time to whatever DNS happens to answer - possibly a
+    wildcard, possibly an address on a network the unit should not be reachable
+    from. Only a literal address is accepted, and never an unspecified one.
+    """
+    import ipaddress
+
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return not address.is_unspecified
+
+
 def envelope(kind: str, data: Any, timestamp: float, message_id: str | None = None) -> dict:
     """Builds an outgoing message: payload under `data`, `timestamp` always present.
 
@@ -192,9 +212,13 @@ def hdop_to_metres(hdop: Any) -> float | None:
         value = float(hdop)
     except (TypeError, ValueError):
         return None
-    if value <= 0 or value != value or value in (float("inf"), float("-inf")):
+    if value <= 0:
         return None
-    return round(value * 5.0, 1)
+    # Guard the product, not just the input: a large but finite HDOP can still
+    # overflow to inf here, and inf is not valid JSON. Deliberately unrounded -
+    # rounding to one decimal turns a very small HDOP into 0.0 metres, which
+    # claims perfect precision instead of reporting high precision.
+    return _finite(value * 5.0)
 
 
 def parse_handshake_filename(filename: str) -> tuple[str, str | None]:
@@ -296,7 +320,19 @@ def to_epoch(value: Any) -> float | None:
             return None
     if isinstance(value, str):
         # Peer.__init__ falls back to a formatted string when it cannot parse a
-        # timestamp, so this shape genuinely reaches us.
+        # timestamp, so this shape genuinely reaches us - and losing it here
+        # would silently null three of the four peer timestamps.
+        import datetime
+
+        text = value.strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.datetime.fromisoformat(text)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.timestamp()
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
                 return time.mktime(time.strptime(value.split(".")[0], fmt))
@@ -326,7 +362,12 @@ def tail_lines(path: str, count: int) -> list[str]:
             handle.seek(position)
             data = handle.read(step) + data
     text = data.decode("utf-8", errors="replace")
-    lines = text.splitlines()
+    # split("\n"), not splitlines(): the latter also breaks on \x0b, \x1e and
+    # U+2028, inventing lines a log never contained and making `count` count
+    # something other than lines.
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     return lines[-count:]
 
 
@@ -363,9 +404,9 @@ def gps_from_bettercap(raw: Mapping[str, Any] | None, now: float) -> dict | None
     longitude = _finite(raw.get("Longitude"))
     if latitude is None or longitude is None:
         return None
-    # Bettercap reports 0.0/0.0 when it has no lock. The stock gps.py plugin
-    # filters on exactly this before writing a sidecar.
-    if latitude == 0.0 and longitude == 0.0:
+    # The stock gps.py plugin writes a sidecar only when both coordinates are
+    # truthy, so a single zero is "no lock" too, not a position on the equator.
+    if latitude == 0.0 or longitude == 0.0:
         return None
     return {
         "enabled": True,
@@ -470,10 +511,15 @@ def normalise_sidecar(raw: Mapping[str, Any] | None) -> dict | None:
     source = raw.get("Source") or "bettercap"
     if source not in ("bettercap", "gpsd", "browser"):
         source = None
+    accuracy = _finite(raw.get("Accuracy", raw.get("accuracy")))
+    if accuracy is None:
+        # Same derivation gps_from_bettercap uses, so a sidecar written by the
+        # stock plugin - which stores HDOP and no accuracy - keeps its precision.
+        accuracy = hdop_to_metres(raw.get("HDOP"))
     return {
         "lat": latitude,
         "lon": longitude,
-        "accuracy": _finite(raw.get("Accuracy", raw.get("accuracy"))),
+        "accuracy": accuracy,
         "source": source,
     }
 
@@ -984,6 +1030,62 @@ class HandshakeStore:
 # ---------------------------------------------------------------------------
 
 
+# The incoming contract, mirrored from docs/schemas/incoming/*.json.
+#
+# Duplicated deliberately rather than validated with jsonschema at runtime: the
+# schemas are the source of truth, but shipping a JSON Schema engine to a Pi
+# Zero to re-derive a dozen field names on every frame is not a trade worth
+# making. The conformance test asserts this table and the schemas agree, so the
+# duplication cannot drift silently.
+#
+# type -> (required fields, optional fields)
+INCOMING_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "auth": (frozenset({"token"}), frozenset()),
+    "get_stats": (frozenset(), frozenset()),
+    "get_access_points": (frozenset(), frozenset()),
+    "get_handshakes": (frozenset(), frozenset()),
+    "get_peers": (frozenset(), frozenset()),
+    "get_log": (frozenset(), frozenset({"lines"})),
+    "get_face_status": (frozenset(), frozenset()),
+    "get_screen": (frozenset(), frozenset()),
+    "get_gps_data": (frozenset(), frozenset()),
+    "gps_data": (frozenset({"latitude", "longitude"}), frozenset({"accuracy"})),
+    "ping": (frozenset(), frozenset()),
+    "set_mode": (frozenset({"mode"}), frozenset()),
+    "set_pasv": (frozenset({"on"}), frozenset()),
+    "reboot": (frozenset(), frozenset()),
+    "shutdown": (frozenset(), frozenset()),
+}
+
+# Present on every incoming message regardless of type.
+INCOMING_ENVELOPE_FIELDS = frozenset({"type", "message_id"})
+
+
+def validate_incoming(message: Mapping[str, Any]) -> None:
+    """Checks one incoming message against INCOMING_FIELDS.
+
+    Raises ProtocolError("bad_request") for a missing required field or an
+    unexpected key. Every incoming schema sets additionalProperties false, so an
+    unknown key is a client that disagrees with us about the contract - and
+    silently ignoring it is how the two sides drift apart without anyone
+    noticing.
+    """
+    kind = message.get("type")
+    spec = INCOMING_FIELDS.get(str(kind))
+    if spec is None:
+        raise ProtocolError("unknown_command", f"unknown command {kind!r}")
+    required, optional = spec
+
+    missing = sorted(required - set(message))
+    if missing:
+        raise ProtocolError("bad_request", f"missing field(s): {', '.join(missing)}")
+
+    allowed = required | optional | INCOMING_ENVELOPE_FIELDS
+    unexpected = sorted(set(message) - allowed)
+    if unexpected:
+        raise ProtocolError("bad_request", f"unexpected field(s): {', '.join(unexpected)}")
+
+
 class Router:
     """Turns one incoming message into the messages that answer it.
 
@@ -1052,6 +1154,11 @@ class Router:
         if not isinstance(kind, str):
             return [error_envelope("bad_request", "missing message type", now, message_id)]
 
+        try:
+            validate_incoming(message)
+        except ProtocolError as err:
+            return [error_envelope(err.code, err.message, now, message_id)]
+
         if kind == "auth":
             if not self.auth_required or self.check_token(message.get("token")):
                 return [envelope("acknowledgment", {"acknowledged": "auth"}, now, message_id)]
@@ -1113,6 +1220,9 @@ class Router:
         if kind == "shutdown":
             return self.shutdown()
 
+        # Unreachable while INCOMING_FIELDS and this dispatch agree, which the
+        # conformance test enforces. Kept so that adding a type to the table
+        # without a route fails loudly instead of returning nothing.
         raise ProtocolError("unknown_command", f"unknown command {kind!r}")
 
     # -- agent access ------------------------------------------------------
@@ -1344,17 +1454,22 @@ class Router:
             # already are would be a gratuitous outage.
             return []
 
-        target = "MANU" if mode == "manual" else "AUTO"
+        # Two different vocabularies meet here. pwnagotchi.restart takes MANU or
+        # AUTO; the wire uses the Mode enum from common.json, which is MANUAL.
+        # Sending the restart argument to the client would emit a value no
+        # schema accepts.
+        restart_arg = "MANU" if mode == "manual" else "AUTO"
+        wire_mode = "MANUAL" if mode == "manual" else "AUTO"
         now = self._deps.now()
         broadcast = envelope(
-            "restarting", {"reason": "mode_change", "mode": target}, now
+            "restarting", {"reason": "mode_change", "mode": wire_mode}, now
         )
 
         # NOT agent.mode = mode. The mode is fixed at process start from the
         # --manual flag; the attribute is only a label (SPEC F10). The real
         # switch restarts bettercap and pwnagotchi, taking this plugin with
         # them - so the client is told first and the effect is scheduled after.
-        self._deps.spawn(lambda: self._deps.restart_pwnagotchi(target))
+        self._deps.spawn(lambda: self._deps.restart_pwnagotchi(restart_arg))
         return [broadcast]
 
     def set_pasv(self, on: bool) -> list[dict]:
@@ -1620,10 +1735,11 @@ class Listeners:
 
     def _open(self, iface: str, ip: str) -> None:
         """Binds both listeners on one address. A failure is logged, never fatal."""
-        if ip in ("0.0.0.0", "::", ""):
-            # Should be unreachable; the resolver returns interface addresses.
-            # Refuse loudly rather than quietly binding every interface (D5).
-            log.error("[companion] refusing to bind wildcard address %r on %s", ip, iface)
+        if not is_bindable_address(ip):
+            # A wildcard binds every interface, defeating D5 entirely; a hostname
+            # resolves at bind time to whatever DNS says, which may be either.
+            # Both are refused loudly rather than quietly accepted.
+            log.error("[companion] refusing to bind %r on %s", ip, iface)
             return
         http_server = ws_server = None
         try:
@@ -1672,20 +1788,20 @@ class Listeners:
 
         loop = self._ensure_loop()
         serve = resolve_ws_serve()
-        coroutine = serve(
-            self._client_handler,
-            ip,
-            int(option(self._options, "ws_port")),
-            ssl=self._ssl,
-        )
-        future = asyncio.run_coroutine_threadsafe(self._start_server(coroutine), loop)
-        return future.result(timeout=10)
+        port = int(option(self._options, "ws_port"))
+        handler = self._client_handler
+        ssl_context = self._ssl
 
-    @staticmethod
-    async def _start_server(coroutine: Any) -> Any:
-        """Awaits a serve() coroutine, tolerating both the async-context and plain forms."""
-        server = await coroutine
-        return server
+        async def start() -> Any:
+            # serve() must be CALLED on the loop, not merely awaited there:
+            # websockets >= 14 reaches for the running loop while constructing
+            # the server object. Building it on the caller's thread raises
+            # "no running event loop" - and pwnagotchi calls on_loaded from
+            # exactly such a thread, so the plugin would die at load.
+            return await serve(handler, ip, port, ssl=ssl_context)
+
+        future = asyncio.run_coroutine_threadsafe(start(), loop)
+        return future.result(timeout=10)
 
     def _ensure_loop(self) -> Any:
         """Starts the private asyncio loop on first use."""
@@ -1724,10 +1840,24 @@ class Listeners:
             pass
 
     def _shutdown_ws(self, server: Any) -> None:
+        """Closes a WSS server and waits for it, on the loop that owns it.
+
+        Scheduling close() and moving on is not enough: stop() halts the loop
+        immediately afterwards, the callback never runs, and the listening
+        socket survives as a ResourceWarning raised from somewhere unrelated.
+        """
         if server is None or self._loop is None:
             return
+        import asyncio
+
+        async def close() -> None:
+            server.close()
+            waiter = getattr(server, "wait_closed", None)
+            if waiter is not None:
+                await waiter()
+
         try:
-            self._loop.call_soon_threadsafe(server.close)
+            asyncio.run_coroutine_threadsafe(close(), self._loop).result(timeout=5)
         except Exception:
             pass
 
@@ -1735,17 +1865,71 @@ class Listeners:
         """Closes every listener. Idempotent."""
         for iface in list(self._bound):
             self._close(iface)
-        if self._loop is not None:
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except Exception:
-                pass
-            self._loop = None
+        loop, thread = self._loop, self._loop_thread
+        self._loop, self._loop_thread = None, None
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+        if thread is not None:
+            thread.join(timeout=2)
+        try:
+            # Stopping the loop is not closing it; an unclosed loop leaks its
+            # selector and surfaces as a ResourceWarning somewhere unrelated.
+            loop.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------
+
+
+class ConnectionState:
+    """Per-connection authentication state and its deadline.
+
+    Extracted from the connection handler so the rule in SPEC 2.3.3 can be
+    driven with a fake clock instead of only through the integration test. An
+    unauthenticated peer holding a socket open is exactly the case that needs a
+    unit test, because it never happens by accident during manual testing.
+    """
+
+    def __init__(self, router: Router, deps: Deps, auth_timeout: float) -> None:
+        self._router = router
+        self._deps = deps
+        # With no token configured there is nothing to authenticate and no
+        # deadline to enforce; the tether link is point to point (D5).
+        self._authenticated = not router.auth_required
+        self._deadline = deps.now() + float(auth_timeout)
+
+    @property
+    def authenticated(self) -> bool:
+        return self._authenticated
+
+    def expired(self) -> bool:
+        """Whether an unauthenticated connection has outlived its deadline."""
+        if self._authenticated:
+            return False
+        return self._deps.now() > self._deadline
+
+    def observe(self, message: Mapping[str, Any], replies: Sequence[Mapping[str, Any]]) -> None:
+        """Marks the connection authenticated after a successful auth exchange."""
+        if self._authenticated or message.get("type") != "auth":
+            return
+        if any(reply.get("type") == "acknowledgment" for reply in replies):
+            self._authenticated = True
+
+    @staticmethod
+    def rejected(replies: Sequence[Mapping[str, Any]]) -> bool:
+        """Whether the replies carry an authorisation failure, which closes the socket."""
+        for reply in replies:
+            data = reply.get("data") or {}
+            if reply.get("type") == "error" and data.get("code") == "unauthorized":
+                return True
+        return False
 
 
 class Companion(plugins.Plugin):
@@ -1833,16 +2017,19 @@ class Companion(plugins.Plugin):
         """
         import asyncio
 
-        authenticated = not (self._router and self._router.auth_required)
-        deadline = self.deps.now() + float(option(self.options, "auth_timeout"))
+        if self._router is None:
+            await websocket.close(code=1011, reason="not ready")
+            return
+        state = ConnectionState(
+            self._router, self.deps, float(option(self.options, "auth_timeout"))
+        )
         with self._clients_lock:
             self._clients.add(websocket)
         try:
-            if self._router is not None:
-                for message in self._router.initial_burst():
-                    await websocket.send(json.dumps(message))
+            for message in self._router.initial_burst():
+                await websocket.send(json.dumps(message))
             async for raw in websocket:
-                if not authenticated and self.deps.now() > deadline:
+                if state.expired():
                     await websocket.close(code=1008, reason="authentication timeout")
                     return
                 try:
@@ -1857,14 +2044,11 @@ class Companion(plugins.Plugin):
                         json.dumps(error_envelope("bad_request", "not an object", self.deps.now()))
                     )
                     continue
-                if self._router is None:
-                    continue
-                replies = self._router.handle(parsed, authenticated)
-                if parsed.get("type") == "auth" and replies and replies[0].get("type") == "acknowledgment":
-                    authenticated = True
+                replies = self._router.handle(parsed, state.authenticated)
+                state.observe(parsed, replies)
                 for reply in replies:
                     await websocket.send(json.dumps(reply))
-                if any(r.get("type") == "error" and r["data"]["code"] == "unauthorized" for r in replies):
+                if ConnectionState.rejected(replies):
                     await websocket.close(code=1008, reason="unauthorized")
                     return
         except asyncio.CancelledError:

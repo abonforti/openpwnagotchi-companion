@@ -65,7 +65,9 @@ look plausible and are wrong.
 
 **If a symbol is not in §11, you may not use it.** Open an issue, or verify it against the
 [jayofelony fork](https://github.com/jayofelony/pwnagotchi) and add it to the table with its
-evidence in the same pull request.
+evidence in the same pull request - and to `.github/pinned_symbols.json`, which is the
+machine-checked twin of that table. A test fails if the two disagree, because an allowlist that
+only a human maintains is one that goes stale silently.
 
 This rule exists because the project it forks from is full of calls that do not do what they
 appear to. `agent.mode = "manual"` looks like it switches mode; it sets a label and nothing

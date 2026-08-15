@@ -1,0 +1,101 @@
+name: Bug report
+description: Something does not work the way it should
+labels: ["type: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if the app will not load at all, or Safari refuses the connection, use the
+        **Connection or certificate problem** template instead. Almost every report of that shape
+        turns out to be the CA trust switch, and that template asks the questions that find it.
+
+        Never paste your token, a private key, or a pwnagotchi whitelist into an issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I tapped the PASV toggle on the Dashboard.
+        I expected the unit to switch to PASV.
+        The toggle went back to its previous position and nothing else happened.
+    validations:
+      required: true
+
+  - type: input
+    id: pwnagotchi-version
+    attributes:
+      label: pwnagotchi version
+      description: >
+        From `pwnagotchi --version` on the unit. This project makes no compatibility promise
+        across versions, so it is the first thing worth knowing.
+      placeholder: "2.9.5.6 (jayofelony)"
+    validations:
+      required: true
+
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      description: The tag you installed, or the commit if you installed from a checkout.
+      placeholder: "v0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: How you reach the unit
+      options:
+        - Bluetooth PAN (phone hotspot)
+        - USB gadget (desktop only)
+        - Something else, described below
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Plugin log
+      description: |
+        The companion logs under `[companion]`. To get the relevant lines:
+
+        ```sh
+        sudo journalctl -u pwnagotchi -n 200 | grep companion
+        ```
+
+        If that shows nothing useful, run the unit with debug logging and reproduce:
+
+        ```sh
+        sudo systemctl stop pwnagotchi
+        sudo pwnagotchi --debug
+        # reproduce, then Ctrl-C
+        ```
+
+        Debug output also lands in `/etc/pwnagotchi/log/pwnagotchi-debug.log`.
+
+        Check the lines before pasting. A log from a unit that has been out carries the SSIDs and
+        BSSIDs of networks around you, the names of captured handshakes, and GPS coordinates -
+        which together are a record of where you have been, published permanently.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Your `[main.plugins.companion]` configuration
+      description: "From `/etc/pwnagotchi/config.toml`. Replace the value of `token` with `REDACTED`."
+      render: toml
+    validations:
+      required: false
+
+  - type: input
+    id: client
+    attributes:
+      label: Phone or browser
+      description: Only if the problem is in the app rather than on the unit.
+      placeholder: "iPhone 15 Pro, iOS 18.5, installed to the home screen"
+    validations:
+      required: false

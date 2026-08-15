@@ -1,0 +1,90 @@
+name: Connection or certificate problem
+description: The app will not load, or Safari refuses the connection
+labels: ["type: bug", "area: tls"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a private key.** This issue is public, and everything below is deliberately
+        about certificates, so you are one flag away from it: `server.key` and `ca.key` are
+        private, `server.crt` and `ca.crt` are not. If a command you run prints a block beginning
+        `-----BEGIN ... PRIVATE KEY-----`, none of it belongs here. If you have already posted
+        one, treat that key as compromised and reissue rather than editing the issue.
+
+        This setup fails silently in several places, and the symptom almost never points at the
+        cause. The checks below are ordered by how often each one turns out to be the answer, so
+        please run them in order before filing. Most reports stop at the first.
+
+  - type: checkboxes
+    id: trust-switch
+    attributes:
+      label: The CA is installed **and** trusted
+      description: >
+        Installing the profile is not enough. iOS keeps a manually installed root untrusted until
+        you enable it in **Settings > General > About > Certificate Trust Settings**. Without that
+        switch there is no error message anywhere: the request fails, the service worker never
+        registers, and the app just looks broken.
+      options:
+        - label: I have enabled the switch for my CA under Certificate Trust Settings
+        - label: Not applicable, I am not on iOS
+
+  - type: textarea
+    id: san
+    attributes:
+      label: The certificate lists the address you are opening
+      description: |
+        iOS matches the address against `IP Address:` entries only. A `DNS:` entry reads the same
+        to a human and is never consulted, and the Common Name is ignored entirely.
+
+        ```sh
+        openssl x509 -in ~/pwn-pki/server.crt -noout -text | grep -A1 "Subject Alternative Name"
+        ```
+
+        Paste the output, and say which address you type in Safari.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: listening
+    attributes:
+      label: The plugin is actually listening
+      description: |
+        ```sh
+        sudo journalctl -u pwnagotchi -n 100 | grep companion
+        ```
+
+        `no usable TLS material` means the certificate paths in `config.toml` are wrong or the key
+        is unreadable. No `[companion]` lines at all means the plugin is not where pwnagotchi
+        looks: run `sudo ./tools/install-on-pi.sh --dry-run --plugin-only` and compare the plugins directory it
+        prints against `main.custom_plugins` in your config.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      description: The tag you installed, or the commit if you installed from a checkout.
+      placeholder: "v0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: pwnagotchi-version
+    attributes:
+      label: pwnagotchi version
+      placeholder: "2.9.5.6 (jayofelony)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: >
+        What Safari shows, whether the certificate was issued by `tools/gen-cert.sh` or by your
+        own CA, and anything you have already tried.
+    validations:
+      required: false

@@ -1426,6 +1426,12 @@ criteria in its issue are satisfied. Not before.
 **This is the allowlist.** Symbols not listed here are out of bounds. Line numbers refer to the
 v2.9.5.6 tree and are indicative; the names and semantics are what matter.
 
+**This table has a machine-checked twin.** `.github/pinned_symbols.json` encodes the part of it
+a script can confirm, and `.github/check_pinned_facts.py` runs weekly against current upstream and
+opens a ticket when something no longer holds. **Editing a fact here means editing that file too**,
+and `tests/tools/test_pinned_facts.py` fails if a fact gains an entry in one and not the other -
+two allowlists drifting apart is the failure the checker exists to prevent, one level up.
+
 | ID | Fact | Evidence |
 |---|---|---|
 | F1 | `pwnagotchi.uptime()` → int seconds, reads `/proc/uptime` | `pwnagotchi/__init__.py` |
@@ -1446,7 +1452,7 @@ v2.9.5.6 tree and are indicative; the names and semantics are what matter.
 | F16 | `Peer` members: attributes `first_met`, `first_seen`, `prev_seen` (`datetime`, or `str` on a parse fallback), `last_seen` (float epoch), `encounters`, `session_id`, `last_channel`, `rssi`, `adv`; methods `inactive_for()`, `first_encounter()`, `is_good_friend()`, `face()`, `name()`, `identity()`, `full_name()`, `version()`, `pwnd_run()`, `pwnd_total()`, `uptime()`, `epoch()`, `is_closer()` | `pwnagotchi/mesh/peer.py` |
 | F17 | Log path is `config['main']['log']['path']`, default `/etc/pwnagotchi/log/pwnagotchi.log` | `pwnagotchi/defaults.toml:138-140` |
 | F18 | `pwnagotchi.ui.web` is a **package** whose `__init__.py` defines `frame_path = '/var/tmp/pwnagotchi/pwnagotchi.png'`, `frame_format = 'PNG'`, `frame_ctype = 'image/png'`, and `frame_lock = threading.Lock()` | `pwnagotchi/ui/web/__init__.py` |
-| F19 | Bettercap GPS lives at `session()['gps']` with capitalised keys `Latitude`, `Longitude`, `Altitude`, `Updated` (and `FixQuality`, `NumSatellites`, `HDOP` when present). The stock plugin skips writing when latitude or longitude is falsy, and dumps the raw dict to `<name>.gps.json`. | `pwnagotchi/plugins/default/gps.py:47-61` |
+| F19 | Bettercap GPS lives at `session()['gps']` with capitalised keys `Latitude`, `Longitude`, `Altitude`. The stock plugin skips writing when latitude or longitude is falsy, and dumps the raw dict to `<name>.gps.json`. `Updated`, `FixQuality`, `NumSatellites` and `HDOP` come from **bettercap's** payload, not from any pwnagotchi source, so they are used defensively and cannot be verified against this repository. | `pwnagotchi/plugins/default/gps.py:47-61` for the first three |
 | F20 | `on_handshake` is fired from two paths with different argument types: `plugins.on('handshake', self, filename, ap_mac, sta_mac)` (strings) and `plugins.on('handshake', self, filename, ap, sta)` (dicts) | `pwnagotchi/agent.py:396,404` |
 | F21 | `pyproject.toml` declares `websockets` with **no version constraint**; `requires-python = ">=3.11"` | `pyproject.toml` |
 | F22 | Upstream `pwnios.py` binds `websockets.serve(self._handle_client, "0.0.0.0", 8082, ...)` and reads `self.agent.access_points` before falling back to `_access_points` — both are bugs this fork fixes | `BraedenP232/PwnIOS/pwnios.py:292-293,653-656,678-680` |

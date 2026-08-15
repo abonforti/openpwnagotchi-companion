@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/abonforti/openpwnagotchi-companion/security/advisories/new
+    about: >
+      Report privately, not as a public issue. This plugin listens on a socket and handles
+      certificates, so a defect here can expose a device before there is a fix to point at.
+  - name: Setup walkthrough
+    url: https://github.com/abonforti/openpwnagotchi-companion/blob/master/docs/SETUP.md
+    about: Bare unit to installed app, including the failures that produce no error message.

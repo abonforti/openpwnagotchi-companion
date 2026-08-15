@@ -223,7 +223,11 @@ def test_gpsd_without_a_usable_fix_is_none(tpv):
 )
 @settings(max_examples=300, deadline=None)
 def test_gpsd_parsing_never_raises_and_only_claims_a_fix_when_it_has_one(lat, lon, mode, extra):
-    assume(lat != 0 or lon != 0)
+    # SPEC 2.12 now states the rule the suite deliberately left unpinned: as with
+    # bettercap, EITHER coordinate being exactly zero means the receiver has not
+    # locked, whatever mode it reports. Excluding only the origin was the honest
+    # placeholder while that was undecided.
+    assume(lat != 0 and lon != 0)
     tpv = {"class": "TPV", "mode": mode, "lat": lat, "lon": lon}
     tpv.update({key: value for key, value in extra.items() if key not in tpv})
 

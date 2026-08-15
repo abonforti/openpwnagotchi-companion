@@ -439,6 +439,10 @@ def gps_from_gpsd(tpv: Mapping[str, Any] | None, now: float) -> dict | None:
     longitude = _finite(tpv.get("lon"))
     if latitude is None or longitude is None:
         return None
+    # Same rule as bettercap: a receiver reporting exactly 0.0 on either axis
+    # has not locked, whatever it claims about its mode.
+    if latitude == 0.0 or longitude == 0.0:
+        return None
     return {
         "enabled": True,
         # gpsd is an on-Pi source too, which is why the client gates on piFix

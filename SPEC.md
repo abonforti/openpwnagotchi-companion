@@ -347,8 +347,10 @@ Neither count comes from `len(agent._handshakes)`, which only holds the current 
 matches the number on the e-ink display; `handshakesTotal` is the honest total including legacy
 `.pcap` captures.
 
-`capabilities.pasv` is `'pasv_mode' in plugins.loaded`; `capabilities.pisugar` is true once a
-battery provider has answered; `capabilities.gpsSource` echoes the **configured** `gps_source`,
+`capabilities.pasv` is `'pasv_mode' in plugins.loaded`; `capabilities.pisugar` is a **latch** —
+false until some provider answers once, true from then on. A live flag would flicker every time
+an I2C read happened to fail, and a control that appears and disappears is worse than one that
+is simply present; `capabilities.gpsSource` echoes the **configured** `gps_source`,
 not the currently active one (that is `gps.source`); `capabilities.pluginVersion` is
 `__version__`, so a client can disable features rather than firing commands an older plugin
 will reject with `unknown_command`.
@@ -397,9 +399,13 @@ threading.Thread(target=pwnagotchi.restart, args=("MANU" if manual else "AUTO",)
 Consequences the implementer MUST handle:
 
 - The plugin dies with the service. Before spawning the restart thread, send
-  `acknowledgment` for the `message_id`, then broadcast
-  `{"type":"restarting","data":{"reason":"mode_change","mode":"MANU"}}` to every client, then
+  `acknowledgment` for the `message_id`, then broadcast `restarting` to every client, then
   flush, then start the thread.
+- **Two vocabularies meet here and must not be confused.** `pwnagotchi.restart` takes `"MANU"`
+  or `"AUTO"`; the wire uses the `Mode` enum from `common.json`, which is `AUTO | PASV | MANUAL`.
+  The broadcast therefore carries `{"reason":"mode_change","mode":"MANUAL"}` — sending the
+  restart argument to the client emits a value no schema accepts. (An earlier revision of this
+  section quoted `"MANU"` here; that was a prose bug, caught by the conformance test.)
 - The PWA treats `restarting` as an expected disconnect: show "restarting in MANU…", suppress
   the error banner, and reconnect with backoff (typical return: 20-60 s).
 - Because it is disruptive, `set_mode` gets the **same two-step confirm** as reboot/shutdown
@@ -411,6 +417,9 @@ Consequences the implementer MUST handle:
 - If `'pasv_mode' not in plugins.loaded`: reply `error` code `pasv_unavailable`.
 - If `agent.mode != 'auto'`: reply `error` code `pasv_requires_auto`. PASV is only meaningful
   in auto.
+- **The order matters and is fixed**: when the plugin is absent *and* the mode is not auto, the
+  reply is `pasv_unavailable`. The two lead to different client behaviour — a missing plugin
+  hides the control, the wrong mode greys it out — so the precedence cannot be left to chance.
 - Otherwise emit `plugins.on('pasv_on')` or `plugins.on('pasv_off')` (F12).
 
 `plugins.on()` is asynchronous: it queues work onto each plugin's own thread and returns no
@@ -447,7 +456,10 @@ Enumerate `agent._config['bettercap']['handshakes']` (F14; default `/etc/pwnagot
   underscores; never split on the first one.
 - Include `mtime` (float epoch) and `size` (bytes).
 - If a sibling GPS sidecar exists (§2.12.1), include the **normalised**
-  `{lat, lon, accuracy}`; on a malformed sidecar, omit the field, do not fail the entry.
+  `{lat, lon, accuracy, source}`. On a missing, malformed or fix-less sidecar the field is
+  `null` — `HandshakeEntry` requires `gps` to be present, so "omit it" is not available; the
+  entry survives either way. Accuracy falls back to `hdop_to_m(HDOP)` when the sidecar carries
+  no explicit accuracy, which is the case for every sidecar the stock `gps.py` plugin writes.
 - Sort newest first. Cap at 500 entries and set `truncated: true` rather than silently dropping.
 - A single unreadable file must not abort the listing.
 
@@ -490,10 +502,18 @@ to strings when timestamp parsing fails (F16), so `first_met` can be a `str` in 
 Read the path from `agent._config['main']['log']['path']` (F17; default on this fork is
 `/etc/pwnagotchi/log/pwnagotchi.log`, **not** `/var/log/pwnagotchi.log`). Never hardcode.
 
-Return the last `lines` (default 200, cap 1000) as a list of strings. Implement a bounded tail:
-seek from the end in chunks until enough newlines are collected, decode with
-`errors='replace'`. Never read the whole file — it is rotated but can still be megabytes.
-Missing file → `error` code `log_unavailable`.
+Return the last `lines` as a list of strings, oldest first. Implement a bounded tail: seek from
+the end in chunks until enough newlines are collected, decode with `errors='replace'`, and split
+on `\n` only — `str.splitlines()` also breaks on `\x0b`, `\x1e` and U+2028, inventing lines the
+log never contained. Never read the whole file; it is rotated but can still be megabytes.
+
+**`lines` is clamped, not rejected.** The schema declares `maximum: 1000`, which is the limit a
+conformant client respects; the plugin additionally clamps to `[1, 1000]` with a default of 200,
+because a client asking for more should get a bounded answer rather than an error. Absent or
+unparseable means the default.
+
+`tail_lines` propagates `OSError` for a missing or unreadable file; the Router turns that, and a
+missing log path in the configuration, into `error` code `log_unavailable`.
 
 ### 2.10 Screen mirror (`screen_image`)
 
@@ -535,15 +555,19 @@ not a comparison against a source name.
 
 1. **bettercap** — from the **cached** session snapshot (§2.5), key `gps`. Bettercap uses
    capitalised keys: `Latitude`, `Longitude`, `Altitude`, `FixQuality`, `NumSatellites`, `HDOP`
-   (F19). A fix counts only if `Latitude` and `Longitude` are both present, finite, and non-zero
-   — bettercap reports `0.0/0.0` when there is no lock, and the stock `gps.py` plugin filters on
-   exactly that (F19). Emit `source: "bettercap"`, `fix: true`, `piFix: true`,
-   `accuracy: hdop_to_m(HDOP)`.
+   (F19). A fix counts only if `Latitude` and `Longitude` are both present, finite, and non-zero.
+   **Either** coordinate being zero means no lock: the stock `gps.py` plugin writes a sidecar
+   only when both are truthy (F19), so a half-zero reading is a receiver without a fix, not a
+   position on the equator. Emit `source: "bettercap"`, `fix: true`, `piFix: true`,
+   `accuracy: hdop_to_m(HDOP)`. `hdop_to_m` is unrounded: rounding to one decimal turns a very
+   small HDOP into `0.0` metres, which claims perfect precision instead of reporting high
+   precision.
 2. **gpsd** — connect to `gpsd_host:gpsd_port`, send `?WATCH={"enable":true,"json":true}`, read
    TPV objects with `mode >= 2` and finite lat/lon. Use `gpsd-py3`/`gps` if importable, else a
    minimal raw JSON poll. Bounded: socket timeout ≤ 2 s, refreshed from the same background
    thread as the session cache, never from the request path. Emit `source: "gpsd"`,
-   `piFix: true`.
+   `piFix: true`. The zero-coordinate rule applies here too, for the same reason it applies to
+   bettercap: a receiver reporting exactly `0.0` on either axis has not locked.
 3. **browser** — the last `gps_data` pushed by the client. `source: "browser"`, `piFix: false`,
    dropped after 10 s of staleness.
 4. none → `enabled: false`, `fix: false`, `piFix: false`, all coordinates `null`.
@@ -627,11 +651,13 @@ Two requirements v1 omitted, both of which break the PWA silently:
    manifest and refuse installation. Set the handler's `extensions_map` explicitly for at least:
 
    ```
-   .html .webmanifest .js .mjs .css .json .png .svg .ico .wasm .map
+   .html .webmanifest .js .mjs .css .json .png .svg .ico .wasm .map .woff2
    ```
 
    `.js` and `.mjs` must be `text/javascript` — a service worker served with the wrong type is
-   rejected by the browser.
+   rejected by the browser. `.webmanifest` is `application/manifest+json`, `.ico` is
+   `image/vnd.microsoft.icon`, `.map` is `application/json`. For the rest what matters is only
+   that nothing the app needs arrives as `application/octet-stream`.
 
 2. **SPA fallback.** For a `GET` whose path does not resolve to an existing file and does not
    look like an asset request, serve `index.html` with status 200 so deep links and refreshes
@@ -639,8 +665,12 @@ Two requirements v1 omitted, both of which break the PWA silently:
 
 Additional rules:
 
-- Set `Cache-Control: no-cache` on `index.html` and on the service worker; the hashed assets
-  Vite emits may be cached aggressively.
+- Set `Cache-Control: no-cache` on `index.html` and on the service worker — which
+  `vite-plugin-pwa` emits as `sw.js`, alongside its `registerSW.js` registration shim, so both
+  names are covered. Everything else Vite emits is content-hashed and immutable, so it may be
+  cached aggressively.
+- A request for a directory must not produce a listing. Any of 200 (serving `index.html` through
+  the SPA fallback), 403 or 404 is acceptable; what is forbidden is disclosing the contents.
 - Log at debug only; a request log at info would flood the pwnagotchi log.
 - Directory listings disabled.
 - The server must not raise out of its thread; wrap `serve_forever` in try/except and log.
@@ -796,8 +826,13 @@ on-Pi fix, whether from bettercap or gpsd, always wins.
   committed and in sync with the schemas. Drift here means the plugin and the PWA have stopped
   agreeing about the wire format, which is the exact failure the schema-first design prevents.
 - **secret scan**: `.github/check_secrets.py` — PEM private keys, provider token shapes, and
-  credential assignments carrying a real literal rather than a placeholder. It also refuses
-  file types that must never be tracked at all. Matched text is never echoed, because the match
+  credential assignments carrying a real literal rather than a placeholder. A PEM block counts
+  only when it has a plausible base64 body: a test that checks how malformed TLS material is
+  rejected legitimately contains a header with junk inside it. It also refuses file types that
+  must never be tracked at all, with one narrow exemption — `tests/fakes/fixtures/` may hold
+  capture files, because the handshake listing cannot be tested without them. Those fixtures are
+  synthetic by policy (§13), enforced by review and by the security auditor rather than by the
+  scanner. Matched text is never echoed, because the match
   is the secret. Note what this job **cannot** do: the owner-specific infrastructure denylist
   lives outside the repository by design (§13), so that check is a local pre-commit gate only.
   CI catches secrets that look like secrets to anyone; it cannot catch a hostname it is not
@@ -1074,11 +1109,25 @@ Two honest limits, and what is done about each:
    the invariant and let the machine hunt the counterexample.
 
 **Design consequence, binding on the implementer:** every external effect sits behind an
-injectable seam — the clock, the filesystem, the gpsd socket, the I2C bus, `subprocess`,
-`pwnagotchi.restart`/`reboot`/`shutdown`, and the `websockets` server factory. Without those
-seams, full branch coverage of the I2C and gpsd paths is unreachable and the gate would have to
-be weakened. Constructor injection with real defaults; no monkeypatching of module internals
-from the tests.
+injectable seam — the clock, the gpsd socket, the I2C bus, `subprocess`, interface address
+resolution, thread spawning, and `pwnagotchi.restart`/`reboot`/`shutdown`. Without those seams,
+full branch coverage of the I2C and gpsd paths is unreachable and the gate would have to be
+weakened. Constructor injection with real defaults; no monkeypatching of module internals from
+the tests.
+
+Two things are deliberately **not** seams on `Deps`. The filesystem is reached through
+configured paths, so a test points them at a `tmp_path` and needs no indirection. The
+`websockets` server factory is resolved at call time by `resolve_ws_serve()` and the connection
+handler is passed to `Listeners`, because the transport is covered by the integration test
+(§10.4) rather than by unit tests — putting it on `Deps` would widen the seam surface without
+buying a single covered branch.
+
+### 10.7.1 Where the acknowledgment comes from
+
+`Router.handle` emits the `acknowledgment` when the incoming message carried a `message_id`, and
+the individual command methods (`set_mode`, `set_pasv`, `reboot`, `shutdown`) return only their
+own output — a broadcast, or nothing. Tests assert ordering through `handle`, never by calling a
+command method directly and expecting an acknowledgment from it.
 
 ### 10.8 Definition of done
 

@@ -1,0 +1,59 @@
+{
+  "version": "2.32.0",
+  "os": "linux",
+  "arch": "arm",
+  "started_at": "2025-08-15T09:00:00.000000000Z",
+  "polled_at": "2025-08-15T09:41:12.000000000Z",
+  "active": true,
+  "gps": {
+    "Updated": "2025-08-15T09:41:10.000000000Z",
+    "Latitude": -33.512345,
+    "Longitude": -25.098765,
+    "FixQuality": "1",
+    "NumSatellites": 9,
+    "HDOP": 1.4,
+    "Altitude": 12.5,
+    "Separation": 0,
+    "HeightGeoid": 0
+  },
+  "wifi": {
+    "aps": [
+      {
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "hostname": "TestNet_001",
+        "channel": 6,
+        "rssi": -52,
+        "encryption": "WPA2",
+        "cipher": "CCMP",
+        "authentication": "PSK",
+        "vendor": "Synthetic Devices",
+        "clients": [
+          {
+            "mac": "11:22:33:44:55:66",
+            "hostname": "",
+            "vendor": "Synthetic Devices",
+            "rssi": -71
+          }
+        ]
+      },
+      {
+        "mac": "11:22:33:44:55:66",
+        "hostname": "Legacy_Net",
+        "channel": 11,
+        "rssi": -78,
+        "encryption": "WPA",
+        "cipher": "TKIP",
+        "authentication": "PSK",
+        "vendor": "",
+        "clients": null
+      }
+    ],
+    "handshakes": 2
+  },
+  "modules": [
+    {
+      "name": "wifi",
+      "running": true
+    }
+  ]
+}

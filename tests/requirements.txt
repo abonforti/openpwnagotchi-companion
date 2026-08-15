@@ -1,0 +1,18 @@
+# Test dependencies. CI installs these on Python 3.11, matching the device
+# (the fork declares requires-python = ">=3.11", SPEC F21).
+#
+# No pwnagotchi: tests/fakes/pwnagotchi_stub/ stands in for it, exposing exactly
+# the symbols pinned in SPEC.md section 11.
+
+pytest>=8.0
+pytest-cov>=5.0
+# Property-based testing for the parsers, where unenumerated input is the actual
+# risk: handshake filenames, the bounded log tail, HDOP, gpsd TPV (SPEC 10.7).
+hypothesis>=6.100
+# Conformance against docs/schemas, which is the authority on the wire format
+# (SPEC D15). Pulls in `referencing`, used to resolve common.json.
+jsonschema>=4.21
+# The plugin imports it to start the WSS listener. The pwnagotchi image pins no
+# version (SPEC F21) and the server API changed incompatibly at 14, so the
+# plugin must work against whatever CI resolves - deliberately unpinned here too.
+websockets

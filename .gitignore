@@ -49,3 +49,10 @@ denylist*
 *.swp
 .idea/
 .vscode/
+
+# coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/

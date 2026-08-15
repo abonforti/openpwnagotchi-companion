@@ -1,0 +1,400 @@
+2025-08-15 09:00:00,000 INFO [pwnagotchi] hey, channel 1 is free! Your AP will say thanks.
+2025-08-15 09:00:07,000 INFO [epoch 1] duration_secs=31 slept_for=5.34 blind_for=1 inactive_for=1
+2025-08-15 09:00:14,000 INFO [epoch 2] duration_secs=32 slept_for=5.00 blind_for=2 inactive_for=2
+2025-08-15 09:00:21,000 WARNING [epoch 3] duration_secs=33 slept_for=1.62 blind_for=0 inactive_for=3
+2025-08-15 09:00:28,000 DEBUG [epoch 4] duration_secs=34 slept_for=3.55 blind_for=1 inactive_for=4
+2025-08-15 09:00:35,000 ERROR [epoch 5] duration_secs=35 slept_for=3.01 blind_for=2 inactive_for=0
+2025-08-15 09:00:42,000 INFO [epoch 6] duration_secs=36 slept_for=8.85 blind_for=0 inactive_for=1
+2025-08-15 09:00:49,000 INFO [epoch 7] duration_secs=37 slept_for=8.85 blind_for=1 inactive_for=2
+2025-08-15 09:00:56,000 INFO [epoch 8] duration_secs=38 slept_for=0.88 blind_for=2 inactive_for=3
+2025-08-15 09:01:03,000 WARNING [epoch 9] duration_secs=39 slept_for=5.46 blind_for=0 inactive_for=4
+2025-08-15 09:01:10,000 DEBUG [epoch 10] duration_secs=40 slept_for=0.98 blind_for=1 inactive_for=0
+2025-08-15 09:01:17,000 ERROR [handshake] captured TestNet_011 (aa:bb:cc:dd:ee:0b)
+2025-08-15 09:01:24,000 INFO [epoch 12] duration_secs=42 slept_for=2.68 blind_for=0 inactive_for=2
+2025-08-15 09:01:31,000 INFO [epoch 13] duration_secs=43 slept_for=4.61 blind_for=1 inactive_for=3
+2025-08-15 09:01:38,000 INFO [epoch 14] duration_secs=44 slept_for=1.74 blind_for=2 inactive_for=4
+2025-08-15 09:01:45,000 WARNING [epoch 15] duration_secs=45 slept_for=3.91 blind_for=0 inactive_for=0
+2025-08-15 09:01:52,000 DEBUG [epoch 16] duration_secs=46 slept_for=0.67 blind_for=1 inactive_for=1
+2025-08-15 09:01:59,000 ERROR [wifi] found 8 access points on channel 5 (•‿‿•)
+2025-08-15 09:02:06,000 INFO [epoch 18] duration_secs=48 slept_for=5.81 blind_for=0 inactive_for=3
+2025-08-15 09:02:13,000 INFO [epoch 19] duration_secs=49 slept_for=3.12 blind_for=1 inactive_for=4
+2025-08-15 09:02:20,000 INFO [epoch 20] duration_secs=30 slept_for=5.17 blind_for=2 inactive_for=0
+2025-08-15 09:02:27,000 WARNING [epoch 21] duration_secs=31 slept_for=3.00 blind_for=0 inactive_for=1
+2025-08-15 09:02:34,000 DEBUG [handshake] captured TestNet_022 (aa:bb:cc:dd:ee:16)
+2025-08-15 09:02:41,000 ERROR [epoch 23] duration_secs=33 slept_for=6.96 blind_for=2 inactive_for=3
+2025-08-15 09:02:48,000 INFO [epoch 24] duration_secs=34 slept_for=2.15 blind_for=0 inactive_for=4
+2025-08-15 09:02:55,000 INFO [epoch 25] duration_secs=35 slept_for=8.56 blind_for=1 inactive_for=0
+2025-08-15 09:03:02,000 INFO [epoch 26] duration_secs=36 slept_for=5.67 blind_for=2 inactive_for=1
+2025-08-15 09:03:09,000 WARNING [epoch 27] duration_secs=37 slept_for=0.92 blind_for=0 inactive_for=2
+2025-08-15 09:03:16,000 DEBUG [epoch 28] duration_secs=38 slept_for=1.82 blind_for=1 inactive_for=3
+2025-08-15 09:03:23,000 ERROR [epoch 29] duration_secs=39 slept_for=6.76 blind_for=2 inactive_for=4
+2025-08-15 09:03:30,000 INFO [epoch 30] duration_secs=40 slept_for=5.25 blind_for=0 inactive_for=0
+2025-08-15 09:03:37,000 INFO [epoch 31] duration_secs=41 slept_for=8.54 blind_for=1 inactive_for=1
+2025-08-15 09:03:44,000 INFO [epoch 32] duration_secs=42 slept_for=7.54 blind_for=2 inactive_for=2
+2025-08-15 09:03:51,000 WARNING [handshake] captured TestNet_033 (aa:bb:cc:dd:ee:21)
+2025-08-15 09:03:58,000 DEBUG [wifi] found 7 access points on channel 9 (°▃°)
+2025-08-15 09:04:05,000 ERROR [epoch 35] duration_secs=45 slept_for=7.89 blind_for=2 inactive_for=0
+2025-08-15 09:04:12,000 INFO [epoch 36] duration_secs=46 slept_for=1.39 blind_for=0 inactive_for=1
+2025-08-15 09:04:19,000 INFO [pwnagotchi] hey, channel 12 is free! Your AP will say thanks.
+2025-08-15 09:04:26,000 INFO [epoch 38] duration_secs=48 slept_for=7.90 blind_for=2 inactive_for=3
+2025-08-15 09:04:33,000 WARNING [epoch 39] duration_secs=49 slept_for=1.74 blind_for=0 inactive_for=4
+2025-08-15 09:04:40,000 DEBUG [epoch 40] duration_secs=30 slept_for=8.67 blind_for=1 inactive_for=0
+2025-08-15 09:04:47,000 ERROR [epoch 41] duration_secs=31 slept_for=7.85 blind_for=2 inactive_for=1
+2025-08-15 09:04:54,000 INFO [epoch 42] duration_secs=32 slept_for=8.35 blind_for=0 inactive_for=2
+2025-08-15 09:05:01,000 INFO [epoch 43] duration_secs=33 slept_for=6.79 blind_for=1 inactive_for=3
+2025-08-15 09:05:08,000 INFO [handshake] captured TestNet_044 (aa:bb:cc:dd:ee:2c)
+2025-08-15 09:05:15,000 WARNING [epoch 45] duration_secs=35 slept_for=2.71 blind_for=0 inactive_for=0
+2025-08-15 09:05:22,000 DEBUG [epoch 46] duration_secs=36 slept_for=2.45 blind_for=1 inactive_for=1
+2025-08-15 09:05:29,000 ERROR [epoch 47] duration_secs=37 slept_for=8.55 blind_for=2 inactive_for=2
+2025-08-15 09:05:36,000 INFO [epoch 48] duration_secs=38 slept_for=6.33 blind_for=0 inactive_for=3
+2025-08-15 09:05:43,000 INFO [epoch 49] duration_secs=39 slept_for=5.63 blind_for=1 inactive_for=4
+2025-08-15 09:05:50,000 INFO [epoch 50] duration_secs=40 slept_for=1.84 blind_for=2 inactive_for=0
+2025-08-15 09:05:57,000 WARNING [wifi] found 6 access points on channel 13 (☼‿‿☼)
+2025-08-15 09:06:04,000 DEBUG [epoch 52] duration_secs=42 slept_for=2.73 blind_for=1 inactive_for=2
+2025-08-15 09:06:11,000 ERROR [epoch 53] duration_secs=43 slept_for=4.47 blind_for=2 inactive_for=3
+2025-08-15 09:06:18,000 INFO [epoch 54] duration_secs=44 slept_for=8.16 blind_for=0 inactive_for=4
+2025-08-15 09:06:25,000 INFO [handshake] captured TestNet_055 (aa:bb:cc:dd:ee:37)
+2025-08-15 09:06:32,000 INFO [epoch 56] duration_secs=46 slept_for=6.12 blind_for=2 inactive_for=1
+2025-08-15 09:06:39,000 WARNING [epoch 57] duration_secs=47 slept_for=8.75 blind_for=0 inactive_for=2
+2025-08-15 09:06:46,000 DEBUG [epoch 58] duration_secs=48 slept_for=6.32 blind_for=1 inactive_for=3
+2025-08-15 09:06:53,000 ERROR [epoch 59] duration_secs=49 slept_for=3.70 blind_for=2 inactive_for=4
+2025-08-15 09:07:00,000 INFO [epoch 60] duration_secs=30 slept_for=5.32 blind_for=0 inactive_for=0
+2025-08-15 09:07:07,000 INFO [epoch 61] duration_secs=31 slept_for=6.78 blind_for=1 inactive_for=1
+2025-08-15 09:07:14,000 INFO [epoch 62] duration_secs=32 slept_for=2.22 blind_for=2 inactive_for=2
+2025-08-15 09:07:21,000 WARNING [epoch 63] duration_secs=33 slept_for=6.58 blind_for=0 inactive_for=3
+2025-08-15 09:07:28,000 DEBUG [epoch 64] duration_secs=34 slept_for=0.23 blind_for=1 inactive_for=4
+2025-08-15 09:07:35,000 ERROR [epoch 65] duration_secs=35 slept_for=1.37 blind_for=2 inactive_for=0
+2025-08-15 09:07:42,000 INFO [handshake] captured TestNet_066 (aa:bb:cc:dd:ee:42)
+2025-08-15 09:07:49,000 INFO [epoch 67] duration_secs=37 slept_for=2.32 blind_for=1 inactive_for=2
+2025-08-15 09:07:56,000 INFO [wifi] found 5 access points on channel 4 (⌐■_■)
+2025-08-15 09:08:03,000 WARNING [epoch 69] duration_secs=39 slept_for=5.96 blind_for=0 inactive_for=4
+2025-08-15 09:08:10,000 DEBUG [epoch 70] duration_secs=40 slept_for=2.88 blind_for=1 inactive_for=0
+2025-08-15 09:08:17,000 ERROR [epoch 71] duration_secs=41 slept_for=7.06 blind_for=2 inactive_for=1
+2025-08-15 09:08:24,000 INFO [epoch 72] duration_secs=42 slept_for=8.03 blind_for=0 inactive_for=2
+2025-08-15 09:08:31,000 INFO [epoch 73] duration_secs=43 slept_for=6.51 blind_for=1 inactive_for=3
+2025-08-15 09:08:38,000 INFO [pwnagotchi] hey, channel 10 is free! Your AP will say thanks.
+2025-08-15 09:08:45,000 WARNING [epoch 75] duration_secs=45 slept_for=4.15 blind_for=0 inactive_for=0
+2025-08-15 09:08:52,000 DEBUG [epoch 76] duration_secs=46 slept_for=0.85 blind_for=1 inactive_for=1
+2025-08-15 09:08:59,000 ERROR [handshake] captured TestNet_077 (aa:bb:cc:dd:ee:4d)
+2025-08-15 09:09:06,000 INFO [epoch 78] duration_secs=48 slept_for=1.88 blind_for=0 inactive_for=3
+2025-08-15 09:09:13,000 INFO [epoch 79] duration_secs=49 slept_for=2.74 blind_for=1 inactive_for=4
+2025-08-15 09:09:20,000 INFO [epoch 80] duration_secs=30 slept_for=7.50 blind_for=2 inactive_for=0
+2025-08-15 09:09:27,000 WARNING [epoch 81] duration_secs=31 slept_for=1.92 blind_for=0 inactive_for=1
+2025-08-15 09:09:34,000 DEBUG [epoch 82] duration_secs=32 slept_for=0.64 blind_for=1 inactive_for=2
+2025-08-15 09:09:41,000 ERROR [epoch 83] duration_secs=33 slept_for=8.48 blind_for=2 inactive_for=3
+2025-08-15 09:09:48,000 INFO [epoch 84] duration_secs=34 slept_for=8.77 blind_for=0 inactive_for=4
+2025-08-15 09:09:55,000 INFO [wifi] found 4 access points on channel 8 (•‿‿•)
+2025-08-15 09:10:02,000 INFO [epoch 86] duration_secs=36 slept_for=8.02 blind_for=2 inactive_for=1
+2025-08-15 09:10:09,000 WARNING [epoch 87] duration_secs=37 slept_for=2.75 blind_for=0 inactive_for=2
+2025-08-15 09:10:16,000 DEBUG [handshake] captured TestNet_088 (aa:bb:cc:dd:ee:58)
+2025-08-15 09:10:23,000 ERROR [epoch 89] duration_secs=39 slept_for=5.96 blind_for=2 inactive_for=4
+2025-08-15 09:10:30,000 INFO [epoch 90] duration_secs=40 slept_for=4.75 blind_for=0 inactive_for=0
+2025-08-15 09:10:37,000 INFO [epoch 91] duration_secs=41 slept_for=0.43 blind_for=1 inactive_for=1
+2025-08-15 09:10:44,000 INFO [epoch 92] duration_secs=42 slept_for=0.77 blind_for=2 inactive_for=2
+2025-08-15 09:10:51,000 WARNING [epoch 93] duration_secs=43 slept_for=2.63 blind_for=0 inactive_for=3
+2025-08-15 09:10:58,000 DEBUG [epoch 94] duration_secs=44 slept_for=3.54 blind_for=1 inactive_for=4
+2025-08-15 09:11:05,000 ERROR [epoch 95] duration_secs=45 slept_for=3.34 blind_for=2 inactive_for=0
+2025-08-15 09:11:12,000 INFO [epoch 96] duration_secs=46 slept_for=3.04 blind_for=0 inactive_for=1
+2025-08-15 09:11:19,000 INFO [epoch 97] duration_secs=47 slept_for=3.54 blind_for=1 inactive_for=2
+2025-08-15 09:11:26,000 INFO [epoch 98] duration_secs=48 slept_for=3.04 blind_for=2 inactive_for=3
+2025-08-15 09:11:33,000 WARNING [handshake] captured TestNet_099 (aa:bb:cc:dd:ee:63)
+2025-08-15 09:11:40,000 DEBUG [epoch 100] duration_secs=30 slept_for=3.98 blind_for=1 inactive_for=0
+2025-08-15 09:11:47,000 ERROR [epoch 101] duration_secs=31 slept_for=6.01 blind_for=2 inactive_for=1
+2025-08-15 09:11:54,000 INFO [wifi] found 3 access points on channel 12 (°▃°)
+2025-08-15 09:12:01,000 INFO [epoch 103] duration_secs=33 slept_for=8.53 blind_for=1 inactive_for=3
+2025-08-15 09:12:08,000 INFO [epoch 104] duration_secs=34 slept_for=0.42 blind_for=2 inactive_for=4
+2025-08-15 09:12:15,000 WARNING [epoch 105] duration_secs=35 slept_for=8.04 blind_for=0 inactive_for=0
+2025-08-15 09:12:22,000 DEBUG [epoch 106] duration_secs=36 slept_for=4.77 blind_for=1 inactive_for=1
+2025-08-15 09:12:29,000 ERROR [epoch 107] duration_secs=37 slept_for=8.31 blind_for=2 inactive_for=2
+2025-08-15 09:12:36,000 INFO [epoch 108] duration_secs=38 slept_for=4.47 blind_for=0 inactive_for=3
+2025-08-15 09:12:43,000 INFO [epoch 109] duration_secs=39 slept_for=1.33 blind_for=1 inactive_for=4
+2025-08-15 09:12:50,000 INFO [handshake] captured TestNet_110 (aa:bb:cc:dd:ee:6e)
+2025-08-15 09:12:57,000 WARNING [pwnagotchi] hey, channel 8 is free! Your AP will say thanks.
+2025-08-15 09:13:04,000 DEBUG [epoch 112] duration_secs=42 slept_for=8.36 blind_for=1 inactive_for=2
+2025-08-15 09:13:11,000 ERROR [epoch 113] duration_secs=43 slept_for=1.88 blind_for=2 inactive_for=3
+2025-08-15 09:13:18,000 INFO [epoch 114] duration_secs=44 slept_for=7.32 blind_for=0 inactive_for=4
+2025-08-15 09:13:25,000 INFO [epoch 115] duration_secs=45 slept_for=6.76 blind_for=1 inactive_for=0
+2025-08-15 09:13:32,000 INFO [epoch 116] duration_secs=46 slept_for=0.05 blind_for=2 inactive_for=1
+2025-08-15 09:13:39,000 WARNING [epoch 117] duration_secs=47 slept_for=7.98 blind_for=0 inactive_for=2
+2025-08-15 09:13:46,000 DEBUG [epoch 118] duration_secs=48 slept_for=5.05 blind_for=1 inactive_for=3
+2025-08-15 09:13:53,000 ERROR [wifi] found 2 access points on channel 3 (☼‿‿☼)
+2025-08-15 09:14:00,000 INFO [epoch 120] duration_secs=30 slept_for=7.33 blind_for=0 inactive_for=0
+2025-08-15 09:14:07,000 INFO [handshake] captured TestNet_121 (aa:bb:cc:dd:ee:79)
+2025-08-15 09:14:14,000 INFO [epoch 122] duration_secs=32 slept_for=4.15 blind_for=2 inactive_for=2
+2025-08-15 09:14:21,000 WARNING [epoch 123] duration_secs=33 slept_for=8.47 blind_for=0 inactive_for=3
+2025-08-15 09:14:28,000 DEBUG [epoch 124] duration_secs=34 slept_for=2.33 blind_for=1 inactive_for=4
+2025-08-15 09:14:35,000 ERROR [epoch 125] duration_secs=35 slept_for=8.90 blind_for=2 inactive_for=0
+2025-08-15 09:14:42,000 INFO [epoch 126] duration_secs=36 slept_for=4.71 blind_for=0 inactive_for=1
+2025-08-15 09:14:49,000 INFO [epoch 127] duration_secs=37 slept_for=0.73 blind_for=1 inactive_for=2
+2025-08-15 09:14:56,000 INFO [epoch 128] duration_secs=38 slept_for=2.36 blind_for=2 inactive_for=3
+2025-08-15 09:15:03,000 WARNING [epoch 129] duration_secs=39 slept_for=5.61 blind_for=0 inactive_for=4
+2025-08-15 09:15:10,000 DEBUG [epoch 130] duration_secs=40 slept_for=2.96 blind_for=1 inactive_for=0
+2025-08-15 09:15:17,000 ERROR [epoch 131] duration_secs=41 slept_for=7.63 blind_for=2 inactive_for=1
+2025-08-15 09:15:24,000 INFO [handshake] captured TestNet_132 (aa:bb:cc:dd:ee:84)
+2025-08-15 09:15:31,000 INFO [epoch 133] duration_secs=43 slept_for=7.21 blind_for=1 inactive_for=3
+2025-08-15 09:15:38,000 INFO [epoch 134] duration_secs=44 slept_for=4.30 blind_for=2 inactive_for=4
+2025-08-15 09:15:45,000 WARNING [epoch 135] duration_secs=45 slept_for=8.09 blind_for=0 inactive_for=0
+2025-08-15 09:15:52,000 DEBUG [wifi] found 1 access points on channel 7 (⌐■_■)
+2025-08-15 09:15:59,000 ERROR [epoch 137] duration_secs=47 slept_for=6.56 blind_for=2 inactive_for=2
+2025-08-15 09:16:06,000 INFO [epoch 138] duration_secs=48 slept_for=0.14 blind_for=0 inactive_for=3
+2025-08-15 09:16:13,000 INFO [epoch 139] duration_secs=49 slept_for=4.81 blind_for=1 inactive_for=4
+2025-08-15 09:16:20,000 INFO [epoch 140] duration_secs=30 slept_for=5.89 blind_for=2 inactive_for=0
+2025-08-15 09:16:27,000 WARNING [epoch 141] duration_secs=31 slept_for=1.52 blind_for=0 inactive_for=1
+2025-08-15 09:16:34,000 DEBUG [epoch 142] duration_secs=32 slept_for=0.84 blind_for=1 inactive_for=2
+2025-08-15 09:16:41,000 ERROR [handshake] captured TestNet_143 (aa:bb:cc:dd:ee:8f)
+2025-08-15 09:16:48,000 INFO [epoch 144] duration_secs=34 slept_for=7.34 blind_for=0 inactive_for=4
+2025-08-15 09:16:55,000 INFO [epoch 145] duration_secs=35 slept_for=8.99 blind_for=1 inactive_for=0
+2025-08-15 09:17:02,000 INFO [epoch 146] duration_secs=36 slept_for=7.68 blind_for=2 inactive_for=1
+2025-08-15 09:17:09,000 WARNING [epoch 147] duration_secs=37 slept_for=8.66 blind_for=0 inactive_for=2
+2025-08-15 09:17:16,000 DEBUG [pwnagotchi] hey, channel 6 is free! Your AP will say thanks.
+2025-08-15 09:17:23,000 ERROR [epoch 149] duration_secs=39 slept_for=4.62 blind_for=2 inactive_for=4
+2025-08-15 09:17:30,000 INFO [epoch 150] duration_secs=40 slept_for=1.73 blind_for=0 inactive_for=0
+2025-08-15 09:17:37,000 INFO [epoch 151] duration_secs=41 slept_for=0.04 blind_for=1 inactive_for=1
+2025-08-15 09:17:44,000 INFO [epoch 152] duration_secs=42 slept_for=3.41 blind_for=2 inactive_for=2
+2025-08-15 09:17:51,000 WARNING [wifi] found 0 access points on channel 11 (•‿‿•)
+2025-08-15 09:17:58,000 DEBUG [handshake] captured TestNet_154 (aa:bb:cc:dd:ee:9a)
+2025-08-15 09:18:05,000 ERROR [epoch 155] duration_secs=45 slept_for=8.75 blind_for=2 inactive_for=0
+2025-08-15 09:18:12,000 INFO [epoch 156] duration_secs=46 slept_for=3.33 blind_for=0 inactive_for=1
+2025-08-15 09:18:19,000 INFO [epoch 157] duration_secs=47 slept_for=5.61 blind_for=1 inactive_for=2
+2025-08-15 09:18:26,000 INFO [epoch 158] duration_secs=48 slept_for=8.27 blind_for=2 inactive_for=3
+2025-08-15 09:18:33,000 WARNING [epoch 159] duration_secs=49 slept_for=6.43 blind_for=0 inactive_for=4
+2025-08-15 09:18:40,000 DEBUG [epoch 160] duration_secs=30 slept_for=1.24 blind_for=1 inactive_for=0
+2025-08-15 09:18:47,000 ERROR [epoch 161] duration_secs=31 slept_for=6.08 blind_for=2 inactive_for=1
+2025-08-15 09:18:54,000 INFO [epoch 162] duration_secs=32 slept_for=5.38 blind_for=0 inactive_for=2
+2025-08-15 09:19:01,000 INFO [epoch 163] duration_secs=33 slept_for=0.15 blind_for=1 inactive_for=3
+2025-08-15 09:19:08,000 INFO [epoch 164] duration_secs=34 slept_for=8.85 blind_for=2 inactive_for=4
+2025-08-15 09:19:15,000 WARNING [handshake] captured TestNet_165 (aa:bb:cc:dd:ee:a5)
+2025-08-15 09:19:22,000 DEBUG [epoch 166] duration_secs=36 slept_for=1.43 blind_for=1 inactive_for=1
+2025-08-15 09:19:29,000 ERROR [epoch 167] duration_secs=37 slept_for=8.36 blind_for=2 inactive_for=2
+2025-08-15 09:19:36,000 INFO [epoch 168] duration_secs=38 slept_for=2.79 blind_for=0 inactive_for=3
+2025-08-15 09:19:43,000 INFO [epoch 169] duration_secs=39 slept_for=1.11 blind_for=1 inactive_for=4
+2025-08-15 09:19:50,000 INFO [wifi] found 8 access points on channel 2 (°▃°)
+2025-08-15 09:19:57,000 WARNING [epoch 171] duration_secs=41 slept_for=2.81 blind_for=0 inactive_for=1
+2025-08-15 09:20:04,000 DEBUG [epoch 172] duration_secs=42 slept_for=4.48 blind_for=1 inactive_for=2
+2025-08-15 09:20:11,000 ERROR [epoch 173] duration_secs=43 slept_for=8.15 blind_for=2 inactive_for=3
+2025-08-15 09:20:18,000 INFO [epoch 174] duration_secs=44 slept_for=6.45 blind_for=0 inactive_for=4
+2025-08-15 09:20:25,000 INFO [epoch 175] duration_secs=45 slept_for=7.59 blind_for=1 inactive_for=0
+2025-08-15 09:20:32,000 INFO [handshake] captured TestNet_176 (aa:bb:cc:dd:ee:b0)
+2025-08-15 09:20:39,000 WARNING [epoch 177] duration_secs=47 slept_for=6.88 blind_for=0 inactive_for=2
+2025-08-15 09:20:46,000 DEBUG [epoch 178] duration_secs=48 slept_for=4.94 blind_for=1 inactive_for=3
+2025-08-15 09:20:53,000 ERROR [epoch 179] duration_secs=49 slept_for=2.23 blind_for=2 inactive_for=4
+2025-08-15 09:21:00,000 INFO [epoch 180] duration_secs=30 slept_for=1.12 blind_for=0 inactive_for=0
+2025-08-15 09:21:07,000 INFO [epoch 181] duration_secs=31 slept_for=6.18 blind_for=1 inactive_for=1
+2025-08-15 09:21:14,000 INFO [epoch 182] duration_secs=32 slept_for=4.43 blind_for=2 inactive_for=2
+2025-08-15 09:21:21,000 WARNING [epoch 183] duration_secs=33 slept_for=8.70 blind_for=0 inactive_for=3
+2025-08-15 09:21:28,000 DEBUG [epoch 184] duration_secs=34 slept_for=3.85 blind_for=1 inactive_for=4
+2025-08-15 09:21:35,000 ERROR [pwnagotchi] hey, channel 4 is free! Your AP will say thanks.
+2025-08-15 09:21:42,000 INFO [epoch 186] duration_secs=36 slept_for=7.10 blind_for=0 inactive_for=1
+2025-08-15 09:21:49,000 INFO [wifi] found 7 access points on channel 6 (☼‿‿☼)
+2025-08-15 09:21:56,000 INFO [epoch 188] duration_secs=38 slept_for=7.21 blind_for=2 inactive_for=3
+2025-08-15 09:22:03,000 WARNING [epoch 189] duration_secs=39 slept_for=7.97 blind_for=0 inactive_for=4
+2025-08-15 09:22:10,000 DEBUG [epoch 190] duration_secs=40 slept_for=5.10 blind_for=1 inactive_for=0
+2025-08-15 09:22:17,000 ERROR [epoch 191] duration_secs=41 slept_for=6.83 blind_for=2 inactive_for=1
+2025-08-15 09:22:24,000 INFO [epoch 192] duration_secs=42 slept_for=7.78 blind_for=0 inactive_for=2
+2025-08-15 09:22:31,000 INFO [epoch 193] duration_secs=43 slept_for=6.65 blind_for=1 inactive_for=3
+2025-08-15 09:22:38,000 INFO [epoch 194] duration_secs=44 slept_for=4.90 blind_for=2 inactive_for=4
+2025-08-15 09:22:45,000 WARNING [epoch 195] duration_secs=45 slept_for=8.24 blind_for=0 inactive_for=0
+2025-08-15 09:22:52,000 DEBUG [epoch 196] duration_secs=46 slept_for=0.33 blind_for=1 inactive_for=1
+2025-08-15 09:22:59,000 ERROR [epoch 197] duration_secs=47 slept_for=2.78 blind_for=2 inactive_for=2
+2025-08-15 09:23:06,000 INFO [handshake] captured TestNet_198 (aa:bb:cc:dd:ee:c6)
+2025-08-15 09:23:13,000 INFO [epoch 199] duration_secs=49 slept_for=8.94 blind_for=1 inactive_for=4
+2025-08-15 09:23:20,000 INFO [epoch 200] duration_secs=30 slept_for=7.34 blind_for=2 inactive_for=0
+2025-08-15 09:23:27,000 WARNING [epoch 201] duration_secs=31 slept_for=0.51 blind_for=0 inactive_for=1
+2025-08-15 09:23:34,000 DEBUG [epoch 202] duration_secs=32 slept_for=7.51 blind_for=1 inactive_for=2
+2025-08-15 09:23:41,000 ERROR [epoch 203] duration_secs=33 slept_for=6.73 blind_for=2 inactive_for=3
+2025-08-15 09:23:48,000 INFO [wifi] found 6 access points on channel 10 (⌐■_■)
+2025-08-15 09:23:55,000 INFO [epoch 205] duration_secs=35 slept_for=3.71 blind_for=1 inactive_for=0
+2025-08-15 09:24:02,000 INFO [epoch 206] duration_secs=36 slept_for=0.90 blind_for=2 inactive_for=1
+2025-08-15 09:24:09,000 WARNING [epoch 207] duration_secs=37 slept_for=4.40 blind_for=0 inactive_for=2
+2025-08-15 09:24:16,000 DEBUG [epoch 208] duration_secs=38 slept_for=3.84 blind_for=1 inactive_for=3
+2025-08-15 09:24:23,000 ERROR [handshake] captured TestNet_209 (aa:bb:cc:dd:ee:d1)
+2025-08-15 09:24:30,000 INFO [epoch 210] duration_secs=40 slept_for=8.52 blind_for=0 inactive_for=0
+2025-08-15 09:24:37,000 INFO [epoch 211] duration_secs=41 slept_for=5.54 blind_for=1 inactive_for=1
+2025-08-15 09:24:44,000 INFO [epoch 212] duration_secs=42 slept_for=2.13 blind_for=2 inactive_for=2
+2025-08-15 09:24:51,000 WARNING [epoch 213] duration_secs=43 slept_for=4.04 blind_for=0 inactive_for=3
+2025-08-15 09:24:58,000 DEBUG [epoch 214] duration_secs=44 slept_for=2.83 blind_for=1 inactive_for=4
+2025-08-15 09:25:05,000 ERROR [epoch 215] duration_secs=45 slept_for=1.31 blind_for=2 inactive_for=0
+2025-08-15 09:25:12,000 INFO [epoch 216] duration_secs=46 slept_for=0.35 blind_for=0 inactive_for=1
+2025-08-15 09:25:19,000 INFO [epoch 217] duration_secs=47 slept_for=4.20 blind_for=1 inactive_for=2
+2025-08-15 09:25:26,000 INFO [epoch 218] duration_secs=48 slept_for=7.02 blind_for=2 inactive_for=3
+2025-08-15 09:25:33,000 WARNING [epoch 219] duration_secs=49 slept_for=4.74 blind_for=0 inactive_for=4
+2025-08-15 09:25:40,000 DEBUG [handshake] captured TestNet_220 (aa:bb:cc:dd:ee:dc)
+2025-08-15 09:25:47,000 ERROR [wifi] found 5 access points on channel 1 (•‿‿•)
+2025-08-15 09:25:54,000 INFO [pwnagotchi] hey, channel 2 is free! Your AP will say thanks.
+2025-08-15 09:26:01,000 INFO [epoch 223] duration_secs=33 slept_for=7.42 blind_for=1 inactive_for=3
+2025-08-15 09:26:08,000 INFO [epoch 224] duration_secs=34 slept_for=5.79 blind_for=2 inactive_for=4
+2025-08-15 09:26:15,000 WARNING [epoch 225] duration_secs=35 slept_for=6.93 blind_for=0 inactive_for=0
+2025-08-15 09:26:22,000 DEBUG [epoch 226] duration_secs=36 slept_for=4.60 blind_for=1 inactive_for=1
+2025-08-15 09:26:29,000 ERROR [epoch 227] duration_secs=37 slept_for=5.07 blind_for=2 inactive_for=2
+2025-08-15 09:26:36,000 INFO [epoch 228] duration_secs=38 slept_for=3.16 blind_for=0 inactive_for=3
+2025-08-15 09:26:43,000 INFO [epoch 229] duration_secs=39 slept_for=0.93 blind_for=1 inactive_for=4
+2025-08-15 09:26:50,000 INFO [epoch 230] duration_secs=40 slept_for=4.67 blind_for=2 inactive_for=0
+2025-08-15 09:26:57,000 WARNING [handshake] captured TestNet_231 (aa:bb:cc:dd:ee:e7)
+2025-08-15 09:27:04,000 DEBUG [epoch 232] duration_secs=42 slept_for=2.93 blind_for=1 inactive_for=2
+2025-08-15 09:27:11,000 ERROR [epoch 233] duration_secs=43 slept_for=7.62 blind_for=2 inactive_for=3
+2025-08-15 09:27:18,000 INFO [epoch 234] duration_secs=44 slept_for=5.85 blind_for=0 inactive_for=4
+2025-08-15 09:27:25,000 INFO [epoch 235] duration_secs=45 slept_for=7.19 blind_for=1 inactive_for=0
+2025-08-15 09:27:32,000 INFO [epoch 236] duration_secs=46 slept_for=4.22 blind_for=2 inactive_for=1
+2025-08-15 09:27:39,000 WARNING [epoch 237] duration_secs=47 slept_for=0.19 blind_for=0 inactive_for=2
+2025-08-15 09:27:46,000 DEBUG [wifi] found 4 access points on channel 5 (°▃°)
+2025-08-15 09:27:53,000 ERROR [epoch 239] duration_secs=49 slept_for=7.64 blind_for=2 inactive_for=4
+2025-08-15 09:28:00,000 INFO [epoch 240] duration_secs=30 slept_for=7.55 blind_for=0 inactive_for=0
+2025-08-15 09:28:07,000 INFO [epoch 241] duration_secs=31 slept_for=8.34 blind_for=1 inactive_for=1
+2025-08-15 09:28:14,000 INFO [handshake] captured TestNet_242 (aa:bb:cc:dd:ee:f2)
+2025-08-15 09:28:21,000 WARNING [epoch 243] duration_secs=33 slept_for=0.65 blind_for=0 inactive_for=3
+2025-08-15 09:28:28,000 DEBUG [epoch 244] duration_secs=34 slept_for=7.66 blind_for=1 inactive_for=4
+2025-08-15 09:28:35,000 ERROR [epoch 245] duration_secs=35 slept_for=1.11 blind_for=2 inactive_for=0
+2025-08-15 09:28:42,000 INFO [epoch 246] duration_secs=36 slept_for=2.99 blind_for=0 inactive_for=1
+2025-08-15 09:28:49,000 INFO [epoch 247] duration_secs=37 slept_for=0.80 blind_for=1 inactive_for=2
+2025-08-15 09:28:56,000 INFO [epoch 248] duration_secs=38 slept_for=1.68 blind_for=2 inactive_for=3
+2025-08-15 09:29:03,000 WARNING [epoch 249] duration_secs=39 slept_for=4.66 blind_for=0 inactive_for=4
+2025-08-15 09:29:10,000 DEBUG [epoch 250] duration_secs=40 slept_for=3.84 blind_for=1 inactive_for=0
+2025-08-15 09:29:17,000 ERROR [epoch 251] duration_secs=41 slept_for=2.94 blind_for=2 inactive_for=1
+2025-08-15 09:29:24,000 INFO [epoch 252] duration_secs=42 slept_for=1.48 blind_for=0 inactive_for=2
+2025-08-15 09:29:31,000 INFO [handshake] captured TestNet_253 (aa:bb:cc:dd:ee:fd)
+2025-08-15 09:29:38,000 INFO [epoch 254] duration_secs=44 slept_for=6.99 blind_for=2 inactive_for=4
+2025-08-15 09:29:45,000 WARNING [wifi] found 3 access points on channel 9 (☼‿‿☼)
+2025-08-15 09:29:52,000 DEBUG [epoch 256] duration_secs=46 slept_for=5.07 blind_for=1 inactive_for=1
+2025-08-15 09:29:59,000 ERROR [epoch 257] duration_secs=47 slept_for=6.50 blind_for=2 inactive_for=2
+2025-08-15 09:30:06,000 INFO [epoch 258] duration_secs=48 slept_for=8.86 blind_for=0 inactive_for=3
+2025-08-15 09:30:13,000 INFO [pwnagotchi] hey, channel 13 is free! Your AP will say thanks.
+2025-08-15 09:30:20,000 INFO [epoch 260] duration_secs=30 slept_for=6.69 blind_for=2 inactive_for=0
+2025-08-15 09:30:27,000 WARNING [epoch 261] duration_secs=31 slept_for=7.50 blind_for=0 inactive_for=1
+2025-08-15 09:30:34,000 DEBUG [epoch 262] duration_secs=32 slept_for=4.64 blind_for=1 inactive_for=2
+2025-08-15 09:30:41,000 ERROR [epoch 263] duration_secs=33 slept_for=2.31 blind_for=2 inactive_for=3
+2025-08-15 09:30:48,000 INFO [handshake] captured TestNet_264 (aa:bb:cc:dd:ee:08)
+2025-08-15 09:30:55,000 INFO [epoch 265] duration_secs=35 slept_for=1.10 blind_for=1 inactive_for=0
+2025-08-15 09:31:02,000 INFO [epoch 266] duration_secs=36 slept_for=8.87 blind_for=2 inactive_for=1
+2025-08-15 09:31:09,000 WARNING [epoch 267] duration_secs=37 slept_for=1.79 blind_for=0 inactive_for=2
+2025-08-15 09:31:16,000 DEBUG [epoch 268] duration_secs=38 slept_for=5.09 blind_for=1 inactive_for=3
+2025-08-15 09:31:23,000 ERROR [epoch 269] duration_secs=39 slept_for=8.92 blind_for=2 inactive_for=4
+2025-08-15 09:31:30,000 INFO [epoch 270] duration_secs=40 slept_for=5.71 blind_for=0 inactive_for=0
+2025-08-15 09:31:37,000 INFO [epoch 271] duration_secs=41 slept_for=3.62 blind_for=1 inactive_for=1
+2025-08-15 09:31:44,000 INFO [wifi] found 2 access points on channel 13 (⌐■_■)
+2025-08-15 09:31:51,000 WARNING [epoch 273] duration_secs=43 slept_for=4.62 blind_for=0 inactive_for=3
+2025-08-15 09:31:58,000 DEBUG [epoch 274] duration_secs=44 slept_for=7.96 blind_for=1 inactive_for=4
+2025-08-15 09:32:05,000 ERROR [handshake] captured TestNet_275 (aa:bb:cc:dd:ee:13)
+2025-08-15 09:32:12,000 INFO [epoch 276] duration_secs=46 slept_for=8.70 blind_for=0 inactive_for=1
+2025-08-15 09:32:19,000 INFO [epoch 277] duration_secs=47 slept_for=2.78 blind_for=1 inactive_for=2
+2025-08-15 09:32:26,000 INFO [epoch 278] duration_secs=48 slept_for=7.08 blind_for=2 inactive_for=3
+2025-08-15 09:32:33,000 WARNING [epoch 279] duration_secs=49 slept_for=5.20 blind_for=0 inactive_for=4
+2025-08-15 09:32:40,000 DEBUG [epoch 280] duration_secs=30 slept_for=2.89 blind_for=1 inactive_for=0
+2025-08-15 09:32:47,000 ERROR [epoch 281] duration_secs=31 slept_for=5.73 blind_for=2 inactive_for=1
+2025-08-15 09:32:54,000 INFO [epoch 282] duration_secs=32 slept_for=8.03 blind_for=0 inactive_for=2
+2025-08-15 09:33:01,000 INFO [epoch 283] duration_secs=33 slept_for=0.81 blind_for=1 inactive_for=3
+2025-08-15 09:33:08,000 INFO [epoch 284] duration_secs=34 slept_for=1.41 blind_for=2 inactive_for=4
+2025-08-15 09:33:15,000 WARNING [epoch 285] duration_secs=35 slept_for=2.25 blind_for=0 inactive_for=0
+2025-08-15 09:33:22,000 DEBUG [handshake] captured TestNet_286 (aa:bb:cc:dd:ee:1e)
+2025-08-15 09:33:29,000 ERROR [epoch 287] duration_secs=37 slept_for=8.26 blind_for=2 inactive_for=2
+2025-08-15 09:33:36,000 INFO [epoch 288] duration_secs=38 slept_for=6.26 blind_for=0 inactive_for=3
+2025-08-15 09:33:43,000 INFO [wifi] found 1 access points on channel 4 (•‿‿•)
+2025-08-15 09:33:50,000 INFO [epoch 290] duration_secs=40 slept_for=8.55 blind_for=2 inactive_for=0
+2025-08-15 09:33:57,000 WARNING [epoch 291] duration_secs=41 slept_for=5.27 blind_for=0 inactive_for=1
+2025-08-15 09:34:04,000 DEBUG [epoch 292] duration_secs=42 slept_for=2.95 blind_for=1 inactive_for=2
+2025-08-15 09:34:11,000 ERROR [epoch 293] duration_secs=43 slept_for=5.02 blind_for=2 inactive_for=3
+2025-08-15 09:34:18,000 INFO [epoch 294] duration_secs=44 slept_for=5.24 blind_for=0 inactive_for=4
+2025-08-15 09:34:25,000 INFO [epoch 295] duration_secs=45 slept_for=1.11 blind_for=1 inactive_for=0
+2025-08-15 09:34:32,000 INFO [pwnagotchi] hey, channel 11 is free! Your AP will say thanks.
+2025-08-15 09:34:39,000 WARNING [handshake] captured TestNet_297 (aa:bb:cc:dd:ee:29)
+2025-08-15 09:34:46,000 DEBUG [epoch 298] duration_secs=48 slept_for=2.11 blind_for=1 inactive_for=3
+2025-08-15 09:34:53,000 ERROR [epoch 299] duration_secs=49 slept_for=2.35 blind_for=2 inactive_for=4
+2025-08-15 09:35:00,000 INFO [epoch 300] duration_secs=30 slept_for=4.97 blind_for=0 inactive_for=0
+2025-08-15 09:35:07,000 INFO [epoch 301] duration_secs=31 slept_for=8.61 blind_for=1 inactive_for=1
+2025-08-15 09:35:14,000 INFO [epoch 302] duration_secs=32 slept_for=4.51 blind_for=2 inactive_for=2
+2025-08-15 09:35:21,000 WARNING [epoch 303] duration_secs=33 slept_for=6.26 blind_for=0 inactive_for=3
+2025-08-15 09:35:28,000 DEBUG [epoch 304] duration_secs=34 slept_for=4.27 blind_for=1 inactive_for=4
+2025-08-15 09:35:35,000 ERROR [epoch 305] duration_secs=35 slept_for=4.33 blind_for=2 inactive_for=0
+2025-08-15 09:35:42,000 INFO [wifi] found 0 access points on channel 8 (°▃°)
+2025-08-15 09:35:49,000 INFO [epoch 307] duration_secs=37 slept_for=6.98 blind_for=1 inactive_for=2
+2025-08-15 09:35:56,000 INFO [handshake] captured TestNet_308 (aa:bb:cc:dd:ee:34)
+2025-08-15 09:36:03,000 WARNING [epoch 309] duration_secs=39 slept_for=3.38 blind_for=0 inactive_for=4
+2025-08-15 09:36:10,000 DEBUG [epoch 310] duration_secs=40 slept_for=0.97 blind_for=1 inactive_for=0
+2025-08-15 09:36:17,000 ERROR [epoch 311] duration_secs=41 slept_for=6.11 blind_for=2 inactive_for=1
+2025-08-15 09:36:24,000 INFO [epoch 312] duration_secs=42 slept_for=7.80 blind_for=0 inactive_for=2
+2025-08-15 09:36:31,000 INFO [epoch 313] duration_secs=43 slept_for=7.01 blind_for=1 inactive_for=3
+2025-08-15 09:36:38,000 INFO [epoch 314] duration_secs=44 slept_for=0.06 blind_for=2 inactive_for=4
+2025-08-15 09:36:45,000 WARNING [epoch 315] duration_secs=45 slept_for=1.53 blind_for=0 inactive_for=0
+2025-08-15 09:36:52,000 DEBUG [epoch 316] duration_secs=46 slept_for=5.13 blind_for=1 inactive_for=1
+2025-08-15 09:36:59,000 ERROR [epoch 317] duration_secs=47 slept_for=7.07 blind_for=2 inactive_for=2
+2025-08-15 09:37:06,000 INFO [epoch 318] duration_secs=48 slept_for=1.57 blind_for=0 inactive_for=3
+2025-08-15 09:37:13,000 INFO [handshake] captured TestNet_319 (aa:bb:cc:dd:ee:3f)
+2025-08-15 09:37:20,000 INFO [epoch 320] duration_secs=30 slept_for=7.62 blind_for=2 inactive_for=0
+2025-08-15 09:37:27,000 WARNING [epoch 321] duration_secs=31 slept_for=1.50 blind_for=0 inactive_for=1
+2025-08-15 09:37:34,000 DEBUG [epoch 322] duration_secs=32 slept_for=7.16 blind_for=1 inactive_for=2
+2025-08-15 09:37:41,000 ERROR [wifi] found 8 access points on channel 12 (☼‿‿☼)
+2025-08-15 09:37:48,000 INFO [epoch 324] duration_secs=34 slept_for=4.15 blind_for=0 inactive_for=4
+2025-08-15 09:37:55,000 INFO [epoch 325] duration_secs=35 slept_for=3.02 blind_for=1 inactive_for=0
+2025-08-15 09:38:02,000 INFO [epoch 326] duration_secs=36 slept_for=3.01 blind_for=2 inactive_for=1
+2025-08-15 09:38:09,000 WARNING [epoch 327] duration_secs=37 slept_for=3.82 blind_for=0 inactive_for=2
+2025-08-15 09:38:16,000 DEBUG [epoch 328] duration_secs=38 slept_for=2.64 blind_for=1 inactive_for=3
+2025-08-15 09:38:23,000 ERROR [epoch 329] duration_secs=39 slept_for=2.81 blind_for=2 inactive_for=4
+2025-08-15 09:38:30,000 INFO [handshake] captured TestNet_330 (aa:bb:cc:dd:ee:4a)
+2025-08-15 09:38:37,000 INFO [epoch 331] duration_secs=41 slept_for=4.74 blind_for=1 inactive_for=1
+2025-08-15 09:38:44,000 INFO [epoch 332] duration_secs=42 slept_for=3.47 blind_for=2 inactive_for=2
+2025-08-15 09:38:51,000 WARNING [pwnagotchi] hey, channel 9 is free! Your AP will say thanks.
+2025-08-15 09:38:58,000 DEBUG [epoch 334] duration_secs=44 slept_for=3.19 blind_for=1 inactive_for=4
+2025-08-15 09:39:05,000 ERROR [epoch 335] duration_secs=45 slept_for=8.69 blind_for=2 inactive_for=0
+2025-08-15 09:39:12,000 INFO [epoch 336] duration_secs=46 slept_for=1.32 blind_for=0 inactive_for=1
+2025-08-15 09:39:19,000 INFO [epoch 337] duration_secs=47 slept_for=4.12 blind_for=1 inactive_for=2
+2025-08-15 09:39:26,000 INFO [epoch 338] duration_secs=48 slept_for=1.99 blind_for=2 inactive_for=3
+2025-08-15 09:39:33,000 WARNING [epoch 339] duration_secs=49 slept_for=7.79 blind_for=0 inactive_for=4
+2025-08-15 09:39:40,000 DEBUG [wifi] found 7 access points on channel 3 (⌐■_■)
+2025-08-15 09:39:47,000 ERROR [handshake] captured TestNet_341 (aa:bb:cc:dd:ee:55)
+2025-08-15 09:39:54,000 INFO [epoch 342] duration_secs=32 slept_for=0.00 blind_for=0 inactive_for=2
+2025-08-15 09:40:01,000 INFO [epoch 343] duration_secs=33 slept_for=8.41 blind_for=1 inactive_for=3
+2025-08-15 09:40:08,000 INFO [epoch 344] duration_secs=34 slept_for=0.38 blind_for=2 inactive_for=4
+2025-08-15 09:40:15,000 WARNING [epoch 345] duration_secs=35 slept_for=8.49 blind_for=0 inactive_for=0
+2025-08-15 09:40:22,000 DEBUG [epoch 346] duration_secs=36 slept_for=5.69 blind_for=1 inactive_for=1
+2025-08-15 09:40:29,000 ERROR [epoch 347] duration_secs=37 slept_for=2.74 blind_for=2 inactive_for=2
+2025-08-15 09:40:36,000 INFO [epoch 348] duration_secs=38 slept_for=7.53 blind_for=0 inactive_for=3
+2025-08-15 09:40:43,000 INFO [epoch 349] duration_secs=39 slept_for=3.30 blind_for=1 inactive_for=4
+2025-08-15 09:40:50,000 INFO [epoch 350] duration_secs=40 slept_for=3.41 blind_for=2 inactive_for=0
+2025-08-15 09:40:57,000 WARNING [epoch 351] duration_secs=41 slept_for=8.46 blind_for=0 inactive_for=1
+2025-08-15 09:41:04,000 DEBUG [handshake] captured TestNet_352 (aa:bb:cc:dd:ee:60)
+2025-08-15 09:41:11,000 ERROR [epoch 353] duration_secs=43 slept_for=0.20 blind_for=2 inactive_for=3
+2025-08-15 09:41:18,000 INFO [epoch 354] duration_secs=44 slept_for=1.23 blind_for=0 inactive_for=4
+2025-08-15 09:41:25,000 INFO [epoch 355] duration_secs=45 slept_for=8.42 blind_for=1 inactive_for=0
+2025-08-15 09:41:32,000 INFO [epoch 356] duration_secs=46 slept_for=6.15 blind_for=2 inactive_for=1
+2025-08-15 09:41:39,000 WARNING [wifi] found 6 access points on channel 7 (•‿‿•)
+2025-08-15 09:41:46,000 DEBUG [epoch 358] duration_secs=48 slept_for=5.76 blind_for=1 inactive_for=3
+2025-08-15 09:41:53,000 ERROR [epoch 359] duration_secs=49 slept_for=4.91 blind_for=2 inactive_for=4
+2025-08-15 09:42:00,000 INFO [epoch 360] duration_secs=30 slept_for=1.59 blind_for=0 inactive_for=0
+2025-08-15 09:42:07,000 INFO [epoch 361] duration_secs=31 slept_for=7.95 blind_for=1 inactive_for=1
+2025-08-15 09:42:14,000 INFO [epoch 362] duration_secs=32 slept_for=6.50 blind_for=2 inactive_for=2
+2025-08-15 09:42:21,000 WARNING [handshake] captured TestNet_363 (aa:bb:cc:dd:ee:6b)
+2025-08-15 09:42:28,000 DEBUG [epoch 364] duration_secs=34 slept_for=4.97 blind_for=1 inactive_for=4
+2025-08-15 09:42:35,000 ERROR [epoch 365] duration_secs=35 slept_for=0.40 blind_for=2 inactive_for=0
+2025-08-15 09:42:42,000 INFO [epoch 366] duration_secs=36 slept_for=8.94 blind_for=0 inactive_for=1
+2025-08-15 09:42:49,000 INFO [epoch 367] duration_secs=37 slept_for=1.42 blind_for=1 inactive_for=2
+2025-08-15 09:42:56,000 INFO [epoch 368] duration_secs=38 slept_for=7.61 blind_for=2 inactive_for=3
+2025-08-15 09:43:03,000 WARNING [epoch 369] duration_secs=39 slept_for=2.51 blind_for=0 inactive_for=4
+2025-08-15 09:43:10,000 DEBUG [pwnagotchi] hey, channel 7 is free! Your AP will say thanks.
+2025-08-15 09:43:17,000 ERROR [epoch 371] duration_secs=41 slept_for=8.10 blind_for=2 inactive_for=1
+2025-08-15 09:43:24,000 INFO [epoch 372] duration_secs=42 slept_for=1.98 blind_for=0 inactive_for=2
+2025-08-15 09:43:31,000 INFO [epoch 373] duration_secs=43 slept_for=4.17 blind_for=1 inactive_for=3
+2025-08-15 09:43:38,000 INFO [wifi] found 5 access points on channel 11 (°▃°)
+2025-08-15 09:43:45,000 WARNING [epoch 375] duration_secs=45 slept_for=7.99 blind_for=0 inactive_for=0
+2025-08-15 09:43:52,000 DEBUG [epoch 376] duration_secs=46 slept_for=6.56 blind_for=1 inactive_for=1
+2025-08-15 09:43:59,000 ERROR [epoch 377] duration_secs=47 slept_for=1.49 blind_for=2 inactive_for=2
+2025-08-15 09:44:06,000 INFO [epoch 378] duration_secs=48 slept_for=4.68 blind_for=0 inactive_for=3
+2025-08-15 09:44:13,000 INFO [epoch 379] duration_secs=49 slept_for=5.75 blind_for=1 inactive_for=4
+2025-08-15 09:44:20,000 INFO [epoch 380] duration_secs=30 slept_for=0.64 blind_for=2 inactive_for=0
+2025-08-15 09:44:27,000 WARNING [epoch 381] duration_secs=31 slept_for=8.09 blind_for=0 inactive_for=1
+2025-08-15 09:44:34,000 DEBUG [epoch 382] duration_secs=32 slept_for=4.20 blind_for=1 inactive_for=2
+2025-08-15 09:44:41,000 ERROR [epoch 383] duration_secs=33 slept_for=8.88 blind_for=2 inactive_for=3
+2025-08-15 09:44:48,000 INFO [epoch 384] duration_secs=34 slept_for=8.34 blind_for=0 inactive_for=4
+2025-08-15 09:44:55,000 INFO [handshake] captured TestNet_385 (aa:bb:cc:dd:ee:81)
+2025-08-15 09:45:02,000 INFO [epoch 386] duration_secs=36 slept_for=6.07 blind_for=2 inactive_for=1
+2025-08-15 09:45:09,000 WARNING [epoch 387] duration_secs=37 slept_for=1.17 blind_for=0 inactive_for=2
+2025-08-15 09:45:16,000 DEBUG [epoch 388] duration_secs=38 slept_for=3.46 blind_for=1 inactive_for=3
+2025-08-15 09:45:23,000 ERROR [epoch 389] duration_secs=39 slept_for=0.51 blind_for=2 inactive_for=4
+2025-08-15 09:45:30,000 INFO [epoch 390] duration_secs=40 slept_for=4.65 blind_for=0 inactive_for=0
+2025-08-15 09:45:37,000 INFO [wifi] found 4 access points on channel 2 (☼‿‿☼)
+2025-08-15 09:45:44,000 INFO [epoch 392] duration_secs=42 slept_for=6.37 blind_for=2 inactive_for=2
+2025-08-15 09:45:51,000 WARNING [epoch 393] duration_secs=43 slept_for=5.15 blind_for=0 inactive_for=3
+2025-08-15 09:45:58,000 DEBUG [epoch 394] duration_secs=44 slept_for=0.57 blind_for=1 inactive_for=4
+2025-08-15 09:46:05,000 ERROR [epoch 395] duration_secs=45 slept_for=5.98 blind_for=2 inactive_for=0
+2025-08-15 09:46:12,000 INFO [handshake] captured TestNet_396 (aa:bb:cc:dd:ee:8c)
+2025-08-15 09:46:19,000 INFO [epoch 397] duration_secs=47 slept_for=0.99 blind_for=1 inactive_for=2
+2025-08-15 09:46:26,000 INFO [epoch 398] duration_secs=48 slept_for=1.28 blind_for=2 inactive_for=3
+2025-08-15 09:46:33,000 WARNING [epoch 399] duration_secs=49 slept_for=6.71 blind_for=0 inactive_for=4

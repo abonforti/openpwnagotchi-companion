@@ -820,15 +820,23 @@ An implementer with `gh` authentication performs these after the repo exists.
 
 ### 6.2 Milestones
 
-- **0.1.0 — Parity + core gaps**: everything in D8/D9 (dashboard, networks, handshakes list,
-  peers, log, mirror, GPS including the map, all four controls, TLS, optional auth, delivery,
-  docs, and the test suite in §10).
-- **0.2.0 — Comfort**: pcap download over BT, handshake filtering/search, richer map (clustering,
-  track), offline tile cache, theme options.
-- **0.3.0 — Reach**: multi-device switcher, wardriving export (WiGLE/CSV), wpa-sec upload trigger.
-- **Backlog**: anything deferred. Web push stays explicitly closed (D10) — record a wontfix note.
+A milestone groups the work toward a deliverable; a tag marks a release. They are **not** the
+same thing and are not named after each other. Version numbers advance through `0.x` while the
+single milestone below stays open (§12).
 
-### 6.3 Seed issues (created under 0.1.0, labelled)
+- **1.0 — Parity + core gaps**: everything in D8/D9 — dashboard, networks, handshakes list,
+  peers, log, mirror, GPS including the map, all four controls, TLS, optional auth, delivery,
+  docs, and the test suite in §10 — through to the end-to-end test against real hardware in
+  §14. Closing this milestone is what earns the `v1.0.0` tag.
+- **Backlog** (no milestone): everything deferred. Items are promoted into a milestone when
+  someone actually starts them, not before — an open milestone nobody is working in is noise in
+  the issue list. Currently held here:
+  - *Comfort*: pcap download over BT, handshake filtering and search, richer map (clustering,
+    track), offline tile cache, theme options.
+  - *Reach*: multi-device switcher, wardriving export (WiGLE/CSV), wpa-sec upload trigger.
+  - Web push stays explicitly closed (D10) — record a wontfix note rather than leaving it open.
+
+### 6.3 Seed issues (created under the 1.0 milestone, labelled)
 
 One issue per §2 backend capability, per §4 view, plus the TLS scripts, CI, docs, the test suite,
 the schema pipeline, and the GitHub setup itself. Each issue carries a crisp title and acceptance
@@ -1136,8 +1144,10 @@ Release mechanics:
   than shipping a mislabelled artifact.
 - `CHANGELOG.md` follows Keep a Changelog, with an `Unreleased` section maintained as changes
   land, so cutting a release is renaming a heading rather than reconstructing history.
-- `v0.0.1` is the first tag: the scaffold, the protocol schemas and the tooling, with no
-  working plugin yet. `v0.1.0` follows once the 0.1.0 milestone closes.
+- `v0.0.1` is the first tag: the scaffold, the protocol schemas and the tooling, with no working
+  plugin yet. Tags then advance through `0.x` as work lands — there is no obligation to tag
+  every merge, only what is worth installing. `v1.0.0` is cut when the **1.0 milestone** (§6.2)
+  closes, which by definition includes the end-to-end test against real hardware.
 
 ## 13. Repository hygiene and the infrastructure rule
 
@@ -1186,7 +1196,7 @@ Each step ships with the tests named in §10 and is not done until they pass (§
 7. `.github/check_plugin.py`, `check_language.py`, `ci.yml`, `release.yml`.
 8. README, ROADMAP, CONTRIBUTING, issue templates, `docs/PINNED-FACTS.md`.
 9. GitHub project: labels, milestones, seed issues, epic (via `gh`).
-10. Tag `v0.1.0` → the release workflow builds `dist.tgz`; run `install-on-pi.sh` on the Pi;
+10. Tag a `0.x` release → the release workflow builds `dist.tgz`; run `install-on-pi.sh` on the Pi;
     end-to-end test from the iPhone (trust the CA, install the PWA, connect, exercise every view
     and control).
 

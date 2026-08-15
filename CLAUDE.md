@@ -81,5 +81,8 @@ git config companion.denylist /path/to/your/denylist.txt   # outside this repo
   branch and is protected: work happens on a branch and lands through a pull request, never by
   a direct push.
 - **Versioning**: SemVer, one version line for the whole project (see SPEC.md §12). Tags are
-  `vMAJOR.MINOR.PATCH`, optionally with an `-rcN` suffix.
+  `vMAJOR.MINOR.PATCH`, optionally with an `-rcN` suffix. The project is in `0.x`. Milestones are
+  named for their deliverable, never after a version number.
+- **Every commit is GPG-signed** (SPEC.md §13.1). `commit.gpgsign` is on; never disable it and
+  never use `--no-gpg-sign`. If signing fails, report it rather than working around it.
 - Public repo: keep it well-structured (labels, milestones, issues, roadmap) per SPEC §6.

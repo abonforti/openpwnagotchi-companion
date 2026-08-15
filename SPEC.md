@@ -824,10 +824,49 @@ A milestone groups the work toward a deliverable; a tag marks a release. They ar
 same thing and are not named after each other. Version numbers advance through `0.x` while the
 single milestone below stays open (§12).
 
-- **1.0 — Parity + core gaps**: everything in D8/D9 — dashboard, networks, handshakes list,
-  peers, log, mirror, GPS including the map, all four controls, TLS, optional auth, delivery,
-  docs, and the test suite in §10 — through to the end-to-end test against real hardware in
-  §14. Closing this milestone is what earns the `v1.0.0` tag.
+**`Field-ready`** — open, **no due date**.
+
+The name is deliberately not a version number. A milestone called `1.0` sitting next to a future
+tag called `v1.0.0` reads as though they were the same object, and they are not: one is a body
+of work, the other is a release you can install. Naming the milestone after what closing it
+*means* keeps the two apart in the issue list and in conversation.
+
+No due date either: a date on a spare-time project with no plugin yet goes red within weeks and
+is then ignored, which is worse than having none. The exit criteria below are functional instead.
+
+> *Everything needed for someone other than the author to install this on their own pwnagotchi
+> and use it from their phone.*
+
+That sentence is the perimeter. Anything that does not serve it belongs in the backlog.
+
+**In scope**
+
+| Area | Work |
+|---|---|
+| Plugin | Config schema; TLS and interface binding with the rebind loop (§2.3); `websockets` compatibility shim; optional token auth; the full message contract (§2.4); `stats`, access points, handshakes, peers, log, screen mirror, face status; the pushes; all four controls including the restart path; battery detection; the GPS abstraction and `.gps.json` sidecars; the HTTPS static server with explicit MIME and SPA fallback |
+| Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
+| Frontend | The eight views, `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
+| Tests | The whole of §10, including the 100% branch-coverage gate |
+| CI | `ci.yml`, `release.yml`, `check_plugin.py`, `check_language.py`, schema sync, secret scan |
+| Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, `PINNED-FACTS.md`, README, ROADMAP, CONTRIBUTING, issue templates |
+
+**Out of scope** — backlog, no milestone: pcap download over BT, handshake filtering and search,
+map clustering and tracks, offline tile cache, theme options, multi-device switcher, WiGLE/CSV
+export, wpa-sec upload. Web push is closed outright (D10).
+
+**Exit criteria** — all must hold, and each is checkable rather than a judgement call:
+
+1. A person following `docs/SETUP.md` alone, with no help from the author, gets from a bare Pi
+   to an installed PWA. If a step only works because the author knew something, the document is
+   not finished.
+2. All eight views work against a real pwnagotchi, from an iPhone, over the BT PAN link.
+3. All four controls exercised on real hardware — including a mode switch, which restarts the
+   service and drops the socket, and including the reconnect that follows.
+4. Every CI job green, the coverage gate included.
+5. No open `BLOCK` finding from `companion-reviewer` or `companion-security-auditor`.
+
+Closing `Field-ready` is what earns the `v1.0.0` tag; criterion 3 is the field test §12 makes a
+precondition of leaving `0.x`.
 - **Backlog** (no milestone): everything deferred. Items are promoted into a milestone when
   someone actually starts them, not before — an open milestone nobody is working in is noise in
   the issue list. Currently held here:
@@ -836,7 +875,7 @@ single milestone below stays open (§12).
   - *Reach*: multi-device switcher, wardriving export (WiGLE/CSV), wpa-sec upload trigger.
   - Web push stays explicitly closed (D10) — record a wontfix note rather than leaving it open.
 
-### 6.3 Seed issues (created under the 1.0 milestone, labelled)
+### 6.3 Seed issues (created under the `Field-ready` milestone, labelled)
 
 One issue per §2 backend capability, per §4 view, plus the TLS scripts, CI, docs, the test suite,
 the schema pipeline, and the GitHub setup itself. Each issue carries a crisp title and acceptance
@@ -1146,7 +1185,7 @@ Release mechanics:
   land, so cutting a release is renaming a heading rather than reconstructing history.
 - `v0.0.1` is the first tag: the scaffold, the protocol schemas and the tooling, with no working
   plugin yet. Tags then advance through `0.x` as work lands — there is no obligation to tag
-  every merge, only what is worth installing. `v1.0.0` is cut when the **1.0 milestone** (§6.2)
+  every merge, only what is worth installing. `v1.0.0` is cut when the **`Field-ready` milestone** (§6.2)
   closes, which by definition includes the end-to-end test against real hardware.
 
 ## 13. Repository hygiene and the infrastructure rule
@@ -1178,6 +1217,33 @@ Enforcement, in layers, because a single gate gets forgotten:
 
 If an agent needs to know how the device is reached in order to do a task, the answer is to ask
 the owner, in the conversation, and not write it down.
+
+### 13.1 Commit signing
+
+**Every commit authored by the owner is GPG-signed.** No exception, including commits an agent
+makes on the owner's behalf: `commit.gpgsign` is enabled, so this happens by default, and an
+agent must never disable it or reach for `--no-gpg-sign` to get past a problem. A signing
+failure is something to report, not to route around.
+
+This is not ceremony. The repository is public and its whole security posture rests on the
+owner's own commits being distinguishable from anything else that might reach the branch.
+
+**Contributors are not required to sign.** Demanding a GPG setup as the price of a first pull
+request drives away exactly the drive-by contribution a small project wants. That is reconciled
+with the signature requirement on `master` by merge policy rather than by exemption:
+
+- The `master` ruleset requires signed commits.
+- Pull requests are **squash-merged**. GitHub creates the resulting commit and signs it with its
+  own key, so an unsigned contribution still lands on `master` as a signed commit.
+- The contributor's authorship is preserved in the squash commit's author field; only the
+  committer is GitHub.
+
+The practical rule: unsigned commits may exist on a branch, never on `master`.
+
+Verification is worth checking once rather than assuming: a signed commit still shows as
+unverified if the key is not on the GitHub account, or if the commit's author e-mail is not one
+of that key's verified addresses. Both must line up, and a key that expires takes future
+signatures with it.
 
 ## 14. Execution order for the implementer
 

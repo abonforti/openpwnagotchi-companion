@@ -1,0 +1,30 @@
+[
+  { "name": "type: bug",      "color": "d73a4a", "description": "Something is wrong" },
+  { "name": "type: feature",  "color": "0e8a16", "description": "New capability" },
+  { "name": "type: docs",     "color": "0075ca", "description": "Documentation only" },
+  { "name": "type: test",     "color": "1d76db", "description": "Test suite work" },
+  { "name": "type: infra",    "color": "5319e7", "description": "Build, CI, tooling, repo plumbing" },
+  { "name": "type: security", "color": "b60205", "description": "Security or privacy impact" },
+
+  { "name": "area: plugin",   "color": "fbca04", "description": "The pwnagotchi plugin" },
+  { "name": "area: frontend", "color": "fbca04", "description": "The Svelte PWA" },
+  { "name": "area: protocol", "color": "fbca04", "description": "WebSocket contract and schemas" },
+  { "name": "area: tls",      "color": "fbca04", "description": "Certificates and transport security" },
+  { "name": "area: gps",      "color": "fbca04", "description": "Location and mapping" },
+  { "name": "area: ui",       "color": "fbca04", "description": "Views, layout, iOS specifics" },
+  { "name": "area: ci",       "color": "fbca04", "description": "GitHub Actions" },
+
+  { "name": "prio: high",     "color": "e11d21", "description": "Blocks the milestone" },
+  { "name": "prio: med",      "color": "eb6420", "description": "Wanted, not blocking" },
+  { "name": "prio: low",      "color": "fef2c0", "description": "Nice to have" },
+
+  { "name": "accessibility",    "color": "f143ab", "description": "Barrier affecting people with disabilities" },
+  { "name": "blocked",          "color": "000000", "description": "Waiting on something else" },
+  { "name": "good first issue", "color": "7057ff", "description": "Good for newcomers" },
+  { "name": "help wanted",      "color": "008672", "description": "Extra attention is needed" },
+
+  { "name": "question",  "color": "d876e3", "description": "Further information is requested" },
+  { "name": "duplicate", "color": "cfd3d7", "description": "This issue or pull request already exists" },
+  { "name": "invalid",   "color": "e4e669", "description": "This doesn't seem right" },
+  { "name": "wontfix",   "color": "ffffff", "description": "This will not be worked on" }
+]

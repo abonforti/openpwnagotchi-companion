@@ -12,7 +12,36 @@ against real hardware.
 
 ## [Unreleased]
 
+### Security
+
+- The unprompted `stats` / `access_points` / `face_status` burst is no longer sent before a
+  client has authenticated, and a connection no longer joins the broadcast set on accept. With
+  a token configured, an unauthenticated peer previously received the unit's name, its access
+  point list, its face and every push message for the whole `auth_timeout` window simply by
+  opening a socket, and could renew that window by reconnecting.
+- The authentication deadline is now enforced against a client that sends nothing. It was only
+  checked when a frame arrived, so a peer that opened a socket and stayed silent - the case the
+  rule exists for - held it open indefinitely.
+
 ### Added
+
+- `tools/gen-ca.sh` and `tools/gen-cert.sh`: a private CA and an `iPAddress`-SAN server
+  certificate, non-interactive and idempotent, encoding the three constraints iOS enforces
+  silently (critical `basicConstraints`, IP SANs and never `DNS:`, validity under 825 days).
+- `tests/test_integration_ws.py`: a real WSS server and a real client over TLS material issued
+  by those scripts, driving every command end to end.
+- `tests/tools/test_certs.py`: the certificate scripts driven with `subprocess` and inspected
+  with `openssl`, in pytest rather than bats.
+- `keepalive` is now actually emitted, every `keepalive_interval` seconds (default 20, `0`
+  disables). It was in the schema and in `docs/PROTOCOL.md` but nothing sent it.
+- `.github/labels.json` and `.github/sync_labels.sh`: the label taxonomy as a file, and the
+  script that applies it.
+
+### Changed
+
+- `acknowledgment` no longer requires `message_id`: a successful `auth` is acknowledged whether
+  or not the request carried one, because it is the client's only signal that the connection is
+  usable.
 
 - Build specification (`SPEC.md`), with a pinned-facts allowlist of every pwnagotchi symbol the
   plugin may use, verified against jayofelony v2.9.5.6.

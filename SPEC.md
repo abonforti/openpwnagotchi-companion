@@ -123,7 +123,7 @@ openpwnagotchi-companion/
 │   ├── test_protocol_conformance.py # every outgoing message validated against its schema
 │   ├── test_integration_ws.py       # real WSS server + real client, in-process
 │   └── tools/
-│       └── test_certs.bats          # gen-ca.sh / gen-cert.sh assertions, see §10.6
+│       └── test_certs.py            # gen-ca.sh / gen-cert.sh assertions, see §10.6
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml                   # lint + tests + build on push/PR
@@ -131,7 +131,8 @@ openpwnagotchi-companion/
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── bug_report.yml
 │   │   └── feature_request.yml
-│   ├── labels.json
+│   ├── labels.json                  # the label taxonomy (§6.1)
+│   ├── sync_labels.sh               # applies labels.json to the repository (§6.1)
 │   ├── check_plugin.py              # AST-based plugin sanity check (§5.1)
 │   ├── check_schemas.py             # JSON Schema validity and framing invariants (§5.1)
 │   └── check_secrets.py             # generic credential scan (§5.1)
@@ -185,6 +186,7 @@ rebind_interval = 30               # seconds between interface IPv4 re-resolutio
 save_gps_log = false
 gps_log_path = "/var/tmp/pwnagotchi_gps.log"
 mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
+keepalive_interval = 20            # seconds between unsolicited keepalive frames; 0 disables
 ```
 
 Every value has a hardcoded default in the plugin matching the table above. Missing keys must
@@ -242,7 +244,32 @@ except ImportError:
 Log the resolved `websockets.__version__` at load. `tests/test_integration_ws.py` must pass
 against whatever version is installed in CI.
 
-#### 2.3.3 Authentication
+#### 2.3.3 The connection handler seam
+
+`Listeners` takes the connection handler as its fourth argument and never builds one, so the
+socket layer and the protocol layer can be tested apart. The handler is built by a module-level
+factory with this exact signature, because both the plugin and the integration test have to
+name it:
+
+```python
+def make_connection_handler(
+    router: Router, deps: Deps, auth_timeout: float, clients: "ClientSet"
+) -> Callable[..., Awaitable[None]]:
+    async def handler(websocket, *_):   # *_ absorbs the legacy `path` argument (§2.3.2)
+        ...
+```
+
+`ClientSet` is a small thread-safe set of live sockets with `add`, `discard` and `snapshot`.
+It exists because the connection handler runs on the asyncio loop while `broadcast()` is called
+from pwnagotchi's hook threads, so the membership set is genuinely shared across threads and
+guarding it inside the plugin class would put the one piece of concurrency in the file behind
+the one class that cannot be constructed without a pwnagotchi.
+
+The handler owns exactly: the initial burst, the receive loop, JSON parsing, the authentication
+deadline, dispatch into `Router.handle`, and registration in the `ClientSet`. It owns no
+sockets and no TLS.
+
+#### 2.3.4 Authentication
 
 If `token` is non-empty, the client's first frame must be `{"type":"auth","token":"..."}`.
 
@@ -252,6 +279,24 @@ If `token` is non-empty, the client's first frame must be `{"type":"auth","token
 - On failure, send one `error` message then close `1008`. Do not reveal whether the token was
   wrong or malformed.
 - If `token` is empty, skip auth entirely (D5); the BT PAN link is point-to-point.
+- The deadline is measured with `deps.now()`, not with the event loop's clock. Every other
+  time-dependent rule in this plugin already goes through that seam, and a second notion of
+  "now" would mean this one rule could only be tested by actually waiting.
+- **The deadline must be enforced against a silent client, not only against the next frame.**
+  Checking it when a message arrives is worthless: the peer this rule exists to stop is exactly
+  the one that opens a socket and then says nothing. The receive is therefore polled with a
+  timeout of `AUTH_POLL_INTERVAL` (0.25 s) while the connection is unauthenticated, and the
+  deadline is re-checked on every expiry. The cost is bounded because it applies only before
+  authentication, and an unauthenticated connection either becomes authenticated or is closed.
+- A successful `auth` is answered with an `acknowledgment` **whether or not a `message_id` was
+  supplied**, which is the one exception to the rule in §2.4. It is the client's only signal
+  that the connection is usable: failure is an error followed by a close, so without it success
+  is indistinguishable from a slow link.
+- **Any** reply carrying `error.code == "unauthorized"` closes the connection with `1008`, not
+  only a failed `auth` frame. A client that sends `get_stats` before authenticating is either
+  broken or probing, and in both cases leaving the socket open serves nothing: the contract is
+  that the auth frame comes first (§2.4), so a command that arrives before it is not a race the
+  plugin has to be forgiving about.
 
 ### 2.4 WebSocket contract
 
@@ -269,14 +314,28 @@ Framing is asymmetric, and this is locked (it matches the upstream `pwnios` wire
 Every schema sets `additionalProperties: false`; an unexpected key is an `error` with code
 `bad_request`, not something to ignore.
 
-On accept (after auth, if configured) the plugin sends an initial `stats`, `access_points` and
+Once a connection is authenticated the plugin sends an initial `stats`, `access_points` and
 `face_status` unprompted, so a fresh client has state without a round of polling.
+
+**The burst comes after authentication, never before it.** Sending it on accept would hand the
+unit's stats, its access point list and its face to anyone who can open a socket, which makes
+the token worth nothing for reading and turns the initial burst into the leak. The exact order
+is: with no token configured, the burst goes out on accept, because there is nothing to wait
+for (D5); with a token configured, nothing is sent until the `auth` frame succeeds, and then
+the `acknowledgment` goes first and the burst follows it.
+
+**A connection joins the broadcast set at the same moment, and not on accept.** Every push
+message - `wifi_update`, `handshake`, `peer_detected`, `status_change`, `face_status` - goes to
+every member of that set, so a socket registered on accept would receive the same data the
+burst was just held back from, through the other channel, for the whole `auth_timeout` window,
+and a peer could renew that window by reconnecting. Admission is one step: join the set, then
+send the burst.
 
 #### Incoming commands (client → plugin)
 
 | type | payload | action |
 |---|---|---|
-| `auth` | `{token}` | validate if token configured (§2.3.3) |
+| `auth` | `{token}` | validate if token configured (§2.3.4) |
 | `get_stats` | — | reply `stats` |
 | `get_access_points` | — | reply `access_points` |
 | `get_handshakes` | — | reply `handshakes_list` |
@@ -289,11 +348,17 @@ On accept (after auth, if configured) the plugin sends an initial `stats`, `acce
 | `reboot` | — | §2.6.3 |
 | `shutdown` | — | §2.6.3 |
 | `ping` | — | reply `pong` |
-| `gps_data` | `{latitude, longitude, accuracy}` | store as browser-sourced GPS |
+| `gps_data` | `{latitude, longitude, accuracy}` | store as browser-sourced GPS; no reply beyond the acknowledgment |
 | `get_gps_data` | — | reply `gps_update` |
 
+`gps_data` deliberately pushes nothing back. The sender already knows the position it just
+sent, and echoing a `gps_update` to it would make the browser fallback look like a fix coming
+from the Pi. A client that wants the merged view asks for it with `get_gps_data`.
+
 Unknown `type` → reply `error` with code `unknown_command`. Malformed JSON → `error` with code
-`bad_request`; never let a parse failure kill the connection handler.
+`bad_request`; never let a parse failure kill the connection handler. A frame that is valid
+JSON but is not an object (an array, a number, a string, `true`, `null`) is also `bad_request`:
+it cannot carry a `type`, and `bad_request` is the only enum member that fits.
 
 #### Outgoing messages (plugin → client)
 
@@ -313,9 +378,20 @@ Unknown `type` → reply `error` with code `unknown_command`. Malformed JSON →
 | `status_change` | push, mood hooks | `{status, mood}` |
 | `gps_update` | reply / push | `Gps` (§2.12) |
 | `restarting` | push, before a restart or power off | `{reason, mode}` (§2.6.1) |
-| `acknowledgment` | reply, when `message_id` was supplied | `{acknowledged}` |
+| `acknowledgment` | reply, when `message_id` was supplied, and always for a successful `auth` (§2.3.4) | `{acknowledged}` |
 | `error` | reply | `{code, message}`, `code` from a closed enum |
 | `keepalive` / `pong` | infra | empty object |
+
+`keepalive` is broadcast every `keepalive_interval` seconds (default 20, `0` disables it) from
+the background thread, which therefore wakes at `min(session_poll_interval, keepalive_interval)`
+rather than on the session poll alone: the frame can only go out on a tick, so a loop that woke
+every 5 s would turn a nominal 20 s cadence into 20-25 s and make a client whose timeout is set
+to the nominal value reconnect for no reason.
+
+It exists so an idle client can tell a quiet plugin from a dead link: over BT PAN a dropped
+tether does not close the socket, it simply stops delivering, and without a periodic frame the
+app would sit on a dead connection showing stale data. The frontend treats a missed interval as
+a reason to reconnect (§10.5).
 
 ### 2.5 `stats` payload
 
@@ -411,6 +487,10 @@ Consequences the implementer MUST handle:
 - Because it is disruptive, `set_mode` gets the **same two-step confirm** as reboot/shutdown
   (D9 extended by D12).
 - If the requested mode equals the current one, reply `acknowledgment` and do nothing.
+- The plugin does **not** close the socket after `restarting`. It has nothing to add and the
+  process is about to go away on its own; closing first would replace an informative
+  "restarting" state in the app with a plain disconnect, which is exactly the ambiguity the
+  broadcast exists to remove. The same applies to `reboot` and `shutdown` (§2.6.3).
 
 #### 2.6.2 `set_pasv` — soft dependency
 
@@ -690,21 +770,77 @@ The hard iOS constraints, all mandatory:
 - The root CA is installed on the iPhone as a profile **and** enabled in
   Settings → General → About → Certificate Trust Settings (full trust).
 
+Both scripts are POSIX `sh` (`set -eu`), depend on nothing but `openssl`, and are
+**non-interactive**: they never prompt, so the same invocation works from a terminal, from
+`tests/tools/test_certs.py` and from a future CI job. Everything either script needs comes from
+its arguments.
+
+Shared conventions, pinned so the tests and the scripts can be written independently of each
+other:
+
+- `--out DIR` is where all four files live — `ca.key`, `ca.crt`, `server.key`, `server.crt` —
+  and it defaults to the current directory. `gen-cert.sh` reads the CA from that same
+  directory; there is no separate `--ca-dir`, because splitting them buys nothing and doubles
+  the ways to get the invocation wrong. `gen-ca.sh` creates the directory if it does not exist; `gen-cert.sh` does not, because a
+  directory with no CA in it is the missing-CA refusal below, and creating it first would only
+  make the error point at a path the script had just invented.
+- Keys are RSA with SHA-256: 4096 bits for the CA, 2048 for the server. iOS rejects anything
+  weaker, and an EC key buys nothing here since the certificate is generated on a workstation,
+  not on the Pi.
+- Private keys are written with mode `0600`, certificates `0644`.
+- Exit status: `0` success, `1` refusal (a CA already exists, or the CA is missing) or an
+  `openssl` failure, `2` usage error (unknown flag, a flag without its value, an argument the
+  script takes no positional arguments for, no IP given, an argument that is not an IPv4
+  address). Usage errors are decided before refusals, so an invocation that is wrong in both
+  ways exits `2`.
+- Every non-zero exit writes nothing at all: on success the output directory holds exactly
+  `ca.key`, `ca.crt`, `server.key`, `server.crt` and nothing else, and on failure it holds
+  exactly what it held before. Intermediates - the CSR, the generated `openssl` config, the CA
+  serial - live in a temp directory and never appear next to the four files the user is told
+  about. An `openssl` failure prints openssl's own stderr before the script's own message.
+- Both scripts start with `#!/bin/sh` and are committed executable (mode 755), so
+  `./tools/gen-ca.sh` works and the file cannot silently become bash-only.
+- "IPv4 address" means a canonical dotted quad: four decimal octets, each `0-255`, no leading
+  zero on a multi-digit octet, no trailing dot. Leading zeros are rejected rather than guessed
+  at, because `010.1.1.1` means ten to `inet_pton` and eight to anything that reads it as octal,
+  and a certificate is the wrong place to find out which. `0.0.0.0` is rejected as well: it is
+  the wildcard D5 exists to keep out, and it is never a real address to reach the Pi on.
+
 ### 3.1 `gen-ca.sh`
 
-Idempotent. Creates `ca.key` (4096-bit RSA or P-256) and a self-signed `ca.crt` with
-`basicConstraints=critical,CA:TRUE`, `keyUsage=critical,keyCertSign,cRLSign`, ~10 years
-validity. Refuses to overwrite an existing CA unless `--force`. `ca.key` is created with mode
-`0600`.
+    gen-ca.sh [--out DIR] [--force]
+
+Creates `ca.key` and a self-signed `ca.crt`, subject `CN=OpenPwnagotchi Companion CA`, valid
+3650 days, with `basicConstraints=critical,CA:TRUE` and `keyUsage=critical,keyCertSign,cRLSign`.
+
+Refuses to overwrite an existing CA: if either `ca.key` or `ca.crt` is present, it exits `1`
+and leaves both files byte-identical, unless `--force` is given. This is not politeness. A
+regenerated CA silently invalidates every certificate issued from it and every phone that
+trusts it, and the failure shows up later as an app that will not load, with nothing pointing
+back at the moment the CA was replaced.
 
 ### 3.2 `gen-cert.sh`
 
-Takes IPs as arguments (or prompts), builds an OpenSSL config with
-`[alt_names]\nIP.1=…\nIP.2=…`, generates `server.key` + CSR, and signs it with the CA into
-`server.crt` with `basicConstraints=CA:FALSE`, `extendedKeyUsage=serverAuth`,
-`subjectAltName` from the IP list, and `-days 820`. Validates that each argument parses as an
-IPv4 address and refuses anything else (a hostname here is the `DNS:`-instead-of-`IP:` trap).
-Prints the paths to set in the plugin config and the `ca.crt` to install on the phone.
+    gen-cert.sh [--out DIR] IP [IP ...]
+
+Requires at least one IP. Each argument must parse as an IPv4 address; anything else — a
+hostname, an IPv6 address, `1.2.3.4/24` — exits `2` without writing. A hostname here is the
+`DNS:`-instead-of-`IP:` trap, and it fails on iOS in a way that looks like a network problem
+rather than a certificate one, so it is rejected at the only point where the mistake is still
+visible.
+
+Builds an OpenSSL config with `[alt_names]` holding `IP.1=…`, `IP.2=…` for every argument,
+generates `server.key` plus a CSR, and signs it with the CA into `server.crt`: subject
+`CN=<first IP>`, `-days 820`, `basicConstraints=CA:FALSE`, `keyUsage=critical,
+digitalSignature,keyEncipherment`, `extendedKeyUsage=serverAuth`, and `subjectAltName` from the
+IP list. No `DNS:` entry is ever emitted, not even for the CN.
+
+Unlike the CA it overwrites `server.key`/`server.crt` without `--force`, because reissuing after
+an address change is the normal case, and requiring a flag for the routine operation trains the
+user to pass it for the dangerous one too. Exits `1` if the CA is not in `--out`.
+
+Prints the paths to set as `tls_cert`/`tls_key` in the plugin config, and the path of the
+`ca.crt` to install on the phone.
 
 `docs/CERTIFICATES.md` documents the required extensions so users on an existing PKI (EasyRSA
 and friends) can issue from their own CA instead.
@@ -861,12 +997,27 @@ download never leaves a half-written web root.
 
 An implementer with `gh` authentication performs these after the repo exists.
 
-### 6.1 Labels (`.github/labels.json`, applied via `gh label create`)
+### 6.1 Labels (`.github/labels.json`, applied via `.github/sync_labels.sh`)
 
-`type: feature`, `type: bug`, `type: docs`, `type: security`, `type: infra`, `type: test`,
-`area: plugin`, `area: frontend`, `area: tls`, `area: ci`, `area: gps`, `area: ui`,
-`area: protocol`, `prio: high` / `prio: med` / `prio: low`, `good first issue`, `blocked`,
-`help wanted`.
+`.github/labels.json` is the taxonomy, and `.github/sync_labels.sh` applies it: without a
+script nobody runs the file is decoration, the real taxonomy lives in GitHub's settings, and
+the drift only surfaces when someone labels an issue with something the file never heard of.
+The script creates or updates every label, and `--prune` reports what exists on the repository
+but not in the file without deleting it, because removing a label strips it from every issue
+that carries it with no undo.
+
+Four groups, and an issue normally carries one from each of the first three:
+
+- **type** — `type: bug`, `type: feature`, `type: docs`, `type: test`, `type: infra`,
+  `type: security`. Each has its own colour.
+- **area** — `area: plugin`, `area: frontend`, `area: protocol`, `area: tls`, `area: gps`,
+  `area: ui`, `area: ci`. All share one colour, so the eye reads them as a set rather than
+  trying to decode seven hues.
+- **prio** — `prio: high` (blocks the milestone), `prio: med`, `prio: low`. Graded red to pale.
+- **workflow and triage** — `blocked`, `good first issue`, `help wanted`, `accessibility`,
+  `question`, `duplicate`, `invalid`, `wontfix`. These cut across the taxonomy on purpose;
+  `accessibility` is a concern rather than an area, which is why it sits here and not next to
+  `area: ui`.
 
 ### 6.2 Milestones
 

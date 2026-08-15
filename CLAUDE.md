@@ -18,8 +18,8 @@ Decisions Ledger (§0) is not to be re-litigated.
   tether interfaces, TLS mandatory. Speaks the contract in `docs/schemas/`.
 - `frontend/` — Svelte + TypeScript + Vite + `vite-plugin-pwa`, Leaflet map.
 - `tools/` — CA/cert generation, protocol type generation, on-Pi install.
-- `tests/` — pytest suite for the plugin (no pwnagotchi install needed), bats for the cert
-  scripts. Frontend tests live in `frontend/src/__tests__/` (vitest).
+- `tests/` — pytest suite for the plugin (no pwnagotchi install needed) and for the
+  certificate scripts. Frontend tests live in `frontend/src/__tests__/` (vitest).
 - `.github/` — CI (plugin lint, tests, language check, schema sync, frontend build), release
   (dist.tgz), project labels/templates.
 

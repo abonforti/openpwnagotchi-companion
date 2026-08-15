@@ -687,8 +687,25 @@ def test_both_scripts_start_with_a_posix_sh_shebang(script):
 
 @pytest.mark.parametrize("script", [GEN_CA, GEN_CERT], ids=["gen-ca", "gen-cert"])
 def test_both_scripts_are_committed_executable(script):
-    # `./tools/gen-ca.sh` is what the documentation tells the user to run.
-    assert mode_of(script) == 0o755
+    """`./tools/gen-ca.sh` is what the documentation tells the user to run.
+
+    The assertion is on the mode git records, not the one on disk. Git tracks
+    only the executable bit, and a checkout applies the local umask to the rest,
+    so a working copy that reads 775 is normal and says nothing about what was
+    committed. Asserting the filesystem mode makes this test fail for anyone
+    whose umask is 002 while still passing for a file added as 100644, which is
+    exactly backwards.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-s", "--", str(script.relative_to(REPO_ROOT))],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    assert listed, f"{script} is not tracked by git"
+    assert listed[0] == "100755", f"{script} is committed as {listed[0]}, not 100755"
 
 
 @pytest.mark.parametrize("which", ["gen-ca", "gen-cert"])

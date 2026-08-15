@@ -19,7 +19,7 @@ by anyone else.
 | Face and status | yes | yes |
 | Nearby access points | yes | yes |
 | AUTO / MANU switch, reboot, shutdown | yes | yes |
-| PASV toggle (with the separate `pasv_mode` plugin installed) | no | yes |
+| PASV toggle (with [`pasv_mode`](https://github.com/abonforti/pwnagotchi-plugins/blob/master/pasv_mode.py) installed) | no | yes |
 | Detailed handshake list, with GPS tags | no | yes |
 | Peer / mesh view | no | yes |
 | Live log viewer | no | yes |

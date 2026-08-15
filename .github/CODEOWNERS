@@ -1,0 +1,14 @@
+# Every pull request requests a review from the owner. This is a routing rule,
+# not a claim of exclusive competence: it exists so a contribution is never
+# waiting on somebody noticing it.
+*                       @abonforti
+
+# The files below decide whether everything else gets checked. A change that
+# weakens one of them is worth more scrutiny than a change that adds a feature,
+# and listing them separately is a reminder of that rather than a stricter rule.
+/SPEC.md                @abonforti
+/docs/schemas/          @abonforti
+/.github/               @abonforti
+/.githooks/             @abonforti
+/.claude/agents/        @abonforti
+/tests/conftest.py      @abonforti

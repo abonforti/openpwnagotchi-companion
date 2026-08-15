@@ -45,7 +45,7 @@ iPhone  ──BT PAN──  Pi (pwnagotchi)
    └── PWA installed from https://<pi-ip>:8443
 ```
 
-The plugin binds **only** to your tether interfaces (`bnep0`, `usb0`) — never to `0.0.0.0` — and
+The plugin binds **only** to your tether interfaces (`bnep0`, `usb0`), never `0.0.0.0`, and
 only over TLS. There is no plaintext fallback and no cloud component.
 
 ## Security model, honestly
@@ -64,17 +64,34 @@ That is a real trust decision and the docs do not soften it:
 Full walkthrough: [`docs/SETUP.md`](docs/SETUP.md) and
 [`docs/CERTIFICATES.md`](docs/CERTIFICATES.md).
 
-Beyond TLS, the exposure surface is the tether link itself, which is point to point. An optional
-shared token is available and off by default.
+Beyond TLS, the exposure surface is the tether link itself, and it is worth being precise about
+what that link is. An iPhone Personal Hotspot hands out `172.20.10.0/28`: a shared subnet with
+room for fourteen hosts, not a private wire between two devices. Anything else joined to that
+hotspot can reach the plugin. An optional shared token is available and **off by default**,
+which is a convenience default rather than a claim that nobody else is there. If you tether with
+other people around, set one.
+
+## Compatibility
+
+**No compatibility guarantee across pwnagotchi versions.** Verified against jayofelony 2.9.5.6.
+
+That is a deliberate non-promise. Declaring a supported range would mean committing to test every
+version inside it, and a range that is claimed but not tested is worse than no claim at all,
+because it reads as covered. Instead, a scheduled job checks the pwnagotchi symbols this plugin
+depends on against the current upstream and opens an issue when one of them drifts.
+
+If it breaks on your version, that is a bug worth reporting, not a configuration you got wrong.
+The symbols the plugin is allowed to touch, each with the source line that proves it exists, are
+in [`SPEC.md`](SPEC.md) §11.
 
 ## Quickstart
 
-Not yet — there is no release to install. Once there is, the shape is:
+Not yet: there is no release to install. Once there is, the shape is:
 
-1. `tools/gen-ca.sh` then `tools/gen-cert.sh <pi-ip> [<pi-ip> …]` on your machine.
+1. `tools/gen-ca.sh` then `tools/gen-cert.sh <pi-ip> [<pi-ip> ...]` on your machine.
 2. Copy `server.crt` / `server.key` to the Pi, install `plugin/companion.py`, enable it in
    `config.toml`.
-3. `tools/install-on-pi.sh` to fetch the built PWA onto the Pi.
+3. `tools/install-on-pi.sh` to install both halves on the Pi: the plugin and the built PWA.
 4. Install and fully trust `ca.crt` on the phone, open `https://<pi-ip>:8443` in Safari, and
    Add to Home Screen.
 

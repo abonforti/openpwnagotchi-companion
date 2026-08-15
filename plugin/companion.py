@@ -1910,7 +1910,10 @@ class ConnectionState:
         self._router = router
         self._deps = deps
         # With no token configured there is nothing to authenticate and no
-        # deadline to enforce; the tether link is point to point (D5).
+        # deadline to enforce (D5). Note this is a convenience default, not an
+        # isolated link: a Personal Hotspot is a shared /28, so anything else on
+        # it reaches this socket. SPEC 2.3.4 and docs/SETUP.md say so where the
+        # user actually makes the choice.
         self._authenticated = not router.auth_required
         self._deadline = deps.now() + float(auth_timeout)
 

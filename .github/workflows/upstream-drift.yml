@@ -1,0 +1,92 @@
+name: upstream drift
+
+# Watches the pwnagotchi symbols this plugin depends on (SPEC.md section 11) and
+# files a ticket when one of them changes upstream.
+#
+# Deliberately not part of CI and deliberately not required. This project makes
+# no compatibility promise across pwnagotchi versions, because a declared range
+# is an obligation to test every version inside it. What it does promise is that
+# an assumption going stale becomes visible, rather than being discovered on
+# somebody's device.
+#
+# Upstream releasing something is not a reason for an unrelated pull request to
+# go red, so the outcome here is an issue, not a failed check.
+
+on:
+  schedule:
+    # Mondays, early. Upstream releases in bursts separated by months, so this is
+    # about noticing within a week rather than watching closely.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag, branch or SHA to check (default: latest release)"
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    # A fork inherits the schedule and would file tickets on itself about an
+    # upstream it is not tracking.
+    if: github.repository == 'abonforti/openpwnagotchi-companion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Check the pinned symbols against upstream
+        id: check
+        env:
+          # Passed as an environment variable rather than interpolated into the
+          # script: `${{ }}` is substituted before the shell parses the line, so
+          # a crafted value would close the quote and run on a runner holding a
+          # token with issues: write.
+          REF: ${{ inputs.ref }}
+        run: |
+          set +e
+          if [ -n "$REF" ]; then
+            python .github/check_pinned_facts.py --ref "$REF" > report.txt 2>&1
+          else
+            python .github/check_pinned_facts.py > report.txt 2>&1
+          fi
+          status=$?
+          set -e
+          cat report.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          # 0 clean, 1 drifted, anything else means the check itself failed and
+          # the job should go red rather than quietly report no drift.
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+
+      - name: Open or update the drift issue
+        if: steps.check.outputs.status == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Upstream pwnagotchi drifted from the pinned symbols"
+          # Upstream-derived text, so backticks are stripped before it goes into
+          # a fenced block and the length is capped: a class name carrying a
+          # fence would break out, and an @name in it would mention people.
+          report="$(tr -d '`' < report.txt | head -c 4000)"
+          body="$(printf 'A scheduled check found that one or more symbols pinned in `SPEC.md` section 11 no longer hold against current upstream.\n\n```\n%s\n```\n\nWhat this means: section 11 is now wrong about them, and `tests/fakes/pwnagotchi_stub/` is built from section 11, so the test suite is green about something that is no longer true.\n\nBefore changing any code, re-read the upstream source. The fix is often to widen what the plugin tolerates rather than to follow the change, as `SPEC.md` section 2.3.2 already does for the websockets API.\n\nRaised by `.github/workflows/upstream-drift.yml`. Run %s.\n' "$report" "${{ github.run_id }}")"
+
+          # The phrase is quoted, so the search cannot match some other open
+          # issue that merely shares these words and collect the comment.
+          # `// empty` keeps a null from becoming the literal string "null".
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" \
+              --label "type: bug" --label "area: plugin"
+          fi

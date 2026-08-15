@@ -1,0 +1,44 @@
+name: Feature request
+description: Something the companion should do and does not
+labels: ["type: feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth checking first: `SPEC.md` section 0 is a decisions ledger, and the entries there are
+        settled rather than open. If your idea contradicts one, say so and why - that is a fair
+        argument to make, it just needs making explicitly.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The situation, not the solution. A feature described only as a solution is one nobody can
+        evaluate against alternatives.
+      placeholder: >
+        When I am walking I want to know whether the unit still has a GPS fix, without unlocking
+        the phone and opening the app.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: If you have a specific idea, describe it here. Optional.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - The app (PWA)
+        - The plugin
+        - The protocol between them
+        - Tooling, certificates or install
+        - Not sure
+    validations:
+      required: true

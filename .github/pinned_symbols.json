@@ -1,0 +1,293 @@
+{
+  "upstream": "jayofelony/pwnagotchi",
+  "verified_against": "v2.9.5.6",
+  "note": [
+    "The machine-checkable subset of SPEC.md section 11. Section 11 is the human",
+    "record, with the reasoning and the evidence; this is the part a script can",
+    "confirm still holds against upstream. Editing section 11 means editing this",
+    "too - two allowlists drifting apart is the failure this file exists to catch,",
+    "one level up.",
+    "",
+    "Entries check what the plugin actually reads, which is often a private",
+    "attribute rather than the public method beside it: `agent._access_points`,",
+    "not `get_access_points()`. Checking the public half would pass clean through",
+    "exactly the rename this is meant to catch.",
+    "",
+    "It checks that symbols exist with the shape claimed. It cannot check that",
+    "they behave as claimed - that pwnagotchi.restart really touches those files,",
+    "that agent.session() really blocks - which is what the on-device run is for.",
+    "",
+    "Not covered, deliberately: F12 lives in another repository",
+    "(abonforti/pwnagotchi-plugins) and is a soft dependency; F22 is a historical",
+    "note about the project this forks and describes bugs, not a dependency.",
+    "Every other fact in section 11 has at least one entry here."
+  ],
+  "facts": [
+    {
+      "id": "F1",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "uptime",
+      "why": "stats.uptime comes from here"
+    },
+    {
+      "id": "F2",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "temperature",
+      "params": [
+        "celsius"
+      ],
+      "why": "stats.temperature, and the keyword is part of the call"
+    },
+    {
+      "id": "F3",
+      "file": "pwnagotchi/agent.py",
+      "kind": "contains_all",
+      "text": [
+        "_access_points"
+      ],
+      "why": "the plugin reads agent._access_points and refuses to call the side-effecting getter"
+    },
+    {
+      "id": "F4",
+      "file": "pwnagotchi/agent.py",
+      "kind": "contains_all",
+      "text": [
+        "ap['mac']",
+        "ap['hostname']",
+        "ap['encryption']"
+      ],
+      "why": "bettercap AP dict keys the plugin maps; there is no 'bssid' key"
+    },
+    {
+      "id": "F5",
+      "file": "pwnagotchi/mesh/utils.py",
+      "kind": "contains_all",
+      "text": [
+        "_peers"
+      ],
+      "why": "agent._peers is initialised in the AsyncAdvertiser mixin and read directly"
+    },
+    {
+      "id": "F6",
+      "file": "pwnagotchi/agent.py",
+      "kind": "contains_all",
+      "text": [
+        "_current_channel"
+      ],
+      "why": "read as an attribute; the getter is defined twice and is not what the plugin calls"
+    },
+    {
+      "id": "F6b",
+      "file": "pwnagotchi/agent.py",
+      "kind": "function_count",
+      "name": "get_current_channel",
+      "count": 2,
+      "why": "defined twice, second wins; if that is ever cleaned up the plugin should be re-read"
+    },
+    {
+      "id": "F7",
+      "file": "pwnagotchi/bettercap.py",
+      "kind": "function",
+      "name": "session",
+      "why": "the blocking REST call the plugin must never make on the request path"
+    },
+    {
+      "id": "F8",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "function",
+      "name": "on",
+      "why": "hook dispatch, asynchronous"
+    },
+    {
+      "id": "F9a",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "restart",
+      "params": [
+        "mode"
+      ],
+      "why": "the only real mode switch (D12)"
+    },
+    {
+      "id": "F9b",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "reboot",
+      "why": "module level, not a method on the agent"
+    },
+    {
+      "id": "F9c",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "shutdown",
+      "why": "module level, not a method on the agent"
+    },
+    {
+      "id": "F10",
+      "file": "pwnagotchi/cli.py",
+      "kind": "contains_all",
+      "text": [
+        "do_manual_mode",
+        "do_auto_mode"
+      ],
+      "why": "mode is chosen at process start, which is why set_mode restarts instead of assigning"
+    },
+    {
+      "id": "F11",
+      "file": "pwnagotchi/plugins/default/webcfg.py",
+      "kind": "contains_all",
+      "text": [
+        "mode == \"manual\""
+      ],
+      "why": "the fork's own convention for reading the mode label"
+    },
+    {
+      "id": "F13",
+      "file": "pwnagotchi/plugins/default/webcfg.py",
+      "kind": "contains_all",
+      "text": [
+        "restart"
+      ],
+      "why": "the stock plugin switches mode by restarting, which is what D12 follows"
+    },
+    {
+      "id": "F14",
+      "file": "pwnagotchi/defaults.toml",
+      "kind": "contains_all",
+      "text": [
+        "handshakes = \"/etc/pwnagotchi/handshakes\""
+      ],
+      "why": "the handshake directory default"
+    },
+    {
+      "id": "F15",
+      "file": "pwnagotchi/utils.py",
+      "kind": "contains_all",
+      "text": [
+        "total_unique_handshakes",
+        "*.pcapng"
+      ],
+      "why": "globs *.pcapng only, which is why the plugin does its own listing"
+    },
+    {
+      "id": "F16",
+      "file": "pwnagotchi/mesh/peer.py",
+      "kind": "methods",
+      "class": "Peer",
+      "names": [
+        "name",
+        "identity",
+        "full_name",
+        "pwnd_run",
+        "pwnd_total",
+        "version",
+        "uptime",
+        "face"
+      ],
+      "why": "every Peer method peer_dict calls; the no-underscore and pwnd_tot forms do not exist"
+    },
+    {
+      "id": "F16b",
+      "file": "pwnagotchi/mesh/peer.py",
+      "kind": "contains_all",
+      "text": [
+        "first_met",
+        "first_seen",
+        "prev_seen",
+        "last_seen",
+        "encounters",
+        "last_channel",
+        "rssi"
+      ],
+      "why": "the Peer attributes peer_dict reads; last_channel, not channel"
+    },
+    {
+      "id": "F17",
+      "file": "pwnagotchi/defaults.toml",
+      "kind": "contains_all",
+      "text": [
+        "path = \"/etc/pwnagotchi/log/pwnagotchi.log\""
+      ],
+      "why": "the log the viewer tails"
+    },
+    {
+      "id": "F18",
+      "file": "pwnagotchi/ui/web/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "frame_path",
+        "frame_format",
+        "frame_ctype",
+        "frame_lock"
+      ],
+      "why": "the screen mirror reads the frame these name"
+    },
+    {
+      "id": "F19",
+      "file": "pwnagotchi/plugins/default/gps.py",
+      "kind": "contains_all",
+      "text": [
+        "Latitude",
+        "Longitude",
+        "Altitude"
+      ],
+      "why": "bettercap GPS keys are capitalised; lower-cased means a fix that reports as absent with no error. HDOP and Updated come from bettercap's own payload and are not in this repository, so they cannot be checked here"
+    },
+    {
+      "id": "F20",
+      "file": "pwnagotchi/agent.py",
+      "kind": "contains_count",
+      "text": "plugins.on('handshake'",
+      "count": 2,
+      "why": "fired from two sites with different argument types, which on_handshake must tolerate"
+    },
+    {
+      "id": "F21",
+      "file": "pyproject.toml",
+      "kind": "contains_all",
+      "text": [
+        "requires-python = \">=3.11\"",
+        "\"websockets\""
+      ],
+      "why": "the Python floor the plugin targets, and websockets unconstrained, which is why 2.3.2 exists"
+    },
+    {
+      "id": "F23",
+      "file": "pwnagotchi/defaults.toml",
+      "kind": "contains_all",
+      "text": [
+        "custom_plugins = \"/usr/local/share/pwnagotchi/custom-plugins/\""
+      ],
+      "why": "the installer's fallback when the running config names none"
+    },
+    {
+      "id": "F23b",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "'custom_plugins' in"
+      ],
+      "why": "the key is optional, so the installer must tolerate its absence"
+    },
+    {
+      "id": "F24",
+      "file": "pwnagotchi/cli.py",
+      "kind": "contains_all",
+      "text": [
+        "/etc/pwnagotchi/config.toml"
+      ],
+      "why": "the user configuration the installer reads"
+    },
+    {
+      "id": "F25",
+      "file": "stage3/06-patches/files/profile",
+      "kind": "contains_all",
+      "text": [
+        "/etc/pwnagotchi/custom-plugins/"
+      ],
+      "why": "disagrees with defaults.toml on purpose; if this ever matches, the resolution can be simplified"
+    }
+  ]
+}

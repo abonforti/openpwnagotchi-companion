@@ -5,6 +5,10 @@
 *.pfx
 *.csr
 *.srl
+# Any certificate, not only the two names the scripts happen to produce:
+# docs/CERTIFICATES.md tells readers to build a chain file, and it will not be
+# called ca.crt or server.crt.
+*.crt
 ca.crt
 ca.key
 server.crt

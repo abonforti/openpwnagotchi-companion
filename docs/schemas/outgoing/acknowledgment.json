@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "outgoing/acknowledgment.json",
   "title": "Command acknowledged",
-  "description": "Sent for any incoming message that carried a message_id. Acknowledgment means the command was accepted, not that its effect is already visible: plugins.on() dispatch is asynchronous and service restarts take time.",
+  "description": "Sent for any incoming message that carried a message_id, and always for a successful auth. Acknowledgment means the command was accepted, not that its effect is already visible: plugins.on() dispatch is asynchronous and service restarts take time.",
   "type": "object",
   "properties": {
     "type": {
@@ -27,14 +27,13 @@
     },
     "message_id": {
       "type": "string",
-      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+      "description": "Client-generated correlation id, echoed from the request. Present whenever the request carried one. Absent only on the acknowledgment for a successful auth frame that carried none, which is generated because it is the client's only signal that the connection is usable."
     }
   },
   "required": [
     "type",
     "data",
-    "timestamp",
-    "message_id"
+    "timestamp"
   ],
   "additionalProperties": false
 }

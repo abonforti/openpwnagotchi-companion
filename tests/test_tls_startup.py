@@ -117,7 +117,7 @@ def test_the_failure_is_logged_explicitly(tmp_path, tls_material, caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_a_usable_certificate_does_bind(tmp_path, tls_material, bind_recorder, free_port):
+def test_a_usable_certificate_does_bind(tmp_path, tls_material, bind_recorder, free_ports):
     """The control for the test below: with a good certificate, sockets appear.
 
     Without this, "no sockets were bound" would pass for the wrong reason on any
@@ -125,7 +125,7 @@ def test_a_usable_certificate_does_bind(tmp_path, tls_material, bind_recorder, f
     """
     plugin = companion.Companion()
     plugin.options = options_for(
-        tmp_path, tls_material["cert"], tls_material["key"], free_port, free_port + 1
+        tmp_path, tls_material["cert"], tls_material["key"], *free_ports
     )
     try:
         plugin.on_loaded()
@@ -141,7 +141,7 @@ def test_a_usable_certificate_does_bind(tmp_path, tls_material, bind_recorder, f
     "case", ["missing_cert", "missing_key", "malformed", "unreadable"]
 )
 def test_broken_tls_material_binds_nothing(
-    tmp_path, tls_material, bind_recorder, free_port, case
+    tmp_path, tls_material, bind_recorder, free_ports, case
 ):
     cert = tls_material["cert"]
     key = tmp_path / "server.key"
@@ -159,7 +159,7 @@ def test_broken_tls_material_binds_nothing(
         key.chmod(0o000)
 
     plugin = companion.Companion()
-    plugin.options = options_for(tmp_path, cert, key, free_port, free_port + 1)
+    plugin.options = options_for(tmp_path, cert, key, *free_ports)
     try:
         plugin.on_loaded()
 
@@ -168,20 +168,20 @@ def test_broken_tls_material_binds_nothing(
         plugin.on_unload()
 
 
-def test_a_refusal_to_start_is_not_a_crash(tmp_path, free_port):
+def test_a_refusal_to_start_is_not_a_crash(tmp_path, free_ports):
     plugin = companion.Companion()
     plugin.options = options_for(
-        tmp_path, tmp_path / "absent.crt", tmp_path / "absent.key", free_port, free_port + 1
+        tmp_path, tmp_path / "absent.crt", tmp_path / "absent.key", *free_ports
     )
 
     plugin.on_loaded()
     plugin.on_unload()
 
 
-def test_unloading_twice_is_harmless(tmp_path, tls_material, free_port):
+def test_unloading_twice_is_harmless(tmp_path, tls_material, free_ports):
     plugin = companion.Companion()
     plugin.options = options_for(
-        tmp_path, tls_material["cert"], tls_material["key"], free_port, free_port + 1
+        tmp_path, tls_material["cert"], tls_material["key"], *free_ports
     )
     plugin.on_loaded()
 

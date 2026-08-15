@@ -381,7 +381,7 @@ export interface OutgoingAccessPoints {
 }
 
 /**
- * Sent for any incoming message that carried a message_id. Acknowledgment means the command was accepted, not that its effect is already visible: plugins.on() dispatch is asynchronous and service restarts take time.
+ * Sent for any incoming message that carried a message_id, and always for a successful auth. Acknowledgment means the command was accepted, not that its effect is already visible: plugins.on() dispatch is asynchronous and service restarts take time.
  */
 export interface OutgoingAcknowledgment {
   "type": "acknowledgment";
@@ -391,8 +391,8 @@ export interface OutgoingAcknowledgment {
   };
   /** Epoch seconds at which the plugin produced the message. */
   "timestamp": number;
-  /** Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment. */
-  "message_id": string;
+  /** Client-generated correlation id, echoed from the request. Present whenever the request carried one. Absent only on the acknowledgment for a successful auth frame that carried none, which is generated because it is the client's only signal that the connection is usable. */
+  "message_id"?: string;
 }
 
 /**

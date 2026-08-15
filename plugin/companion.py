@@ -38,7 +38,7 @@ import ssl
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 import pwnagotchi
 import pwnagotchi.plugins as plugins
@@ -97,9 +97,14 @@ DEFAULTS: dict[str, Any] = {
     "save_gps_log": False,
     "gps_log_path": "/var/tmp/pwnagotchi_gps.log",
     "mirror_auto_interval": 5,
+    "keepalive_interval": 20,
 }
 
 HANDSHAKE_LIMIT = 500
+# How often an unauthenticated connection wakes up to re-check its deadline
+# (SPEC 2.3.4). It has to be a poll rather than a check on the next frame,
+# because the peer the deadline exists to stop is the one that never sends one.
+AUTH_POLL_INTERVAL = 0.25
 LOG_LINES_DEFAULT = 200
 LOG_LINES_MAX = 1000
 BROWSER_GPS_TTL = 10.0
@@ -1936,6 +1941,136 @@ class ConnectionState:
         return False
 
 
+class ClientSet:
+    """The set of live client sockets, safe to touch from more than one thread.
+
+    The connection handler adds and removes on the asyncio loop, while
+    broadcast() iterates from whichever pwnagotchi hook thread fired. That makes
+    the membership genuinely shared, so the lock lives with the set rather than
+    in the plugin class - which cannot be constructed at all without a
+    pwnagotchi, and would put the one piece of concurrency in this file out of
+    reach of the tests.
+    """
+
+    def __init__(self) -> None:
+        self._clients: set[Any] = set()
+        self._lock = threading.Lock()
+
+    def add(self, client: Any) -> None:
+        with self._lock:
+            self._clients.add(client)
+
+    def discard(self, client: Any) -> None:
+        with self._lock:
+            self._clients.discard(client)
+
+    def snapshot(self) -> list:
+        """A copy, so a caller can iterate while the loop mutates the real set."""
+        with self._lock:
+            return list(self._clients)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
+
+def make_connection_handler(
+    router: Router, deps: Deps, auth_timeout: float, clients: ClientSet
+) -> Callable[..., Awaitable[None]]:
+    """Builds the coroutine that serves one WebSocket connection.
+
+    A factory rather than a method so the protocol side of the transport can be
+    driven without constructing the plugin: `Listeners` takes a handler and
+    never builds one, and the integration test needs to name the thing in
+    between (SPEC 2.3.3).
+    """
+
+    async def handler(websocket: Any, *_: Any) -> None:
+        # Takes *_ so it works with both websockets handler signatures: the
+        # legacy one passes (websocket, path), the modern one passes (websocket)
+        # alone (SPEC 2.3.2).
+        import asyncio
+
+        state = ConnectionState(router, deps, auth_timeout)
+        admitted = False
+
+        async def admit() -> None:
+            # Two things happen here and neither may happen earlier.
+            #
+            # The burst carries the unit's stats, its access points and its
+            # face, so sending it before the auth frame would hand all of that
+            # to anyone able to open a socket (SPEC 2.4).
+            #
+            # Joining the client set is the same disclosure by another route:
+            # broadcast() fans wifi_update, handshake, peer_detected and
+            # status_change out to every member, so a socket registered on
+            # accept would receive the same data through the push channel for
+            # the whole auth_timeout window, renewable by reconnecting.
+            nonlocal admitted
+            clients.add(websocket)
+            admitted = True
+            for message in router.initial_burst():
+                await websocket.send(json.dumps(message))
+
+        try:
+            if state.authenticated:
+                await admit()
+            while True:
+                if state.authenticated:
+                    raw = await websocket.recv()
+                else:
+                    # A silent peer never reaches the body of this loop, so the
+                    # deadline has to be enforced on the wait itself rather than
+                    # on the next frame (SPEC 2.3.4).
+                    try:
+                        raw = await asyncio.wait_for(
+                            websocket.recv(), timeout=AUTH_POLL_INTERVAL
+                        )
+                    except asyncio.TimeoutError:
+                        if state.expired():
+                            await websocket.close(
+                                code=1008, reason="authentication timeout"
+                            )
+                            return
+                        continue
+                if state.expired():
+                    await websocket.close(code=1008, reason="authentication timeout")
+                    return
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    await websocket.send(
+                        json.dumps(error_envelope("bad_request", "invalid JSON", deps.now()))
+                    )
+                    continue
+                if not isinstance(parsed, Mapping):
+                    # Valid JSON that is not an object cannot carry a `type`, so
+                    # it is the same class of failure as a parse error.
+                    await websocket.send(
+                        json.dumps(error_envelope("bad_request", "not an object", deps.now()))
+                    )
+                    continue
+                replies = router.handle(parsed, state.authenticated)
+                state.observe(parsed, replies)
+                for reply in replies:
+                    await websocket.send(json.dumps(reply))
+                if ConnectionState.rejected(replies):
+                    await websocket.close(code=1008, reason="unauthorized")
+                    return
+                if state.authenticated and not admitted:
+                    # The acknowledgment for the auth frame has just gone out, so
+                    # the client knows it is in before the state arrives.
+                    await admit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            log.debug("[companion] client disconnected: %s", err)
+        finally:
+            clients.discard(websocket)
+
+    return handler
+
+
 class Companion(plugins.Plugin):
     """The pwnagotchi plugin shell.
 
@@ -1959,8 +2094,7 @@ class Companion(plugins.Plugin):
         self._battery: BatteryReader | None = None
         self._router: Router | None = None
         self._listeners: Listeners | None = None
-        self._clients: set[Any] = set()
-        self._clients_lock = threading.Lock()
+        self._clients = ClientSet()
         self._stop = threading.Event()
         self._last_face: tuple[str, str] | None = None
 
@@ -1999,7 +2133,13 @@ class Companion(plugins.Plugin):
             self._battery,
             self._handshake_store,
         )
-        self._listeners = Listeners(self.options, self.deps, context, self._serve_client)
+        handler = make_connection_handler(
+            self._router,
+            self.deps,
+            float(option(self.options, "auth_timeout")),
+            self._clients,
+        )
+        self._listeners = Listeners(self.options, self.deps, context, handler)
         self._listeners.reconcile()
 
     # -- internals ---------------------------------------------------------
@@ -2013,63 +2153,12 @@ class Companion(plugins.Plugin):
             directory = ""
         return HandshakeStore(directory)
 
-    async def _serve_client(self, websocket: Any, *_: Any) -> None:
-        """One WebSocket connection.
-
-        Takes *_ so it works with both websockets handler signatures: the legacy
-        one passes (websocket, path), the modern one passes (websocket) alone.
-        """
-        import asyncio
-
-        if self._router is None:
-            await websocket.close(code=1011, reason="not ready")
-            return
-        state = ConnectionState(
-            self._router, self.deps, float(option(self.options, "auth_timeout"))
-        )
-        with self._clients_lock:
-            self._clients.add(websocket)
-        try:
-            for message in self._router.initial_burst():
-                await websocket.send(json.dumps(message))
-            async for raw in websocket:
-                if state.expired():
-                    await websocket.close(code=1008, reason="authentication timeout")
-                    return
-                try:
-                    parsed = json.loads(raw)
-                except (TypeError, ValueError):
-                    await websocket.send(
-                        json.dumps(error_envelope("bad_request", "invalid JSON", self.deps.now()))
-                    )
-                    continue
-                if not isinstance(parsed, Mapping):
-                    await websocket.send(
-                        json.dumps(error_envelope("bad_request", "not an object", self.deps.now()))
-                    )
-                    continue
-                replies = self._router.handle(parsed, state.authenticated)
-                state.observe(parsed, replies)
-                for reply in replies:
-                    await websocket.send(json.dumps(reply))
-                if ConnectionState.rejected(replies):
-                    await websocket.close(code=1008, reason="unauthorized")
-                    return
-        except asyncio.CancelledError:
-            raise
-        except Exception as err:
-            log.debug("[companion] client disconnected: %s", err)
-        finally:
-            with self._clients_lock:
-                self._clients.discard(websocket)
-
     def broadcast(self, message: Mapping[str, Any]) -> None:
         """Sends one message to every connected client. A dead client is dropped."""
         if not message:
             return
         payload = json.dumps(message)
-        with self._clients_lock:
-            targets = list(self._clients)
+        targets = self._clients.snapshot()
         listeners = self._listeners
         if listeners is None or listeners._loop is None:
             return
@@ -2079,8 +2168,7 @@ class Companion(plugins.Plugin):
             try:
                 asyncio.run_coroutine_threadsafe(client.send(payload), listeners._loop)
             except Exception:
-                with self._clients_lock:
-                    self._clients.discard(client)
+                self._clients.discard(client)
 
     def _background(self) -> None:
         """Refreshes the session and gpsd caches, and reconciles the listeners.
@@ -2090,7 +2178,18 @@ class Companion(plugins.Plugin):
         """
         poll = float(option(self.options, "session_poll_interval"))
         rebind = float(option(self.options, "rebind_interval"))
+        keepalive = float(option(self.options, "keepalive_interval"))
         next_rebind = 0.0
+        # Seeded a full interval out rather than at zero: the first pass runs
+        # before any client has had time to connect, so firing immediately would
+        # spend a broadcast on an empty set and then leave the first real
+        # keepalive an entire interval away.
+        next_keepalive = self.deps.now() + keepalive
+        # The loop wakes on the session poll, so a keepalive can only go out on
+        # a tick. Waking often enough for both keeps the cadence a bound rather
+        # than a suggestion, which matters because the client reconnects when a
+        # keepalive is late (SPEC 10.5).
+        tick = min(poll, keepalive) if keepalive > 0 else poll
         while not self._stop.is_set():
             try:
                 if self._session is not None:
@@ -2101,9 +2200,16 @@ class Companion(plugins.Plugin):
                 if self._listeners is not None and now >= next_rebind:
                     self._listeners.reconcile()
                     next_rebind = now + rebind
+                # An idle client cannot otherwise tell a quiet plugin from a
+                # dead link: over BT PAN a dropped tether does not close the
+                # socket, it just stops delivering, and the app would sit on a
+                # dead connection showing stale data (SPEC 2.4).
+                if keepalive > 0 and now >= next_keepalive:
+                    self.broadcast(envelope("keepalive", {}, now))
+                    next_keepalive = now + keepalive
             except Exception:
                 log.exception("[companion] background pass failed")
-            self._stop.wait(poll)
+            self._stop.wait(tick)
 
     def on_ready(self, agent: Any) -> None:
         """Captures the agent and starts the background refresh and rebind threads."""

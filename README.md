@@ -1,9 +1,10 @@
 # openpwnagotchi-companion
 
 A free, self-hostable **PWA companion for pwnagotchi** (jayofelony fork). It does what the paid
-iOS app "Pwnagotchi Companion" does, plus the things it does not, and it runs entirely on your
-own device: the pwnagotchi serves the app, your phone installs it from the Pi, nothing is hosted
-by anyone else.
+iOS app [Pwnagotchi Companion](https://apps.apple.com/us/app/pwnagotchi-companion/id6751243451)
+by Braeden Pelletier does, plus the things it does not, and it runs entirely on your own device:
+the pwnagotchi serves the app, your phone installs it from the Pi, nothing is hosted by anyone
+else.
 
 > **Status: in development.** The specification is complete and locked
 > ([`SPEC.md`](SPEC.md)); the protocol is defined ([`docs/schemas/`](docs/schemas/)); the plugin
@@ -13,7 +14,7 @@ by anyone else.
 
 ## What it does
 
-| | paid iOS app | this |
+| | [Pwnagotchi Companion](https://apps.apple.com/us/app/pwnagotchi-companion/id6751243451) (paid, iOS) | this |
 |---|---|---|
 | Live stats (uptime, battery, temperature, channel, counters) | yes | yes |
 | Face and status | yes | yes |
@@ -25,10 +26,16 @@ by anyone else.
 | Live log viewer | no | yes |
 | Full e-ink screen mirror | partial | yes |
 | GPS with wardriving map | partial | yes, on-Pi source first with browser fallback |
-| Price | $5.99 | free, GPL-3.0 |
+| Price | $5.99 (App Store, at the time of writing) | free, GPL-3.0 |
+| Platforms | iOS 16.6+ | anything with a modern browser |
 
-The backend of the paid app was always open source — only the iOS client was paid. This project
-forks and hardens that plugin, and replaces the client with an installable web app.
+The backend of that app was always open source: only the iOS client was paid. Its plugin,
+[`pwnios.py`](https://github.com/BraedenP232/PwnIOS), is published under the GPL, so this project
+forks and hardens it and replaces the client with an installable web app. Credit where it is
+due - that project made this one possible by publishing the hard part.
+
+If you want a polished native iOS app and would rather pay for it than build one, buy theirs.
+This exists for people who want the source, the self-hosting, and the three features it lacks.
 
 ## How it works
 

@@ -278,7 +278,13 @@ If `token` is non-empty, the client's first frame must be `{"type":"auth","token
   `1008`. This is a hard requirement: without it an unauthenticated peer can hold sockets open.
 - On failure, send one `error` message then close `1008`. Do not reveal whether the token was
   wrong or malformed.
-- If `token` is empty, skip auth entirely (D5); the BT PAN link is point-to-point.
+- If `token` is empty, skip auth entirely (D5). **The justification is convenience, not
+  isolation, and earlier revisions of this document got that wrong.** An iPhone Personal Hotspot
+  hands out `172.20.10.0/28`: that is a shared subnet with room for fourteen hosts, not a
+  point-to-point link. Anything else joined to the same hotspot can reach the listener, and with
+  no token it gets handshakes, GPS and controls. The default stays disabled per D5 because the
+  usual case is one phone and one unit, but the exposure has to be stated where the user chooses,
+  not assumed away here. See `docs/SETUP.md`.
 - The deadline is measured with `deps.now()`, not with the event loop's clock. Every other
   time-dependent rule in this plugin already goes through that seam, and a second notion of
   "now" would mean this one rule could only be tested by actually waiting.
@@ -986,10 +992,136 @@ release asset into `web_root`.
 
 ### 5.3 `tools/install-on-pi.sh`
 
-Fetch the latest (or a pinned) `dist.tgz` from Releases, verify its checksum, extract into
-`web_root` (default `/var/www/openpwn-companion`), fix ownership and permissions. Idempotent and
-re-runnable for updates. Extraction is into a temporary directory then swapped, so a failed
-download never leaves a half-written web root.
+    install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]
+                     [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]
+                     [--plugin-only] [--web-only] [--dry-run]
+
+Runs **on the Pi**, as root. POSIX `sh`, `set -eu`, and nothing beyond `curl`, `tar` and
+`sha256sum`. Non-interactive: it never prompts, so it is the same invocation by hand, from a
+test and from a future CI job.
+
+**It installs both halves, not just the web root.** §14 step 10 says to run this and then test
+end to end from the phone, which cannot work if the plugin is not on the unit: a script that
+installs the PWA and leaves `companion.py` to a manual `scp` is a script that produces a working
+web server serving an app with nothing to talk to. So:
+
+1. `plugin/companion.py` into the custom plugins directory. That directory is **resolved, never
+   hardcoded**: read `main.custom_plugins` from `--config` (default `/etc/pwnagotchi/config.toml`,
+   F24), fall back to the `defaults.toml` value `/usr/local/share/pwnagotchi/custom-plugins/`
+   (F23). The two paths shipped with the image disagree (F25), so guessing picks the wrong one
+   on some units and the plugin silently never loads.
+2. The PWA into `--web-root` (default `/var/www/openpwn-companion`).
+
+The archive comes from a GitHub Release: the latest, or the one named by `--tag`, or a local
+file given with `--archive` (which skips the download and is how the tests drive it without a
+network). The `SHA256SUMS` asset is fetched alongside and verified before anything is unpacked;
+a mismatch is a hard failure that leaves the existing installation untouched, because an archive
+that fails its checksum is either corrupt or hostile and there is no third case.
+
+Extraction goes into a temporary directory beside the target and is swapped in only once
+complete, so an interrupted download never leaves a half-written web root. The previous web root
+is kept as `<web-root>.previous`, replacing any earlier one: the first thing anyone wants after
+a bad update is the version that worked.
+
+Idempotent and re-runnable. `--plugin-only` and `--web-only` do one half; passing both is a
+usage error. `--dry-run` prints what would happen and writes nothing.
+
+It does **not** edit `config.toml`. Enabling the plugin and setting its options is the user's
+step, documented in `docs/SETUP.md`, because a script that rewrites the main configuration of a
+running pwnagotchi can break far more than it installs.
+
+Exit status: `0` success, `1` failure, `2` usage error. Anything non-zero leaves the installation
+exactly as it was.
+
+#### 5.3.1 The details that decide whether two people build the same thing
+
+Written out because each one admits two readings, and a reading chosen in code is a decision
+nobody else can see.
+
+**Archive layout.** `dist.tgz` holds the contents of `frontend/dist` at the archive root, with
+no `dist/` prefix: it is packed with `tar -czf dist.tgz -C frontend/dist .`, so `index.html` is
+a top-level member and the installer never needs `--strip-components`.
+
+**Checksums are verified always, including for `--archive`.** `SHA256SUMS` is expected beside
+the archive, in `sha256sum` output format, and must list the archive's basename. A missing file,
+a file that does not name this archive, or a digest that does not match is exit `1`. There is
+deliberately no way to skip it: the local path is exactly how someone would install an archive
+they did not build, and an unverified local file is not safer than an unverified downloaded one.
+
+**Where the plugin comes from.** `dist.tgz` contains only the built PWA, so `companion.py` is
+taken from the checkout the script lives in - `$(dirname "$0")/../plugin/companion.py`. If it is
+not there, exit `1`.
+
+**Archive members are validated before extraction, by type as well as by name.** Any member
+whose path is absolute or contains a `..` component is refused with exit `1`, and nothing is
+unpacked. GNU tar strips a leading `/` by default and would otherwise quietly write the rest
+wherever it points, which on a script that runs as root is the whole traversal problem.
+
+Names alone are not enough. A symlink member `assets -> /etc` followed by a regular member
+`assets/passwd` has two entirely innocent names and escapes anyway, so **symlink and hardlink
+members are refused outright** - a built PWA has no legitimate use for either. The refusal names
+the member and says `link member`, because the two failures are distinguishable only by their
+message and a test has to be able to tell them apart. An archive that fails to unpack is also
+exit `1`.
+
+**Extraction does not honour recorded ownership or modes** (`--no-same-owner`,
+`--no-same-permissions`), and the installed modes are set afterwards. Running as root, tar would
+otherwise reproduce whatever the packer recorded, setuid bit included. Note this rule can only
+be observed as root: for an ordinary user tar already ignores recorded ownership and applies the
+umask, so a test of it must skip rather than pass when not run as root.
+
+**`--repo`, `--tag` and `--web-root` are validated because of where they end up.** `--repo` must
+match `owner/name` and `--tag` must be a bare version tag, neither containing a `..` segment:
+both are interpolated into a URL, and although the host cannot be moved, curl normalises `..`
+away and would fetch a different repository on github.com - whose `SHA256SUMS` matches its own
+archive and so verifies perfectly. Validating only one of the two leaves the same hole open under
+another name. `--web-root` must be absolute:
+the staging directory is `<web-root>.new` and is removed before use, so a relative or empty value
+deletes something in whatever directory the script was started from. Both are exit `2`.
+
+**Checksum entries match the recorded name as written**, not on its basename, and a second entry
+for the same name is an error rather than a last-one-wins. A line for `other/dist.tgz` describes
+a different file; letting it satisfy a bare `dist.tgz` is how a sums file for one build blesses
+another.
+
+**Resolving `main.custom_plugins`.** The key must be found in every spelling a real unit
+carries: the flat dotted form `main.custom_plugins = "..."`, with or without spaces around `=`;
+the same key inside a `[main]` table, including an indented table; and either quote style. A
+commented-out line is not a match, and neither is `custom_plugins` under any other table - a
+plugin of its own may legitimately have such a key. A trailing slash on the value is tolerated.
+When the file is absent, or the key is not present in any of those forms, fall back to the F23
+default and say which path was chosen and why on stdout. `--plugins-dir` overrides both.
+
+**Updates replace, they do not merge.** The new tree is swapped in whole, so a file the previous
+build shipped and the new one does not is gone afterwards. A stale asset served alongside a new
+one is how a partially updated PWA fails in ways nobody can reproduce.
+
+**`.previous` on a first install.** Nothing is kept, because there is nothing to keep: the
+directory is created and no `.previous` appears beside it. On the second and every later install
+`<web-root>.previous` holds the tree that was there before, replacing any earlier one. A failed
+install does not rotate it, so `.previous` is always a version that worked.
+
+**`--dry-run` verifies before it reports.** It performs every check a real run performs -
+checksum, archive members, plugin source, path resolution - and stops before the first write. A
+dry run that approves an archive the real run would refuse is worse than no dry run. It prints
+the resolved plugins directory, web root and config path, which is also the only way to see
+which side of the F23/F25 disagreement the script landed on without installing anything.
+
+**Modes and ownership.** Installed PWA files are `0644` and directories `0755`, because the
+HTTPS server has to read them; `companion.py` is `0644`. Ownership is left to whatever the
+process running the script produces - the plugin runs as root on this image, and second-guessing
+that from an installer is how permissions end up wrong in a way nobody notices until an update.
+
+**Flag interactions.** `--plugin-only` does not need `--archive` and must not require it, since
+it installs nothing from one. `--archive` together with `--tag` or `--repo` is a usage error
+(`2`): they name two different sources and silently preferring one is how the wrong build gets
+installed.
+
+**Root is not checked, writability is.** The script does not test its effective uid. It attempts
+the operation and reports what actually failed, because the euid check is both wrong in
+principle - the targets may be writable without it - and fatal in practice: it would make the
+entire test suite unrunnable as an ordinary user, and a test suite that cannot run is a test
+suite that does not run.
 
 ---
 
@@ -1318,6 +1450,9 @@ v2.9.5.6 tree and are indicative; the names and semantics are what matter.
 | F20 | `on_handshake` is fired from two paths with different argument types: `plugins.on('handshake', self, filename, ap_mac, sta_mac)` (strings) and `plugins.on('handshake', self, filename, ap, sta)` (dicts) | `pwnagotchi/agent.py:396,404` |
 | F21 | `pyproject.toml` declares `websockets` with **no version constraint**; `requires-python = ">=3.11"` | `pyproject.toml` |
 | F22 | Upstream `pwnios.py` binds `websockets.serve(self._handle_client, "0.0.0.0", 8082, ...)` and reads `self.agent.access_points` before falling back to `_access_points` — both are bugs this fork fixes | `BraedenP232/PwnIOS/pwnios.py:292-293,653-656,678-680` |
+| F23 | Custom plugins are loaded from `config['main']['custom_plugins']`, whose default is `/usr/local/share/pwnagotchi/custom-plugins/`. The key is optional: `load_from_path` is called only `if 'custom_plugins' in config['main']` | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
+| F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |
+| F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`, which is **not** the `defaults.toml` value. The two disagree, so the directory must be resolved from the running configuration and never hardcoded | `stage3/06-patches/files/profile` vs `pwnagotchi/defaults.toml:27` |
 
 ### 11.1 Explicitly forbidden
 

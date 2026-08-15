@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/get_stats.json",
+  "title": "Request stats",
+  "description": "Replies with a `stats` message.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "get_stats"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

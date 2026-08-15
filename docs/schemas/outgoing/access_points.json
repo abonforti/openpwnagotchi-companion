@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/access_points.json",
+  "title": "Access point list",
+  "description": "Sent as a reply to `get_access_points`.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "access_points"
+    },
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/AccessPoint"
+      }
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

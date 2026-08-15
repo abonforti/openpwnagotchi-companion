@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/get_access_points.json",
+  "title": "Request the access point list",
+  "description": "Replies with an `access_points` message. The plugin reads agent._access_points; it never calls agent.get_access_points(), which has side effects.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "get_access_points"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

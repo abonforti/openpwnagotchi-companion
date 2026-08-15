@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/error.json",
+  "title": "Error",
+  "description": "Never fatal to the connection unless the code is `unauthorized`.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "error"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "common.json#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable detail. Never leaks a token or a filesystem path outside web_root."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

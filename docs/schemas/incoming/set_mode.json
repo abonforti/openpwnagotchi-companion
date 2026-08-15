@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/set_mode.json",
+  "title": "Switch between AUTO and MANU",
+  "description": "DISRUPTIVE. Switching mode restarts the pwnagotchi and bettercap services via pwnagotchi.restart(), which kills this plugin and drops the connection. The plugin acknowledges, broadcasts `restarting`, then restarts. A request for the mode already in effect is acknowledged and ignored.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "set_mode"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "manual"
+      ]
+    }
+  },
+  "required": [
+    "type",
+    "mode"
+  ],
+  "additionalProperties": false
+}

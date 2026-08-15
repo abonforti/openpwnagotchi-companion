@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/status_change.json",
+  "title": "Mood changed",
+  "description": "Pushed from the mood hooks on_bored, on_excited, on_lonely and on_sad.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "status_change"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "mood": {
+          "type": "string",
+          "enum": [
+            "bored",
+            "excited",
+            "lonely",
+            "sad"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "mood"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

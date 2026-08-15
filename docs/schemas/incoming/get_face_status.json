@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/get_face_status.json",
+  "title": "Request the current face and status",
+  "description": "Replies with a `face_status` message. The face is unicode text.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "get_face_status"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

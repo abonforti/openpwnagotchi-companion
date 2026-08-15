@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/face_status.json",
+  "title": "Face and status",
+  "description": "Sent as a reply to `get_face_status` and pushed from on_ui_update when the face or status text changes.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "face_status"
+    },
+    "data": {
+      "$ref": "common.json#/$defs/FaceStatus"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

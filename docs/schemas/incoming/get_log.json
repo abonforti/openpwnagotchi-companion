@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/get_log.json",
+  "title": "Request log lines",
+  "description": "Replies with a `log_lines` message containing a bounded tail of the pwnagotchi log.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "get_log"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    },
+    "lines": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "default": 200,
+      "description": "Defaults to 200, capped at 1000."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

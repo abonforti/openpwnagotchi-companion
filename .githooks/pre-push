@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refuses a direct push to the principal branch.
+#
+# `master` is protected on the remote too, but this hook fires earlier and works
+# before the remote exists. Work on a branch; land through a pull request.
+#
+# There is deliberately no environment-variable escape hatch: an override that
+# exists gets used, and the whole point is that this one cannot be.
+# A genuine emergency is `git push --no-verify`, which is explicit and visible.
+
+protected="master"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        "refs/heads/$protected")
+            echo "pre-push: direct push to '$protected' is not allowed." >&2
+            echo "  Create a branch and open a pull request:" >&2
+            echo "    git switch -c <branch> && git push -u origin <branch>" >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

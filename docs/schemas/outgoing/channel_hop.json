@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/channel_hop.json",
+  "title": "Channel changed",
+  "description": "Pushed from on_channel_hop.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "channel_hop"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

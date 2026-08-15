@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/set_pasv.json",
+  "title": "Toggle passive mode",
+  "description": "Soft dependency on the pasv_mode plugin. Replies `error` with code `pasv_unavailable` when the plugin is not loaded, or `pasv_requires_auto` when agent.mode is not 'auto'. Otherwise emits plugins.on('pasv_on'|'pasv_off'), which is asynchronous: the new state is only visible in the next `stats`.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "set_pasv"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    },
+    "on": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "type",
+    "on"
+  ],
+  "additionalProperties": false
+}

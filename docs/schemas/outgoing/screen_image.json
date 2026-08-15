@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/screen_image.json",
+  "title": "E-ink frame",
+  "description": "Sent as a reply to `get_screen`. Read under pwnagotchi.ui.web.frame_lock from pwnagotchi.ui.web.frame_path. Heavy over Bluetooth: on demand only.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "screen_image"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "png": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Base64-encoded PNG, no data: prefix."
+        },
+        "mtime": {
+          "type": "number",
+          "description": "Epoch seconds of the frame file."
+        }
+      },
+      "required": [
+        "png",
+        "mtime"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

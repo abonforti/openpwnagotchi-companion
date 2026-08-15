@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/peer_detected.json",
+  "title": "Peer detected",
+  "description": "Pushed from on_peer_detected.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "peer_detected"
+    },
+    "data": {
+      "$ref": "common.json#/$defs/Peer"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

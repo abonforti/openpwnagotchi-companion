@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/stats.json",
+  "title": "Device statistics",
+  "description": "Sent as a reply to `get_stats` and broadcast periodically.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "stats"
+    },
+    "data": {
+      "$ref": "common.json#/$defs/Stats"
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

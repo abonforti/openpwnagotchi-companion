@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/log_lines.json",
+  "title": "Log tail",
+  "description": "Sent as a reply to `get_log`. Oldest line first.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "log_lines"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "type": "string",
+          "description": "The log path actually read, taken from config['main']['log']['path']."
+        }
+      },
+      "required": [
+        "lines",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/acknowledgment.json",
+  "title": "Command acknowledged",
+  "description": "Sent for any incoming message that carried a message_id. Acknowledgment means the command was accepted, not that its effect is already visible: plugins.on() dispatch is asynchronous and service restarts take time.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "acknowledgment"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "acknowledged": {
+          "type": "string",
+          "description": "The `type` of the message being acknowledged."
+        }
+      },
+      "required": [
+        "acknowledged"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp",
+    "message_id"
+  ],
+  "additionalProperties": false
+}

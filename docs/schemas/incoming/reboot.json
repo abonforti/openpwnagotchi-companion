@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/reboot.json",
+  "title": "Reboot the device",
+  "description": "Broadcasts `restarting` with reason `reboot`, then calls pwnagotchi.reboot(). Gated behind a two-step confirm in the UI; the plugin executes immediately.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "reboot"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

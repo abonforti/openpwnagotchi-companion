@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/handshakes_list.json",
+  "title": "Handshake list",
+  "description": "Sent as a reply to `get_handshakes`. Capped at 500 entries, newest first.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "handshakes_list"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/HandshakeEntry"
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when the 500-entry cap was hit. Entries are never dropped silently."
+        },
+        "total": {
+          "type": "integer",
+          "description": "Number of capture files found before the cap was applied."
+        }
+      },
+      "required": [
+        "entries",
+        "truncated",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

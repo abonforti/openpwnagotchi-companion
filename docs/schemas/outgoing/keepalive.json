@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/keepalive.json",
+  "title": "Unsolicited heartbeat",
+  "description": "Pushed periodically so an idle client can distinguish a quiet plugin from a dead link.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "keepalive"
+    },
+    "data": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Carries no payload beyond the envelope."
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

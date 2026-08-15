@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/restarting.json",
+  "title": "Service or device is going away",
+  "description": "Broadcast immediately before pwnagotchi.restart(), pwnagotchi.reboot() or pwnagotchi.shutdown(). The client must treat the following disconnect as expected: show the reason, suppress the error banner, and reconnect with backoff.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "restarting"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "common.json#/$defs/RestartReason"
+        },
+        "mode": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/$defs/Mode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The mode being restarted into. Non-null only when reason is mode_change."
+        }
+      },
+      "required": [
+        "reason",
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

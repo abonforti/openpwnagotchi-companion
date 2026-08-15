@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.json",
+  "title": "Common definitions",
+  "description": "Shared object shapes referenced by the incoming and outgoing message schemas. This file defines no message of its own.",
+  "$defs": {
+    "AccessPoint": {
+      "type": "object",
+      "description": "One access point, mapped from a bettercap AP dict held in agent._access_points. The bettercap key is 'mac'; there is no 'bssid' key at the source.",
+      "properties": {
+        "bssid": {
+          "type": "string",
+          "description": "From ap['mac']."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "From ap['hostname'], falling back to the MAC when empty."
+        },
+        "channel": {
+          "type": "integer"
+        },
+        "rssi": {
+          "type": "integer"
+        },
+        "encryption": {
+          "type": "string"
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "clients": {
+          "type": "integer",
+          "description": "len(ap.get('clients') or []). The key may be absent or null."
+        }
+      },
+      "required": ["bssid", "hostname", "channel", "rssi", "encryption", "vendor", "clients"],
+      "additionalProperties": false
+    },
+
+    "HandshakeGps": {
+      "type": "object",
+      "description": "Normalised reading of a .gps.json sidecar. The sidecar itself is stored in bettercap shape with capitalised keys; this is the wire form only.",
+      "properties": {
+        "lat": { "type": "number" },
+        "lon": { "type": "number" },
+        "accuracy": { "type": ["number", "null"] },
+        "source": { "$ref": "#/$defs/GpsSource" }
+      },
+      "required": ["lat", "lon", "accuracy", "source"],
+      "additionalProperties": false
+    },
+
+    "HandshakeEntry": {
+      "type": "object",
+      "description": "One capture file found in config['bettercap']['handshakes'].",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "description": "Basename including the extension."
+        },
+        "ssid": {
+          "type": "string",
+          "description": "Parsed from the filename by splitting on the LAST underscore. Falls back to the whole basename when the tail is not a 12-hex-digit BSSID."
+        },
+        "bssid": {
+          "type": ["string", "null"],
+          "description": "Null when the filename does not parse. Never guessed."
+        },
+        "mtime": {
+          "type": "number",
+          "description": "Epoch seconds."
+        },
+        "size": {
+          "type": "integer",
+          "description": "Bytes."
+        },
+        "gps": {
+          "oneOf": [
+            { "$ref": "#/$defs/HandshakeGps" },
+            { "type": "null" }
+          ],
+          "description": "Null when no sidecar exists or the sidecar is malformed."
+        }
+      },
+      "required": ["filename", "ssid", "bssid", "mtime", "size", "gps"],
+      "additionalProperties": false
+    },
+
+    "LastHandshake": {
+      "type": "object",
+      "description": "The newest entry of the handshake directory, or null when the directory is empty.",
+      "properties": {
+        "filename": { "type": "string" },
+        "ssid": { "type": "string" },
+        "bssid": { "type": ["string", "null"] },
+        "mtime": { "type": "number" }
+      },
+      "required": ["filename", "ssid", "bssid", "mtime"],
+      "additionalProperties": false
+    },
+
+    "Peer": {
+      "type": "object",
+      "description": "One pwngrid peer, mapped from a pwnagotchi.mesh.peer.Peer object held in agent._peers. Peer members are a mix of attributes and methods; see SPEC.md 2.8 for the exact mapping. All timestamps are normalised to epoch seconds on the wire even though Peer stores first_seen/prev_seen/first_met as datetime and last_seen as a float.",
+      "properties": {
+        "name": { "type": "string", "description": "peer.name(), defaults to '???'." },
+        "fingerprint": { "type": "string", "description": "peer.identity(), defaults to '???'." },
+        "fullName": { "type": "string", "description": "peer.full_name(), 'name@identity'." },
+        "rssi": { "type": ["integer", "null"] },
+        "channel": { "type": ["integer", "null"], "description": "peer.last_channel, NOT peer.channel." },
+        "firstSeen": { "type": ["number", "null"] },
+        "prevSeen": { "type": ["number", "null"] },
+        "firstMet": { "type": ["number", "null"] },
+        "lastSeen": { "type": ["number", "null"], "description": "peer.last_seen is already an epoch float; do not convert it again." },
+        "encounters": { "type": ["integer", "null"] },
+        "pwndRun": { "type": ["integer", "null"], "description": "peer.pwnd_run()." },
+        "pwndTotal": { "type": ["integer", "null"], "description": "peer.pwnd_total(), NOT pwnd_tot." },
+        "version": { "type": ["string", "null"] },
+        "uptime": { "type": ["integer", "null"] },
+        "face": { "type": ["string", "null"], "description": "Text face, never an image." }
+      },
+      "required": ["name", "fingerprint", "fullName", "rssi", "channel", "firstSeen", "prevSeen", "firstMet", "lastSeen", "encounters", "pwndRun", "pwndTotal", "version", "uptime", "face"],
+      "additionalProperties": false
+    },
+
+    "GpsSource": {
+      "type": ["string", "null"],
+      "enum": ["bettercap", "gpsd", "browser", null],
+      "description": "Which provider produced the reading. 'bettercap' and 'gpsd' are both on-Pi sources; the browser fallback must never overwrite either."
+    },
+
+    "Gps": {
+      "type": "object",
+      "description": "Uniform GPS shape. When no source is available every coordinate field is null and enabled is false; there is no alternative empty form.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "False when gps_source is 'none' or no provider answered."
+        },
+        "source": { "$ref": "#/$defs/GpsSource" },
+        "piFix": {
+          "type": "boolean",
+          "description": "True when an on-Pi source (bettercap or gpsd) currently has a fix. The PWA must not push browser coordinates while this is true."
+        },
+        "fix": { "type": "boolean" },
+        "lat": { "type": ["number", "null"] },
+        "lon": { "type": ["number", "null"] },
+        "altitude": { "type": ["number", "null"] },
+        "accuracy": { "type": ["number", "null"], "description": "Metres. Derived from HDOP for bettercap, from the browser's own accuracy otherwise." },
+        "updated": { "type": ["number", "null"], "description": "Epoch seconds of the reading." }
+      },
+      "required": ["enabled", "source", "piFix", "fix", "lat", "lon", "altitude", "accuracy", "updated"],
+      "additionalProperties": false
+    },
+
+    "Battery": {
+      "type": "object",
+      "description": "Never fails; every field is null when no provider is available.",
+      "properties": {
+        "percent": { "type": ["number", "null"] },
+        "charging": { "type": ["boolean", "null"] }
+      },
+      "required": ["percent", "charging"],
+      "additionalProperties": false
+    },
+
+    "Capabilities": {
+      "type": "object",
+      "description": "What this plugin instance can actually do. The PWA gates its controls on these and must not infer availability any other way.",
+      "properties": {
+        "pasv": {
+          "type": "boolean",
+          "description": "'pasv_mode' in plugins.loaded."
+        },
+        "pisugar": {
+          "type": "boolean",
+          "description": "A battery provider answered at least once."
+        },
+        "gpsSource": {
+          "type": "string",
+          "enum": ["auto", "bettercap", "gpsd", "none"],
+          "description": "The configured gps_source value, not the currently active source."
+        },
+        "pluginVersion": { "type": "string" }
+      },
+      "required": ["pasv", "pisugar", "gpsSource", "pluginVersion"],
+      "additionalProperties": false
+    },
+
+    "Mode": {
+      "type": "string",
+      "enum": ["AUTO", "PASV", "MANUAL"],
+      "description": "PASV is reported when agent.mode == 'auto' and the pasv_mode plugin reports passive. It is a display state, not a separate pwnagotchi mode."
+    },
+
+    "Stats": {
+      "type": "object",
+      "properties": {
+        "uptime": { "type": "integer", "description": "pwnagotchi.uptime(), seconds." },
+        "mode": { "$ref": "#/$defs/Mode" },
+        "channel": { "type": ["integer", "null"], "description": "agent._current_channel. Never read from agent.session()." },
+        "battery": { "$ref": "#/$defs/Battery" },
+        "temperature": { "type": ["integer", "null"], "description": "pwnagotchi.temperature(), celsius." },
+        "handshakes": {
+          "type": "integer",
+          "description": "Count of *.pcapng in the handshake directory. Matches the number shown on the device display, which uses utils.total_unique_handshakes."
+        },
+        "handshakesTotal": {
+          "type": "integer",
+          "description": "Count of *.pcapng plus *.pcap. Always >= handshakes."
+        },
+        "peers": { "type": "integer", "description": "len(agent._peers)." },
+        "accessPoints": { "type": "integer", "description": "len(agent._access_points)." },
+        "lastHandshake": {
+          "oneOf": [
+            { "$ref": "#/$defs/LastHandshake" },
+            { "type": "null" }
+          ]
+        },
+        "lastPeer": {
+          "oneOf": [
+            { "$ref": "#/$defs/Peer" },
+            { "type": "null" }
+          ]
+        },
+        "gps": { "$ref": "#/$defs/Gps" },
+        "sessionAge": {
+          "type": ["number", "null"],
+          "description": "Seconds since the cached bettercap session snapshot was refreshed. Null when it has never succeeded. The client shows stale data as degraded rather than wrong."
+        },
+        "capabilities": { "$ref": "#/$defs/Capabilities" }
+      },
+      "required": ["uptime", "mode", "channel", "battery", "temperature", "handshakes", "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer", "gps", "sessionAge", "capabilities"],
+      "additionalProperties": false
+    },
+
+    "FaceStatus": {
+      "type": "object",
+      "description": "Faces are unicode text on a stock setup. No PNG face is ever transported.",
+      "properties": {
+        "face": { "type": "string" },
+        "status": { "type": "string" },
+        "mode": { "$ref": "#/$defs/Mode" }
+      },
+      "required": ["face", "status", "mode"],
+      "additionalProperties": false
+    },
+
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "bad_request",
+        "unknown_command",
+        "unauthorized",
+        "pasv_unavailable",
+        "pasv_requires_auto",
+        "no_frame",
+        "log_unavailable",
+        "not_supported",
+        "internal_error"
+      ]
+    },
+
+    "RestartReason": {
+      "type": "string",
+      "enum": ["mode_change", "reboot", "shutdown"]
+    }
+  }
+}

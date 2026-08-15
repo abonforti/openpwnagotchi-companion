@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Local leak gate. Scans the staged diff against an owner-specific denylist.
+
+The denylist is NOT stored in this repository and its path is NOT hardcoded here:
+it names the very things that must never be published. Point git at it once, with
+
+    git config companion.denylist /path/to/your/denylist.txt
+
+One case-insensitive Python regular expression per line; blank lines and lines
+starting with # are ignored. Python regex, not grep: the patterns need lookahead
+to carve generic constants out of a broader range.
+
+This is the cheap automatic layer. The companion-security-auditor agent is the
+thorough one and applies judgement this script cannot. Run both.
+"""
+
+import re
+import subprocess
+import sys
+
+
+def git(*args):
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, check=False
+    ).stdout
+
+
+def fail(*lines):
+    for line in lines:
+        print(line, file=sys.stderr)
+    sys.exit(1)
+
+
+denylist_path = git("config", "--get", "companion.denylist").strip()
+if not denylist_path:
+    fail(
+        "pre-commit: companion.denylist is not configured.",
+        "  git config companion.denylist /path/to/your/denylist.txt",
+        "  Refusing to commit without the leak gate. See SPEC.md section 13.",
+    )
+
+try:
+    with open(denylist_path, encoding="utf-8") as fp:
+        raw = fp.read().splitlines()
+except OSError as err:
+    fail(f"pre-commit: denylist unreadable ({err.strerror}). Refusing to commit.")
+
+patterns = []
+for lineno, line in enumerate(raw, 1):
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    try:
+        patterns.append(re.compile(line, re.IGNORECASE))
+    except re.error as err:
+        fail(f"pre-commit: denylist line {lineno} is not a valid regex: {err}")
+
+if not patterns:
+    fail("pre-commit: denylist contains no patterns. Refusing to commit.")
+
+staged = [n for n in git("diff", "--cached", "--name-only", "--diff-filter=ACM").split("\n") if n]
+if not staged:
+    sys.exit(0)
+
+# Added lines only. An untouched pre-existing line is a separate problem, not this
+# commit's, and re-reporting it every time trains people to ignore the hook.
+diff = git("diff", "--cached", "--unified=0", "--", *staged)
+added = [ln[1:] for ln in diff.split("\n") if ln.startswith("+") and not ln.startswith("+++")]
+if not added:
+    sys.exit(0)
+
+hits = sum(1 for p in patterns if any(p.search(ln) for ln in added))
+
+if hits:
+    fail(
+        f"pre-commit: {hits} denylist pattern(s) matched in the staged diff.",
+        "",
+        # The matching line is deliberately not printed: it is the secret.
+        "  This repository is public. Move the content outside the repository.",
+        "  Review with: git diff --cached",
+    )
+
+sys.exit(0)

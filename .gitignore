@@ -1,0 +1,51 @@
+# secrets - never commit. See SECURITY.md.
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+*.srl
+ca.crt
+ca.key
+server.crt
+server.key
+token*
+config.toml
+whitelist*
+
+# build
+frontend/node_modules/
+frontend/dist/
+frontend/dev-dist/
+dist.tgz
+*.tgz
+SHA256SUMS
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# local-only, never published. See SPEC.md section 13.
+.claude/settings.local.json
+*.local.md
+*.local.json
+*.local.toml
+denylist*
+.env
+.env.*
+
+# real capture data is location data about a person
+*.pcap
+*.pcapng
+*.gps.json
+# synthetic test fixtures are the one exception, and must stay synthetic
+!tests/fakes/fixtures/**
+
+# editors and os
+.DS_Store
+*.swp
+.idea/
+.vscode/

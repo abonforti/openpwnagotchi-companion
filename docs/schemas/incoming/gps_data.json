@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/gps_data.json",
+  "title": "Push browser coordinates",
+  "description": "The client pushes coordinates from the browser Geolocation API. The plugin stores them as the lowest-priority GPS source and drops them after 10 seconds of staleness. The client must NOT send this while stats.gps.piFix is true.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "gps_data"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    },
+    "latitude": {
+      "type": "number"
+    },
+    "longitude": {
+      "type": "number"
+    },
+    "accuracy": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Metres, as reported by the browser."
+    }
+  },
+  "required": [
+    "type",
+    "latitude",
+    "longitude"
+  ],
+  "additionalProperties": false
+}

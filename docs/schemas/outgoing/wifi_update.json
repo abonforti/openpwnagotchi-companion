@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/wifi_update.json",
+  "title": "Access point list updated",
+  "description": "Pushed from on_wifi_update with the same mapping as `access_points`.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "wifi_update"
+    },
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/AccessPoint"
+      }
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

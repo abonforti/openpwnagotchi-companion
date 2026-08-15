@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/get_handshakes.json",
+  "title": "Request the handshake list",
+  "description": "Replies with a `handshakes_list` message built from the handshake directory.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "get_handshakes"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

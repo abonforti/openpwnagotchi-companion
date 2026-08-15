@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "incoming/shutdown.json",
+  "title": "Shut the device down",
+  "description": "Broadcasts `restarting` with reason `shutdown`, then calls pwnagotchi.shutdown(). Gated behind a two-step confirm in the UI; the plugin executes immediately.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "shutdown"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outgoing/handshake.json",
+  "title": "New handshake captured",
+  "description": "Pushed from on_handshake. That hook is fired from two code paths with different argument types (MAC strings or bettercap dicts); both are normalised here.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "handshake"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "ap": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Access point MAC."
+        },
+        "station": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Client station MAC."
+        },
+        "gps": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/$defs/HandshakeGps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present when a fix was available and a sidecar was written."
+        }
+      },
+      "required": [
+        "filename",
+        "ap",
+        "station",
+        "gps"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch seconds at which the plugin produced the message."
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Client-generated correlation id. When present the plugin echoes it in the reply and in the acknowledgment."
+    }
+  },
+  "required": [
+    "type",
+    "data",
+    "timestamp"
+  ],
+  "additionalProperties": false
+}

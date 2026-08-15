@@ -61,6 +61,31 @@ jobs:
       - name: Check protocol.ts against the schemas
         run: node tools/gen-protocol-types.mjs --check
 
+  plugin:
+    name: Plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+
+      - name: Install test dependencies
+        run: pip install --disable-pip-version-check -r tests/requirements.txt
+
+      # No pwnagotchi installation: tests/fakes/pwnagotchi_stub stands in and
+      # exposes exactly the symbols pinned in SPEC section 11, so reaching for
+      # an API the real fork does not have fails here rather than on a device.
+      - name: Run the suite
+        run: python -m pytest
+
+      # The plugin must at least parse under the interpreter the device runs.
+      - name: Byte-compile the plugin
+        run: python -m compileall -q plugin/
+
   hygiene:
     name: Repository hygiene
     runs-on: ubuntu-latest

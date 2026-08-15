@@ -66,6 +66,11 @@ Group related work into one issue rather than filing several near-duplicates. La
 in a milestone if it belongs to one, and give it acceptance criteria that someone else could
 check.
 
+**Relaxed until the first test on real hardware.** While the plugin has never run on a device,
+a defect found in unmerged work is fixed in place rather than filed: a ticket describing code
+that is about to change is bookkeeping, not a backlog. This relaxation ends at the first
+end-to-end run on the device, after which the rule above applies without exception.
+
 ## Rules
 
 - Present a plan and get explicit approval before non-trivial code. The owner drives plan→code.

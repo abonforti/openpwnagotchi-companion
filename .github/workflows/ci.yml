@@ -1,0 +1,90 @@
+name: CI
+
+# The hard gate. Local hooks and review agents catch more, and catch it earlier,
+# but they can all be skipped by whoever is in a hurry. This cannot: master
+# requires these checks to pass before a pull request can merge.
+#
+# Jobs are added as the things they check come into existence. Today that is the
+# protocol contract and repository hygiene; the plugin and frontend jobs arrive
+# with the plugin and the frontend.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The device runs Python 3.11. Testing on anything newer would let a difference
+  # reach a Raspberry Pi that CI never saw.
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  schemas:
+    name: Protocol schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install jsonschema
+        run: pip install --disable-pip-version-check jsonschema
+
+      - name: Validate docs/schemas
+        run: python .github/check_schemas.py
+
+  protocol-types:
+    name: Generated types in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # frontend/src/lib/protocol.ts is generated from docs/schemas and committed.
+      # If the two drift, the plugin and the PWA stop agreeing about the wire
+      # format, which is exactly the class of bug the schema-first design exists
+      # to prevent - so this is a build failure, not a warning.
+      - name: Check protocol.ts against the schemas
+        run: node tools/gen-protocol-types.mjs --check
+
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Generic credential material only. The owner-specific denylist is held
+      # outside the repository by design, so that check runs in the local
+      # pre-commit hook and cannot run here. A green result here is not proof
+      # that a diff is safe to publish.
+      - name: Secret scan
+        run: python .github/check_secrets.py
+
+      # The 100% branch-coverage gate is only meaningful if nobody can opt out of
+      # it, so the opt-out is banned outright rather than discouraged.
+      - name: No coverage exclusions
+        run: |
+          if git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py' > /dev/null 2>&1; then
+            echo "::error::'# pragma: no cover' is banned (SPEC.md 10.7)."
+            git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py'
+            exit 1
+          fi
+          echo "no coverage exclusions found"

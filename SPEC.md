@@ -47,7 +47,7 @@ with no further design decisions required.
 | **D13** | **`.gps.json` format** | Handshake GPS sidecars are written in **bettercap session shape** (`Latitude`, `Longitude`, `Altitude`, `Updated`, …), byte-compatible with the stock `gps.py` plugin and `webgpsmap`, so both tools stay interoperable. Normalisation to `{lat, lon, accuracy}` happens on read, in the plugin, never on disk. See §2.12.1. |
 | **D14** | **Static server behaviour** | SPA deep links fall back to `index.html`; MIME types are declared explicitly in the handler, never inherited from the system `mimetypes` database. See §2.15. |
 | **D15** | **Protocol source of truth** | `docs/schemas/*.json` (JSON Schema draft 2020-12) is authoritative. `docs/PROTOCOL.md` documents it, frontend TS types are generated from it, and both plugin and frontend are tested against it. |
-| **D16** | **Repository language** | English only, everywhere. Enforced by a CI check. |
+| **D16** | **Repository language** | English only, everywhere. Enforced by review. An automated word-list check was tried and removed: see §5.1. |
 
 ---
 
@@ -133,7 +133,8 @@ openpwnagotchi-companion/
 │   │   └── feature_request.yml
 │   ├── labels.json
 │   ├── check_plugin.py              # AST-based plugin sanity check (§5.1)
-│   └── check_language.py            # English-only check (§5.1)
+│   ├── check_schemas.py             # JSON Schema validity and framing invariants (§5.1)
+│   └── check_secrets.py             # generic credential scan (§5.1)
 └── docs/
     ├── SETUP.md                     # full setup: CA, cert, iOS trust, install, first run
     ├── CERTIFICATES.md              # deep dive on the cert constraints and why
@@ -776,19 +777,33 @@ on-Pi fix, whether from bettercap or gpsd, always wins.
   `tests/fakes/pwnagotchi_stub/` stands in. The coverage gate of §10.8 runs here and is what
   fails the build, not a warning. `tests/tools/test_certs.py` runs in the same job; the runner
   already has `openssl`.
-- **language-check**: `.github/check_language.py` fails the build on non-English content in
-  tracked source and docs. Implementation: a curated list of common Italian function words and
-  accented forms (`perché`, `già`, `così`, `più`, `della`, `viene`, `questo`, `quando`,
-  `serve`, …) matched case-insensitively on word boundaries in `*.py`, `*.ts`, `*.svelte`,
-  `*.sh`, `*.md`, `*.yml`. Whitelist path: `.github/language-allowlist.txt` for legitimate hits.
-  Report file:line so failures are actionable.
+- **language**: there is no automated check, deliberately. One was written and removed. A
+  word-list matcher cannot tell an Italian word from an English one that happens to be spelled
+  the same, and this repository legitimately contains `serve`, `come`, `fare`, `solo` and
+  `prima` — `websockets.serve`, "types come from", "serve `index.html`". Even after pruning
+  those, what remained caught nothing real while threatening to fail a build over prose.
+
+  A check that cries wolf gets ignored, and an ignored check is worse than none: it converts a
+  rule people follow into a rule people route around. **D16 still holds** — the repository is
+  English only — but it is enforced by review (`companion-reviewer`), where a human or an agent
+  can tell the difference. Do not reintroduce a word-list gate.
 - **frontend**: `npm ci`, `svelte-check`, `tsc --noEmit`, `vitest run`, `npm run build`.
-- **schema-check**: `node tools/gen-protocol-types.mjs --check` — the generated types must be
-  committed and in sync with the schemas.
-- **secret-scan**: a generic scan for key material and credential patterns in the diff. Note
-  what this job **cannot** do: the owner-specific infrastructure denylist lives outside the
-  repository by design (§13), so the personal-infrastructure check is a local pre-commit gate
-  only. CI catches generic secrets; it cannot catch a hostname it is not allowed to know.
+- **schemas**: `.github/check_schemas.py` — every schema is valid draft 2020-12, each message's
+  `type` const matches its filename, incoming messages are flat while outgoing ones wrap their
+  payload under `data` with a `timestamp`, `additionalProperties: false` throughout, every `$ref`
+  resolves, and no definition in `common.json` is left unreferenced.
+- **protocol-types**: `node tools/gen-protocol-types.mjs --check` — the generated types must be
+  committed and in sync with the schemas. Drift here means the plugin and the PWA have stopped
+  agreeing about the wire format, which is the exact failure the schema-first design prevents.
+- **secret scan**: `.github/check_secrets.py` — PEM private keys, provider token shapes, and
+  credential assignments carrying a real literal rather than a placeholder. It also refuses
+  file types that must never be tracked at all. Matched text is never echoed, because the match
+  is the secret. Note what this job **cannot** do: the owner-specific infrastructure denylist
+  lives outside the repository by design (§13), so that check is a local pre-commit gate only.
+  CI catches secrets that look like secrets to anyone; it cannot catch a hostname it is not
+  allowed to know, and a green run is not proof a diff is safe to publish.
+- **no coverage exclusions**: `# pragma: no cover` is banned outright. The 100% branch gate only
+  means something if nobody can opt out of it.
 - **mutation** (scheduled, not a PR gate): `mutmut` over `plugin/`, reported not enforced.
   Mutation testing is too slow to block a pull request and too valuable to skip entirely.
 
@@ -847,7 +862,7 @@ That sentence is the perimeter. Anything that does not serve it belongs in the b
 | Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
 | Frontend | The eight views, `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
 | Tests | The whole of §10, including the 100% branch-coverage gate |
-| CI | `ci.yml`, `release.yml`, `check_plugin.py`, `check_language.py`, schema sync, secret scan |
+| CI | `ci.yml`, `release.yml`, `check_plugin.py`, schema validation, protocol type sync, secret scan |
 | Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, `PINNED-FACTS.md`, README, ROADMAP, CONTRIBUTING, issue templates |
 
 **Out of scope** — backlog, no milestone: pcap download over BT, handshake filtering and search,
@@ -1068,7 +1083,7 @@ from the tests.
 ### 10.8 Definition of done
 
 A task is complete when: its tests pass locally and in CI, the §10.7 coverage gate is green,
-`check_plugin.py` and `check_language.py` pass, the schema regeneration check is clean, the
+`check_plugin.py` passes, the schema and protocol-type checks are clean, the
 `companion-reviewer` and `companion-security-auditor` agents have signed off, and the acceptance
 criteria in its issue are satisfied. Not before.
 
@@ -1259,7 +1274,7 @@ Each step ships with the tests named in §10 and is not done until they pass (§
 5. `tests/test_integration_ws.py` — plugin and certificate scripts exercised together.
 6. Frontend scaffold (Vite + Svelte + TS + PWA), `lib/` (generated `protocol.ts`, `ws`, `stores`,
    `settings`, `geo`), then the views Dashboard → Settings. Tests §10.5.
-7. `.github/check_plugin.py`, `check_language.py`, `ci.yml`, `release.yml`.
+7. `.github/check_plugin.py`, `release.yml` (CI landed early, see §5.1).
 8. README, ROADMAP, CONTRIBUTING, issue templates, `docs/PINNED-FACTS.md`.
 9. GitHub project: labels, milestones, seed issues, epic (via `gh`).
 10. Tag a `0.x` release → the release workflow builds `dist.tgz`; run `install-on-pi.sh` on the Pi;

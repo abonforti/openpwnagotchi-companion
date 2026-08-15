@@ -60,7 +60,8 @@ git config companion.denylist /path/to/your/denylist.txt   # outside this repo
 
 - Present a plan and get explicit approval before non-trivial code. The owner drives plan→code.
 - **The entire repository is English.** Code, comments, docstrings, log strings, documentation,
-  commit messages, issue and PR text. Enforced by `.github/check_language.py` in CI.
+  commit messages, issue and PR text. Enforced by review, not by CI: a word-list check produced
+  more false positives than findings, so it was removed rather than tuned into noise.
 - Do not guess pwnagotchi APIs, attribute names, or bettercap field names. Every symbol you may
   use is pinned in SPEC.md §11 with its evidence, and §11.1 lists what is forbidden. **If a
   symbol is not in §11, you may not use it** — stop and ask instead of inventing it.

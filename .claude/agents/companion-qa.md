@@ -31,9 +31,6 @@ node tools/gen-protocol-types.mjs --check
 python .github/check_plugin.py
 python -m compileall -q plugin/
 
-# English-only
-python .github/check_language.py
-
 # frontend, when the diff touches it
 cd frontend && npm ci && npx svelte-check && npx tsc --noEmit && npx vitest run --coverage
 ```

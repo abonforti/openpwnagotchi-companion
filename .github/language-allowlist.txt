@@ -1,3 +1,0 @@
-# Lines that legitimately contain a word the language check flags.
-# One full (stripped) line per entry. Keep this short: if it grows, the word
-# list is wrong, not the repository.

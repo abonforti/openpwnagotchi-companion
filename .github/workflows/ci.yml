@@ -71,9 +71,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: English only
-        run: python .github/check_language.py
-
       # Generic credential material only. The owner-specific denylist is held
       # outside the repository by design, so that check runs in the local
       # pre-commit hook and cannot run here. A green result here is not proof

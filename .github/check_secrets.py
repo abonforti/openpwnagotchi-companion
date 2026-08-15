@@ -68,6 +68,7 @@ def tracked_files() -> list[Path]:
 def main() -> int:
     paths = [Path(a).resolve() for a in sys.argv[1:]] or tracked_files()
     findings: list[str] = []
+    skipped: list[str] = []
     checked = 0
 
     for path in paths:
@@ -85,7 +86,12 @@ def main() -> int:
 
         try:
             text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+        except (UnicodeDecodeError, OSError) as err:
+            # Say so rather than skipping quietly. A binary blob carrying key
+            # material would otherwise produce no output at all, and silence
+            # reads identically to "checked, clean".
+            kind = "not UTF-8" if isinstance(err, UnicodeDecodeError) else "unreadable"
+            skipped.append(f"{rel}: {kind}, not scanned")
             continue
 
         checked += 1
@@ -94,6 +100,9 @@ def main() -> int:
                 if pattern.search(line):
                     # The matched text is not echoed: it is the secret.
                     findings.append(f"{rel}:{lineno}: possible {label}")
+
+    for line in skipped:
+        print(f"warning: {line}", file=sys.stderr)
 
     for line in findings:
         print(line, file=sys.stderr)
@@ -108,7 +117,8 @@ def main() -> int:
         )
         return 1
 
-    print(f"secret scan: {checked} file(s), no credential material found.")
+    suffix = f", {len(skipped)} not scanned (see warnings above)" if skipped else ""
+    print(f"secret scan: {checked} file(s), no credential material found{suffix}.")
     return 0
 
 

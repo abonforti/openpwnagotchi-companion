@@ -119,12 +119,34 @@ def option(options: Mapping[str, Any], key: str) -> Any:
     defaults inconsistently across versions, and a KeyError at load time takes
     the whole plugin down.
     """
-    raise NotImplementedError
+    if options is None:
+        return DEFAULTS.get(key)
+    value = options.get(key, None)
+    if value is None:
+        return DEFAULTS.get(key)
+    return value
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+def _finite(value: Any) -> float | None:
+    """Coerces to float, rejecting None, NaN and the infinities.
+
+    Every coordinate on the wire passes through here. A NaN latitude serialises
+    to invalid JSON and a fabricated one is worse than an absent one.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
 
 
 def envelope(kind: str, data: Any, timestamp: float, message_id: str | None = None) -> dict:
@@ -133,12 +155,15 @@ def envelope(kind: str, data: Any, timestamp: float, message_id: str | None = No
     `message_id` is included only when the request carried one. See
     docs/PROTOCOL.md for why incoming is flat while outgoing is enveloped.
     """
-    raise NotImplementedError
+    message: dict[str, Any] = {"type": kind, "data": data, "timestamp": timestamp}
+    if message_id is not None:
+        message["message_id"] = message_id
+    return message
 
 
 def error_envelope(code: str, message: str, timestamp: float, message_id: str | None = None) -> dict:
     """Builds an `error` message. `code` must be one of common.json ErrorCode."""
-    raise NotImplementedError
+    return envelope("error", {"code": code, "message": message}, timestamp, message_id)
 
 
 def mac_of(value: Any) -> str | None:
@@ -148,7 +173,12 @@ def mac_of(value: Any) -> str | None:
     (SPEC F20): MAC strings on one, bettercap dicts on the other. Returns None
     for anything else rather than guessing.
     """
-    raise NotImplementedError
+    if isinstance(value, Mapping):
+        found = value.get("mac") or value.get("bssid")
+        return found if isinstance(found, str) and found else None
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def hdop_to_metres(hdop: Any) -> float | None:
@@ -158,7 +188,13 @@ def hdop_to_metres(hdop: Any) -> float | None:
     Returns None when HDOP is absent, unparseable or non-positive, because a
     fabricated accuracy is worse than an honest absence.
     """
-    raise NotImplementedError
+    try:
+        value = float(hdop)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0 or value != value or value in (float("inf"), float("-inf")):
+        return None
+    return round(value * 5.0, 1)
 
 
 def parse_handshake_filename(filename: str) -> tuple[str, str | None]:
@@ -168,7 +204,11 @@ def parse_handshake_filename(filename: str) -> tuple[str, str | None]:
     survives. Returns (whole basename, None) when the name does not match:
     the BSSID is reported as unknown rather than guessed.
     """
-    raise NotImplementedError
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    match = HANDSHAKE_NAME.match(stem)
+    if match is None or not match.group("ssid"):
+        return stem, None
+    return match.group("ssid"), match.group("bssid").lower()
 
 
 def map_access_point(ap: Mapping[str, Any]) -> dict:
@@ -178,7 +218,17 @@ def map_access_point(ap: Mapping[str, Any]) -> dict:
     is the upstream bug this fork exists partly to fix. `clients` may be absent
     or None, so its length is taken defensively.
     """
-    raise NotImplementedError
+    mac = ap.get("mac") or ""
+    hostname = ap.get("hostname") or mac
+    return {
+        "bssid": mac,
+        "hostname": hostname,
+        "channel": int(ap.get("channel") or 0),
+        "rssi": int(ap.get("rssi") or 0),
+        "encryption": ap.get("encryption") or "",
+        "vendor": ap.get("vendor") or "",
+        "clients": len(ap.get("clients") or []),
+    }
 
 
 def normalise_peer(peer: Any) -> dict:
@@ -192,12 +242,67 @@ def normalise_peer(peer: Any) -> dict:
     None. Every accessor is individually guarded; one bad field must not lose
     the whole peer.
     """
-    raise NotImplementedError
+    def call(name: str, default: Any = None) -> Any:
+        try:
+            member = getattr(peer, name)
+        except Exception:
+            return default
+        try:
+            return member() if callable(member) else member
+        except Exception:
+            return default
+
+    def as_int(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "name": call("name", "???") or "???",
+        "fingerprint": call("identity", "???") or "???",
+        "fullName": call("full_name", "") or "",
+        "rssi": as_int(call("rssi")),
+        # last_channel, not channel: Peer has no attribute of the latter name.
+        "channel": as_int(call("last_channel")),
+        "firstSeen": to_epoch(call("first_seen")),
+        "prevSeen": to_epoch(call("prev_seen")),
+        "firstMet": to_epoch(call("first_met")),
+        # Already an epoch float, unlike its three siblings above.
+        "lastSeen": to_epoch(call("last_seen")),
+        "encounters": as_int(call("encounters")),
+        "pwndRun": as_int(call("pwnd_run")),
+        # pwnd_total(), not the pwnd_tot key it reads from internally.
+        "pwndTotal": as_int(call("pwnd_total")),
+        "version": call("version"),
+        "uptime": as_int(call("uptime")),
+        "face": call("face"),
+    }
 
 
 def to_epoch(value: Any) -> float | None:
     """Coerces a datetime, epoch number or timestamp string into an epoch float."""
-    raise NotImplementedError
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    timestamp = getattr(value, "timestamp", None)
+    if callable(timestamp):
+        try:
+            return float(timestamp())
+        except Exception:
+            return None
+    if isinstance(value, str):
+        # Peer.__init__ falls back to a formatted string when it cannot parse a
+        # timestamp, so this shape genuinely reaches us.
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return time.mktime(time.strptime(value.split(".")[0], fmt))
+            except (ValueError, OverflowError):
+                continue
+    return None
 
 
 def tail_lines(path: str, count: int) -> list[str]:
@@ -208,7 +313,21 @@ def tail_lines(path: str, count: int) -> list[str]:
     with errors="replace" so a truncated multi-byte sequence at a chunk boundary
     cannot raise.
     """
-    raise NotImplementedError
+    if count <= 0:
+        return []
+    chunk_size = 8192
+    data = b""
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        while position > 0 and data.count(b"\n") <= count:
+            step = min(chunk_size, position)
+            position -= step
+            handle.seek(position)
+            data = handle.read(step) + data
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    return lines[-count:]
 
 
 def gps_unavailable() -> dict:
@@ -217,7 +336,17 @@ def gps_unavailable() -> dict:
     There is deliberately no alternative empty form - Gps is one uniform shape,
     never a union, so the client has a single thing to render.
     """
-    raise NotImplementedError
+    return {
+        "enabled": False,
+        "source": None,
+        "piFix": False,
+        "fix": False,
+        "lat": None,
+        "lon": None,
+        "altitude": None,
+        "accuracy": None,
+        "updated": None,
+    }
 
 
 def gps_from_bettercap(raw: Mapping[str, Any] | None, now: float) -> dict | None:
@@ -228,7 +357,27 @@ def gps_from_bettercap(raw: Mapping[str, Any] | None, now: float) -> dict | None
     a zero or non-finite coordinate counts as no fix. Sets source "bettercap"
     and piFix true.
     """
-    raise NotImplementedError
+    if not raw:
+        return None
+    latitude = _finite(raw.get("Latitude"))
+    longitude = _finite(raw.get("Longitude"))
+    if latitude is None or longitude is None:
+        return None
+    # Bettercap reports 0.0/0.0 when it has no lock. The stock gps.py plugin
+    # filters on exactly this before writing a sidecar.
+    if latitude == 0.0 and longitude == 0.0:
+        return None
+    return {
+        "enabled": True,
+        "source": "bettercap",
+        "piFix": True,
+        "fix": True,
+        "lat": latitude,
+        "lon": longitude,
+        "altitude": _finite(raw.get("Altitude")),
+        "accuracy": hdop_to_metres(raw.get("HDOP")),
+        "updated": now,
+    }
 
 
 def gps_from_gpsd(tpv: Mapping[str, Any] | None, now: float) -> dict | None:
@@ -237,12 +386,46 @@ def gps_from_gpsd(tpv: Mapping[str, Any] | None, now: float) -> dict | None:
     Requires mode >= 2 and finite lat/lon. Sets source "gpsd" and piFix true:
     gpsd is an on-Pi source and must outrank the browser just as bettercap does.
     """
-    raise NotImplementedError
+    if not tpv:
+        return None
+    try:
+        mode = int(tpv.get("mode") or 0)
+    except (TypeError, ValueError):
+        return None
+    if mode < 2:
+        return None
+    latitude = _finite(tpv.get("lat"))
+    longitude = _finite(tpv.get("lon"))
+    if latitude is None or longitude is None:
+        return None
+    return {
+        "enabled": True,
+        # gpsd is an on-Pi source too, which is why the client gates on piFix
+        # rather than comparing the source against "bettercap".
+        "source": "gpsd",
+        "piFix": True,
+        "fix": True,
+        "lat": latitude,
+        "lon": longitude,
+        "altitude": _finite(tpv.get("alt")),
+        "accuracy": _finite(tpv.get("eph")),
+        "updated": now,
+    }
 
 
 def gps_from_browser(latitude: float, longitude: float, accuracy: float | None, now: float) -> dict:
     """Builds a Gps from browser Geolocation coordinates. piFix is always false."""
-    raise NotImplementedError
+    return {
+        "enabled": True,
+        "source": "browser",
+        "piFix": False,
+        "fix": True,
+        "lat": float(latitude),
+        "lon": float(longitude),
+        "altitude": None,
+        "accuracy": _finite(accuracy),
+        "updated": now,
+    }
 
 
 def sidecar_payload(gps: Mapping[str, Any], now: float) -> dict:
@@ -253,7 +436,21 @@ def sidecar_payload(gps: Mapping[str, Any], now: float) -> dict:
     source adds a "Source" key, which those tools ignore. The disk format is
     never the wire format.
     """
-    raise NotImplementedError
+    payload: dict[str, Any] = {
+        "Latitude": gps.get("lat"),
+        "Longitude": gps.get("lon"),
+        "Altitude": gps.get("altitude") if gps.get("altitude") is not None else 0.0,
+        "Updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(gps.get("updated") or now)),
+    }
+    source = gps.get("source")
+    if source and source != "bettercap":
+        # An extra key the stock tools ignore, so provenance survives without
+        # breaking the shape they expect.
+        payload["Source"] = source
+    accuracy = gps.get("accuracy")
+    if accuracy is not None:
+        payload["Accuracy"] = accuracy
+    return payload
 
 
 def normalise_sidecar(raw: Mapping[str, Any] | None) -> dict | None:
@@ -262,7 +459,23 @@ def normalise_sidecar(raw: Mapping[str, Any] | None) -> dict | None:
     Returns None for a malformed or fix-less sidecar, so a bad file costs its
     own entry's coordinates and not the whole listing.
     """
-    raise NotImplementedError
+    if not raw:
+        return None
+    latitude = _finite(raw.get("Latitude", raw.get("lat")))
+    longitude = _finite(raw.get("Longitude", raw.get("lon")))
+    if latitude is None or longitude is None:
+        return None
+    if latitude == 0.0 and longitude == 0.0:
+        return None
+    source = raw.get("Source") or "bettercap"
+    if source not in ("bettercap", "gpsd", "browser"):
+        source = None
+    return {
+        "lat": latitude,
+        "lon": longitude,
+        "accuracy": _finite(raw.get("Accuracy", raw.get("accuracy"))),
+        "source": source,
+    }
 
 
 def sidecar_path_for(capture_path: str) -> str:
@@ -271,14 +484,16 @@ def sidecar_path_for(capture_path: str) -> str:
     Uses splitext rather than the stock plugin's `.replace(".pcapng", ...)`,
     which silently produces a wrong name for a .pcap capture.
     """
-    raise NotImplementedError
+    return os.path.splitext(capture_path)[0] + ".gps.json"
 
 
 class ProtocolError(Exception):
     """A command that cannot be served, carrying an ErrorCode from common.json."""
 
     def __init__(self, code: str, message: str) -> None:
-        raise NotImplementedError
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
 
 
 # ---------------------------------------------------------------------------
@@ -316,17 +531,36 @@ class Deps:
         module does not require a working pwnagotchi, which is what lets the
         test suite run without one installed.
         """
-        raise NotImplementedError
+        if self.restart_pwnagotchi is None:
+            self.restart_pwnagotchi = default_restart
+        if self.reboot_device is None:
+            self.reboot_device = lambda: pwnagotchi.reboot()
+        if self.shutdown_device is None:
+            self.shutdown_device = lambda: pwnagotchi.shutdown()
+        if self.run_command is None:
+            self.run_command = default_run_command
+        if self.read_gpsd is None:
+            self.read_gpsd = default_read_gpsd
+        if self.read_pisugar_i2c is None:
+            self.read_pisugar_i2c = default_read_pisugar_i2c
+        if self.resolve_interface_ip is None:
+            self.resolve_interface_ip = default_resolve_interface_ip
+        if self.spawn is None:
+            self.spawn = default_spawn
 
 
 def default_restart(mode: str) -> None:
     """Restarts pwnagotchi into the given mode via pwnagotchi.restart (SPEC F9)."""
-    raise NotImplementedError
+    pwnagotchi.restart(mode)
 
 
 def default_run_command(argv: Sequence[str]) -> int:
     """Runs a command, returning its exit status. Never raises."""
-    raise NotImplementedError
+    try:
+        return subprocess.run(list(argv), check=False).returncode
+    except Exception as err:
+        log.error("[companion] command %s failed: %s", argv, err)
+        return -1
 
 
 def default_read_gpsd(host: str, port: int, timeout: float) -> dict | None:
@@ -336,7 +570,35 @@ def default_read_gpsd(host: str, port: int, timeout: float) -> dict | None:
     arrives or the timeout expires. Bounded and non-blocking by construction:
     this must never be reachable from the request path.
     """
-    raise NotImplementedError
+    deadline = time.time() + timeout
+    sock = None
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.settimeout(timeout)
+        sock.sendall(b'?WATCH={"enable":true,"json":true}\n')
+        buffer = b""
+        while time.time() < deadline:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                try:
+                    report = json.loads(line.decode("utf-8", errors="replace"))
+                except ValueError:
+                    continue
+                if report.get("class") == "TPV":
+                    return report
+    except (OSError, socket.timeout):
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return None
 
 
 def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
@@ -346,7 +608,19 @@ def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
     Last resort, only when no PiSugar plugin is loaded. Returns (None, None) on
     any failure - a missing battery reading is not an error worth propagating.
     """
-    raise NotImplementedError
+    try:
+        import smbus2  # type: ignore[import-not-found]
+
+        bus = smbus2.SMBus(1)
+        try:
+            percent = float(bus.read_byte_data(0x57, 0x2A))
+        finally:
+            bus.close()
+    except Exception:
+        return None, None
+    if not 0 <= percent <= 100:
+        return None, None
+    return percent, None
 
 
 def default_resolve_interface_ip(iface: str) -> str | None:
@@ -355,12 +629,38 @@ def default_resolve_interface_ip(iface: str) -> str | None:
     Uses netifaces when importable and falls back to parsing `ip -4 addr show`,
     so the plugin does not add a hard dependency for something this small.
     """
-    raise NotImplementedError
+    try:
+        import netifaces  # type: ignore[import-not-found]
+
+        addresses = netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []
+        for entry in addresses:
+            address = entry.get("addr")
+            if address:
+                return address
+        return None
+    except ImportError:
+        pass
+    except Exception:
+        return None
+
+    # netifaces is not a hard dependency for something this small.
+    try:
+        output = subprocess.run(
+            ["ip", "-4", "addr", "show", iface],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        ).stdout
+    except Exception:
+        return None
+    match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", output)
+    return match.group(1) if match else None
 
 
 def default_spawn(target: Callable[[], None]) -> None:
     """Runs a callable on a daemon thread."""
-    raise NotImplementedError
+    threading.Thread(target=target, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -381,21 +681,43 @@ class SessionCache:
     """
 
     def __init__(self, agent_getter: Callable[[], Any], deps: Deps, interval: float) -> None:
-        raise NotImplementedError
+        self._agent_getter = agent_getter
+        self._deps = deps
+        self._interval = float(interval)
+        self._lock = threading.Lock()
+        self._snapshot: dict = {}
+        self._fetched_at: float | None = None
 
     def refresh(self) -> bool:
         """Fetches a new snapshot. Returns whether it succeeded. Never raises."""
-        raise NotImplementedError
+        agent = self._agent_getter()
+        if agent is None:
+            return False
+        try:
+            snapshot = agent.session()
+        except Exception as err:
+            log.debug("[companion] bettercap session refresh failed: %s", err)
+            return False
+        if not isinstance(snapshot, Mapping):
+            return False
+        with self._lock:
+            self._snapshot = dict(snapshot)
+            self._fetched_at = self._deps.now()
+        return True
 
     @property
     def snapshot(self) -> dict:
         """The last successful snapshot, or an empty dict if there has never been one."""
-        raise NotImplementedError
+        with self._lock:
+            return dict(self._snapshot)
 
     @property
     def age(self) -> float | None:
         """Seconds since the last successful refresh, or None if never."""
-        raise NotImplementedError
+        with self._lock:
+            if self._fetched_at is None:
+                return None
+            return max(0.0, self._deps.now() - self._fetched_at)
 
 
 class GpsResolver:
@@ -408,19 +730,58 @@ class GpsResolver:
     """
 
     def __init__(self, options: Mapping[str, Any], deps: Deps, session: SessionCache) -> None:
-        raise NotImplementedError
+        self._options = options
+        self._deps = deps
+        self._session = session
+        self._browser: dict | None = None
+        self._browser_at: float = 0.0
+        self._gpsd: dict | None = None
 
     def set_browser_position(self, latitude: float, longitude: float, accuracy: float | None) -> None:
         """Stores a client-pushed position. Expires after BROWSER_GPS_TTL seconds."""
-        raise NotImplementedError
+        now = self._deps.now()
+        self._browser = gps_from_browser(latitude, longitude, accuracy, now)
+        self._browser_at = now
 
     def refresh_gpsd(self) -> None:
         """Polls gpsd and caches the result. Called from the background thread only."""
-        raise NotImplementedError
+        if option(self._options, "gps_source") not in ("auto", "gpsd"):
+            self._gpsd = None
+            return
+        tpv = None
+        try:
+            tpv = self._deps.read_gpsd(
+                option(self._options, "gpsd_host"),
+                int(option(self._options, "gpsd_port")),
+                2.0,
+            )
+        except Exception as err:
+            log.debug("[companion] gpsd poll failed: %s", err)
+        self._gpsd = gps_from_gpsd(tpv, self._deps.now())
 
     def current(self) -> dict:
         """Returns the current Gps, always in the uniform shape."""
-        raise NotImplementedError
+        source = option(self._options, "gps_source")
+        if source == "none":
+            return gps_unavailable()
+        now = self._deps.now()
+
+        if source in ("auto", "bettercap"):
+            fix = gps_from_bettercap(self._session.snapshot.get("gps"), now)
+            if fix is not None:
+                return fix
+
+        if source in ("auto", "gpsd") and self._gpsd is not None:
+            return dict(self._gpsd)
+
+        # Lowest priority, and only while fresh: a stale browser position is
+        # worse than none, because the phone may have moved without the Pi.
+        if self._browser is not None:
+            if now - self._browser_at <= BROWSER_GPS_TTL:
+                return dict(self._browser)
+            self._browser = None
+
+        return gps_unavailable()
 
 
 class BatteryReader:
@@ -436,11 +797,68 @@ class BatteryReader:
     CHARGING_ATTRS: tuple[str, ...] = ("charging", "is_charging", "power_plugged", "plugged")
 
     def __init__(self, options: Mapping[str, Any], deps: Deps) -> None:
-        raise NotImplementedError
+        self._options = options
+        self._deps = deps
+        self._seen_provider = False
 
     def read(self) -> dict:
         """Returns {"percent": float|None, "charging": bool|None}."""
-        raise NotImplementedError
+        if not option(self._options, "pisugar"):
+            return {"percent": None, "charging": None}
+
+        for name in ("pisugarx_ext", "pisugarx"):
+            plugin = self._loaded(name)
+            if plugin is None:
+                continue
+            percent = self._probe(plugin, self.PERCENT_ATTRS, float)
+            charging = self._probe(plugin, self.CHARGING_ATTRS, bool)
+            if percent is not None or charging is not None:
+                self._seen_provider = True
+                return {"percent": percent, "charging": charging}
+
+        try:
+            percent, charging = self._deps.read_pisugar_i2c()
+        except Exception:
+            percent, charging = None, None
+        if percent is not None:
+            self._seen_provider = True
+        return {"percent": percent, "charging": charging}
+
+    @property
+    def available(self) -> bool:
+        """Whether any provider has ever answered. Reported as capabilities.pisugar."""
+        return self._seen_provider
+
+    @staticmethod
+    def _loaded(name: str) -> Any:
+        """Looks a plugin up by name without importing it."""
+        try:
+            return plugins.loaded.get(name)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _probe(plugin: Any, names: Sequence[str], cast: Callable[[Any], Any]) -> Any:
+        """Tries a list of candidate attribute names, returning the first usable value.
+
+        These belong to third-party plugins and are deliberately not pinned in
+        SPEC section 11, so they are probed rather than assumed. Every miss is
+        "unavailable", never an error.
+        """
+        for name in names:
+            try:
+                value = getattr(plugin, name, None)
+                if callable(value):
+                    value = value()
+            except Exception:
+                continue
+            if value is None:
+                continue
+            try:
+                return cast(value)
+            except (TypeError, ValueError):
+                continue
+        return None
 
 
 class HandshakeStore:
@@ -453,11 +871,17 @@ class HandshakeStore:
     """
 
     def __init__(self, directory: str, limit: int = HANDSHAKE_LIMIT) -> None:
-        raise NotImplementedError
+        self._directory = directory
+        self._limit = limit
 
     def counts(self) -> tuple[int, int]:
         """Returns (pcapng_count, total_count)."""
-        raise NotImplementedError
+        pcapng = total = 0
+        for name in self._names():
+            total += 1
+            if name.endswith(".pcapng"):
+                pcapng += 1
+        return pcapng, total
 
     def entries(self) -> tuple[list[dict], bool, int]:
         """Returns (entries, truncated, total), newest first.
@@ -465,11 +889,74 @@ class HandshakeStore:
         Caps at `limit` and reports truncation rather than dropping silently. An
         unreadable file is skipped, not fatal.
         """
-        raise NotImplementedError
+        records = []
+        for name in self._names():
+            path = os.path.join(self._directory, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                # One unreadable file must not cost the whole listing.
+                continue
+            ssid, bssid = parse_handshake_filename(name)
+            records.append(
+                {
+                    "filename": name,
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "mtime": float(stat.st_mtime),
+                    "size": int(stat.st_size),
+                    "gps": self._read_sidecar(path),
+                }
+            )
+        records.sort(key=lambda entry: entry["mtime"], reverse=True)
+        total = len(records)
+        truncated = total > self._limit
+        return records[: self._limit], truncated, total
+
+    def _names(self) -> list[str]:
+        """Capture filenames in the directory. Missing directory yields nothing."""
+        try:
+            return [
+                name
+                for name in os.listdir(self._directory)
+                if name.endswith(".pcapng") or name.endswith(".pcap")
+            ]
+        except OSError:
+            return []
+
+    @staticmethod
+    def _read_sidecar(capture_path: str) -> dict | None:
+        """Reads and normalises the sidecar beside a capture, or None."""
+        path = sidecar_path_for(capture_path)
+        try:
+            with open(path, "rt", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, Mapping):
+            return None
+        return normalise_sidecar(raw)
 
     def newest(self) -> dict | None:
         """The most recent capture as a LastHandshake, or None if the directory is empty."""
-        raise NotImplementedError
+        newest_name = None
+        newest_mtime = -1.0
+        for name in self._names():
+            try:
+                mtime = os.stat(os.path.join(self._directory, name)).st_mtime
+            except OSError:
+                continue
+            if mtime > newest_mtime:
+                newest_mtime, newest_name = mtime, name
+        if newest_name is None:
+            return None
+        ssid, bssid = parse_handshake_filename(newest_name)
+        return {
+            "filename": newest_name,
+            "ssid": ssid,
+            "bssid": bssid,
+            "mtime": float(newest_mtime),
+        }
 
     def write_sidecar(self, capture_path: str, gps: Mapping[str, Any], now: float) -> str | None:
         """Writes a .gps.json beside a capture and returns its path.
@@ -477,7 +964,19 @@ class HandshakeStore:
         Does nothing and returns None when there is no fix - absent coordinates
         are not 0.0, 0.0 - or when a sidecar already exists.
         """
-        raise NotImplementedError
+        if not gps or not gps.get("fix"):
+            # No coordinates is not 0.0, 0.0.
+            return None
+        path = sidecar_path_for(capture_path)
+        if os.path.exists(path):
+            return None
+        try:
+            with open(path, "wt", encoding="utf-8") as handle:
+                json.dump(sidecar_payload(gps, now), handle)
+        except OSError as err:
+            log.error("[companion] could not write %s: %s", path, err)
+            return None
+        return path
 
 
 # ---------------------------------------------------------------------------
@@ -510,18 +1009,30 @@ class Router:
         handshakes: Callable[[], HandshakeStore],
         plugin_version: str = __version__,
     ) -> None:
-        raise NotImplementedError
+        self._options = options
+        self._deps = deps
+        self._agent_getter = agent_getter
+        self._session = session
+        self._gps = gps
+        self._battery = battery
+        self._handshakes = handshakes
+        self._plugin_version = plugin_version
 
     # -- authentication ----------------------------------------------------
 
     @property
     def auth_required(self) -> bool:
         """Whether a token is configured. When false, `auth` is accepted but unnecessary."""
-        raise NotImplementedError
+        return bool(option(self._options, "token"))
 
     def check_token(self, candidate: Any) -> bool:
         """Constant-time token comparison. A non-string candidate is a failure, not a crash."""
-        raise NotImplementedError
+        if not isinstance(candidate, str):
+            return False
+        expected = str(option(self._options, "token") or "")
+        # compare_digest, not ==: string equality short-circuits on the first
+        # differing byte and leaks the length of the shared prefix through timing.
+        return hmac.compare_digest(candidate, expected)
 
     # -- dispatch ----------------------------------------------------------
 
@@ -534,7 +1045,108 @@ class Router:
         here would take down the connection handler and, without the guard in
         the transport, the event loop with it.
         """
-        raise NotImplementedError
+        now = self._deps.now()
+        message_id = message.get("message_id")
+        kind = message.get("type")
+
+        if not isinstance(kind, str):
+            return [error_envelope("bad_request", "missing message type", now, message_id)]
+
+        if kind == "auth":
+            if not self.auth_required or self.check_token(message.get("token")):
+                return [envelope("acknowledgment", {"acknowledged": "auth"}, now, message_id)]
+            return [error_envelope("unauthorized", "authentication failed", now, message_id)]
+
+        if self.auth_required and not authenticated:
+            return [error_envelope("unauthorized", "authentication required", now, message_id)]
+
+        out: list[dict] = []
+        if message_id is not None:
+            out.append(envelope("acknowledgment", {"acknowledged": kind}, now, message_id))
+
+        try:
+            out.extend(self._dispatch(kind, message, message_id))
+        except ProtocolError as err:
+            out.append(error_envelope(err.code, err.message, now, message_id))
+        except Exception as err:
+            # A handler must never take down the connection, and without this
+            # the transport would have to guess which failures are survivable.
+            log.exception("[companion] %s failed", kind)
+            out.append(error_envelope("internal_error", str(err), now, message_id))
+        return out
+
+    def _dispatch(self, kind: str, message: Mapping[str, Any], message_id: str | None) -> list[dict]:
+        """Routes one authenticated command. Raises ProtocolError for a refusal."""
+        now = self._deps.now()
+
+        if kind == "get_stats":
+            return [envelope("stats", self.stats(), now, message_id)]
+        if kind == "get_access_points":
+            return [envelope("access_points", self.access_points(), now, message_id)]
+        if kind == "get_handshakes":
+            entries, truncated, total = self._handshakes().entries()
+            payload = {"entries": entries, "truncated": truncated, "total": total}
+            return [envelope("handshakes_list", payload, now, message_id)]
+        if kind == "get_peers":
+            return [envelope("peers_list", {"entries": self.peers()}, now, message_id)]
+        if kind == "get_log":
+            return [envelope("log_lines", self.log_lines(message.get("lines")), now, message_id)]
+        if kind == "get_face_status":
+            return [envelope("face_status", self.face_status(), now, message_id)]
+        if kind == "get_screen":
+            return [envelope("screen_image", self.screen_image(), now, message_id)]
+        if kind == "get_gps_data":
+            return [envelope("gps_update", self._gps.current(), now, message_id)]
+        if kind == "gps_data":
+            self._gps.set_browser_position(
+                message.get("latitude"), message.get("longitude"), message.get("accuracy")
+            )
+            return [envelope("gps_update", self._gps.current(), now, message_id)]
+        if kind == "ping":
+            return [envelope("pong", {}, now, message_id)]
+        if kind == "set_mode":
+            return self.set_mode(str(message.get("mode") or ""))
+        if kind == "set_pasv":
+            return self.set_pasv(bool(message.get("on")))
+        if kind == "reboot":
+            return self.reboot()
+        if kind == "shutdown":
+            return self.shutdown()
+
+        raise ProtocolError("unknown_command", f"unknown command {kind!r}")
+
+    # -- agent access ------------------------------------------------------
+
+    def _agent(self) -> Any:
+        """The agent, or None before on_ready has fired."""
+        return self._agent_getter()
+
+    def _require_agent(self) -> Any:
+        """The agent, or a ProtocolError if pwnagotchi has not handed it over yet."""
+        agent = self._agent()
+        if agent is None:
+            raise ProtocolError("internal_error", "agent is not ready yet")
+        return agent
+
+    @staticmethod
+    def _pasv_plugin() -> Any:
+        """The loaded pasv_mode plugin, or None. Never imported (soft dependency)."""
+        try:
+            return plugins.loaded.get("pasv_mode")
+        except Exception:
+            return None
+
+    def _mode(self) -> str:
+        """AUTO, PASV or MANUAL as the client should display it."""
+        agent = self._agent()
+        if agent is None:
+            return "AUTO"
+        if getattr(agent, "mode", "auto") == "manual":
+            return "MANUAL"
+        plugin = self._pasv_plugin()
+        if plugin is not None and bool(getattr(plugin, "passive", False)):
+            return "PASV"
+        return "AUTO"
 
     def initial_burst(self) -> list[dict]:
         """The messages pushed to a client on accept: stats, access_points, face_status.
@@ -542,25 +1154,110 @@ class Router:
         Sent unprompted so a freshly connected client has state without a round
         of polling, which matters on a link this slow.
         """
-        raise NotImplementedError
+        return [
+            self.push("stats", self.stats()),
+            self.push("access_points", self.access_points()),
+            self.push("face_status", self.face_status()),
+        ]
 
     # -- individual replies ------------------------------------------------
 
     def stats(self) -> dict:
         """Builds the Stats payload. Must not touch agent.session() (SPEC F7)."""
-        raise NotImplementedError
+        agent = self._agent()
+        store = self._handshakes()
+        pcapng, total = store.counts()
+        peers = getattr(agent, "_peers", {}) or {}
+        access_points = getattr(agent, "_access_points", []) or []
+
+        newest_peer = None
+        if peers:
+            try:
+                newest_peer = normalise_peer(
+                    max(peers.values(), key=lambda p: to_epoch(getattr(p, "last_seen", 0)) or 0.0)
+                )
+            except Exception:
+                newest_peer = None
+
+        return {
+            "uptime": int(pwnagotchi.uptime()),
+            "mode": self._mode(),
+            # The attribute, not agent.session(): that is a blocking HTTP call
+            # with a 30 second timeout and must never sit on the request path.
+            "channel": self._int_or_none(getattr(agent, "_current_channel", None)),
+            "battery": self._battery.read(),
+            "temperature": self._temperature(),
+            # Matches the e-ink display, which counts *.pcapng only.
+            "handshakes": pcapng,
+            "handshakesTotal": total,
+            "peers": len(peers),
+            "accessPoints": len(access_points),
+            "lastHandshake": store.newest(),
+            "lastPeer": newest_peer,
+            "gps": self._gps.current(),
+            "sessionAge": self._session.age,
+            "capabilities": self.capabilities(),
+        }
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _temperature() -> int | None:
+        """Reads the SoC temperature, or None if the sysfs node is unavailable."""
+        try:
+            return int(pwnagotchi.temperature())
+        except Exception:
+            return None
 
     def access_points(self) -> list[dict]:
         """Maps agent._access_points. Never calls the side-effecting getter (SPEC F3)."""
-        raise NotImplementedError
+        agent = self._agent()
+        # _access_points, never get_access_points(): the getter fires
+        # plugins.on("wifi_update"), runs epoch.observe and drives strategy
+        # channel selection, so reading it would perturb the unit's behaviour.
+        raw = getattr(agent, "_access_points", []) or []
+        mapped = []
+        for entry in raw:
+            if isinstance(entry, Mapping):
+                mapped.append(map_access_point(entry))
+        return mapped
 
     def peers(self) -> list[dict]:
         """Maps agent._peers values. grid.peers() is not used: different shape (SPEC 2.8)."""
-        raise NotImplementedError
+        agent = self._agent()
+        peers = getattr(agent, "_peers", {}) or {}
+        out = []
+        for peer in peers.values():
+            try:
+                out.append(normalise_peer(peer))
+            except Exception:
+                continue
+        return out
 
     def log_lines(self, count: int | None) -> dict:
         """Tails the configured log. Path comes from config, never hardcoded (SPEC F17)."""
-        raise NotImplementedError
+        try:
+            requested = LOG_LINES_DEFAULT if count is None else int(count)
+        except (TypeError, ValueError):
+            requested = LOG_LINES_DEFAULT
+        requested = max(1, min(requested, LOG_LINES_MAX))
+
+        agent = self._require_agent()
+        try:
+            path = agent._config["main"]["log"]["path"]
+        except Exception:
+            raise ProtocolError("log_unavailable", "no log path in configuration")
+
+        try:
+            lines = tail_lines(path, requested)
+        except OSError as err:
+            raise ProtocolError("log_unavailable", str(err))
+        return {"lines": lines, "path": path}
 
     def screen_image(self) -> dict:
         """Reads the e-ink frame under its lock (SPEC F18).
@@ -569,11 +1266,47 @@ class Router:
         which is normal early in a boot. The lock is held for the read only,
         never across a send.
         """
-        raise NotImplementedError
+        from pwnagotchi.ui import web as ui_web
+
+        path = ui_web.frame_path
+        try:
+            with ui_web.frame_lock:
+                with open(path, "rb") as handle:
+                    raw = handle.read()
+                mtime = os.stat(path).st_mtime
+        except OSError:
+            raise ProtocolError("no_frame", "the display frame has not been written yet")
+        # The lock covers the read only, never the send: this payload is large
+        # and the display thread must not wait on a slow Bluetooth link.
+        return {"png": base64.b64encode(raw).decode("ascii"), "mtime": float(mtime)}
 
     def face_status(self) -> dict:
         """Current face and status as text. Faces are unicode, never images (D11)."""
-        raise NotImplementedError
+        agent = self._agent()
+        face = status = ""
+        view = None
+        try:
+            view = agent.view() if callable(getattr(agent, "view", None)) else None
+        except Exception:
+            view = None
+        if view is not None:
+            face = self._view_text(view, "face")
+            status = self._view_text(view, "status")
+        return {"face": face, "status": status, "mode": self._mode()}
+
+    @staticmethod
+    def _view_text(view: Any, key: str) -> str:
+        """Reads one text element from the UI view, tolerating every shape of it."""
+        try:
+            element = view.get(key)
+        except Exception:
+            return ""
+        if element is None:
+            return ""
+        if isinstance(element, str):
+            return element
+        value = getattr(element, "value", None)
+        return value if isinstance(value, str) else ""
 
     def capabilities(self) -> dict:
         """What this instance can do: pasv, pisugar, configured gps source, version.
@@ -581,7 +1314,12 @@ class Router:
         The client gates its controls on this and must not infer availability any
         other way.
         """
-        raise NotImplementedError
+        return {
+            "pasv": self._pasv_plugin() is not None,
+            "pisugar": self._battery.available,
+            "gpsSource": str(option(self._options, "gps_source")),
+            "pluginVersion": self._plugin_version,
+        }
 
     # -- controls ----------------------------------------------------------
 
@@ -596,7 +1334,28 @@ class Router:
 
         A request for the mode already in effect is acknowledged and ignored.
         """
-        raise NotImplementedError
+        if mode not in ("auto", "manual"):
+            raise ProtocolError("bad_request", "mode must be 'auto' or 'manual'")
+
+        agent = self._require_agent()
+        current = "manual" if getattr(agent, "mode", "auto") == "manual" else "auto"
+        if mode == current:
+            # Nothing to do, and restarting the services to arrive where we
+            # already are would be a gratuitous outage.
+            return []
+
+        target = "MANU" if mode == "manual" else "AUTO"
+        now = self._deps.now()
+        broadcast = envelope(
+            "restarting", {"reason": "mode_change", "mode": target}, now
+        )
+
+        # NOT agent.mode = mode. The mode is fixed at process start from the
+        # --manual flag; the attribute is only a label (SPEC F10). The real
+        # switch restarts bettercap and pwnagotchi, taking this plugin with
+        # them - so the client is told first and the effect is scheduled after.
+        self._deps.spawn(lambda: self._deps.restart_pwnagotchi(target))
+        return [broadcast]
 
     def set_pasv(self, on: bool) -> list[dict]:
         """Toggles passive mode through the pasv_mode plugin (SPEC F12).
@@ -607,30 +1366,83 @@ class Router:
         state cannot be read back here and reaches the client with the next
         stats.
         """
-        raise NotImplementedError
+        plugin = self._pasv_plugin()
+        if plugin is None:
+            raise ProtocolError("pasv_unavailable", "the pasv_mode plugin is not installed")
+
+        agent = self._require_agent()
+        if getattr(agent, "mode", "auto") != "auto":
+            raise ProtocolError("pasv_requires_auto", "passive mode only applies in auto")
+
+        plugins.on("pasv_on" if on else "pasv_off")
+        # No read-back of plugin.passive here: plugins.on() queues the work onto
+        # each plugin's own thread and returns nothing (SPEC F8), so the value
+        # would still be the old one. The client learns the new state from the
+        # next stats, and shows the toggle as pending until then.
+        return []
 
     def reboot(self) -> list[dict]:
         """Broadcasts `restarting` then schedules pwnagotchi.reboot (SPEC F9)."""
-        raise NotImplementedError
+        broadcast = envelope("restarting", {"reason": "reboot", "mode": None}, self._deps.now())
+        self._deps.spawn(self._deps.reboot_device)
+        return [broadcast]
 
     def shutdown(self) -> list[dict]:
         """Broadcasts `restarting` then schedules pwnagotchi.shutdown (SPEC F9)."""
-        raise NotImplementedError
+        broadcast = envelope("restarting", {"reason": "shutdown", "mode": None}, self._deps.now())
+        self._deps.spawn(self._deps.shutdown_device)
+        return [broadcast]
 
     # -- pushes ------------------------------------------------------------
 
     def on_handshake_message(self, filename: str, access_point: Any, station: Any) -> dict:
         """Builds the `handshake` push, normalising both hook signatures (SPEC F20)."""
-        raise NotImplementedError
+        gps = self._gps.current()
+        return self.push(
+            "handshake",
+            {
+                "filename": os.path.basename(filename or ""),
+                # Both hook signatures reach here: MAC strings on one path,
+                # bettercap dicts on the other (SPEC F20).
+                "ap": mac_of(access_point),
+                "station": mac_of(station),
+                "gps": normalise_sidecar(sidecar_payload(gps, self._deps.now())) if gps.get("fix") else None,
+            },
+        )
 
     def push(self, kind: str, data: Any) -> dict:
         """Wraps a push payload in an envelope with the current timestamp."""
-        raise NotImplementedError
+        return envelope(kind, data, self._deps.now())
 
 
 # ---------------------------------------------------------------------------
 # Transport
 # ---------------------------------------------------------------------------
+
+
+def resolve_ws_serve() -> Callable[..., Any]:
+    """Returns the websockets server factory for whatever version is installed.
+
+    The pwnagotchi image pins no version (SPEC F21) and the library moved its
+    server API: websockets.serve was superseded by
+    websockets.asyncio.server.serve in 14. Picking one breaks on the other, and
+    the failure only shows up when a client connects.
+    """
+    try:
+        from websockets.asyncio.server import serve  # websockets >= 14
+    except ImportError:
+        from websockets import serve  # type: ignore[no-redef]
+    return serve
+
+
+def websockets_version() -> str:
+    """The installed websockets version, for the startup log. Never raises."""
+    try:
+        import websockets
+
+        return str(getattr(websockets, "__version__", "unknown"))
+    except Exception:
+        return "unavailable"
 
 
 def build_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext | None:
@@ -641,7 +1453,21 @@ def build_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext | None:
     being down - iOS requires TLS, so a plaintext server would not serve the app
     and would quietly expose the socket instead (D4).
     """
-    raise NotImplementedError
+    for label, path in (("certificate", cert_path), ("key", key_path)):
+        if not path:
+            log.error("[companion] no TLS %s configured; refusing to start any listener", label)
+            return None
+        if not os.path.isfile(path):
+            log.error("[companion] TLS %s %s does not exist; refusing to start any listener", label, path)
+            return None
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(cert_path, key_path)
+    except (ssl.SSLError, OSError, ValueError) as err:
+        log.error("[companion] TLS material unusable (%s); refusing to start any listener", err)
+        return None
+    return context
 
 
 def make_http_handler(web_root: str) -> type:
@@ -661,7 +1487,70 @@ def make_http_handler(web_root: str) -> type:
     listings are disabled, and index.html and the service worker are sent
     no-cache while hashed assets are not.
     """
-    raise NotImplementedError
+    import http.server
+
+    root = os.path.abspath(web_root)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        # Declared rather than inherited from the system database: a minimal
+        # Raspberry Pi OS image does not know .webmanifest, and iOS silently
+        # refuses to install an app whose manifest arrives as octet-stream.
+        extensions_map = {
+            "": "application/octet-stream",
+            ".html": "text/html; charset=utf-8",
+            ".webmanifest": "application/manifest+json",
+            ".js": "text/javascript",
+            ".mjs": "text/javascript",
+            ".css": "text/css; charset=utf-8",
+            ".json": "application/json",
+            ".png": "image/png",
+            ".svg": "image/svg+xml",
+            ".ico": "image/vnd.microsoft.icon",
+            ".wasm": "application/wasm",
+            ".map": "application/json",
+            ".woff2": "font/woff2",
+        }
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, directory=root, **kwargs)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            # At info this would flood the pwnagotchi log on every asset.
+            log.debug("[companion:http] " + fmt, *args)
+
+        def list_directory(self, path: str) -> None:
+            self.send_error(404, "Not Found")
+            return None
+
+        def translate_path(self, path: str) -> str:
+            resolved = super().translate_path(path)
+            # Belt and braces: the base class normalises away traversal, and
+            # send_head rejects it earlier, but web_root is the boundary and it
+            # is worth enforcing where the answer is computed.
+            if not os.path.abspath(resolved).startswith(root):
+                return os.path.join(root, "index.html")
+            return resolved
+
+        def send_head(self):  # type: ignore[override]
+            raw = self.path.split("?", 1)[0].split("#", 1)[0]
+            if ".." in raw:
+                self.send_error(400, "Bad Request")
+                return None
+            target = self.translate_path(self.path)
+            if not os.path.isfile(target) and "." not in os.path.basename(raw):
+                # Single-page app: a deep link is not a missing file, it is a
+                # route the client will resolve once index.html has loaded.
+                self.path = "/index.html"
+            return super().send_head()
+
+        def end_headers(self) -> None:
+            name = os.path.basename(self.path.split("?", 1)[0])
+            if name in ("", "index.html", "sw.js", "service-worker.js", "registerSW.js"):
+                # Everything else Vite emits is content-hashed and immutable.
+                self.send_header("Cache-Control", "no-cache")
+            super().end_headers()
+
+    return Handler
 
 
 class Listeners:
@@ -681,16 +1570,177 @@ class Listeners:
     never fatal: an unbindable interface must not take down the ones that work.
     """
 
-    def __init__(self, options: Mapping[str, Any], deps: Deps, ssl_context: ssl.SSLContext) -> None:
-        raise NotImplementedError
+    def __init__(
+        self,
+        options: Mapping[str, Any],
+        deps: Deps,
+        ssl_context: ssl.SSLContext,
+        client_handler: Callable[..., Any] | None = None,
+    ) -> None:
+        self._options = options
+        self._deps = deps
+        self._ssl = ssl_context
+        self._client_handler = client_handler
+        # iface -> (ip, http_server, ws_server)
+        self._bound: dict[str, tuple[str, Any, Any]] = {}
+        self._missing_logged: set[str] = set()
+        self._loop: Any = None
+        self._loop_thread: threading.Thread | None = None
 
     def reconcile(self) -> dict[str, str | None]:
         """Runs one reconciliation pass. Returns the interface-to-IP map after it."""
-        raise NotImplementedError
+        result: dict[str, str | None] = {}
+        for iface in list(option(self._options, "interfaces") or []):
+            try:
+                ip = self._deps.resolve_interface_ip(iface)
+            except Exception as err:
+                log.debug("[companion] could not resolve %s: %s", iface, err)
+                ip = None
+            result[iface] = ip
+            current = self._bound.get(iface)
+
+            if ip is None:
+                if current is not None:
+                    log.info("[companion] %s lost its address, closing listeners", iface)
+                    self._close(iface)
+                elif iface not in self._missing_logged:
+                    log.info("[companion] %s has no address yet, waiting", iface)
+                    self._missing_logged.add(iface)
+                continue
+
+            self._missing_logged.discard(iface)
+            if current is not None:
+                if current[0] == ip:
+                    continue
+                log.info("[companion] %s moved %s -> %s, rebinding", iface, current[0], ip)
+                self._close(iface)
+
+            self._open(iface, ip)
+        return result
+
+    def _open(self, iface: str, ip: str) -> None:
+        """Binds both listeners on one address. A failure is logged, never fatal."""
+        if ip in ("0.0.0.0", "::", ""):
+            # Should be unreachable; the resolver returns interface addresses.
+            # Refuse loudly rather than quietly binding every interface (D5).
+            log.error("[companion] refusing to bind wildcard address %r on %s", ip, iface)
+            return
+        http_server = ws_server = None
+        try:
+            http_server = self._serve_http(ip)
+            ws_server = self._serve_ws(ip)
+        except OSError as err:
+            log.warning("[companion] could not bind on %s (%s): %s", ip, iface, err)
+            self._shutdown_http(http_server)
+            return
+        self._bound[iface] = (ip, http_server, ws_server)
+        log.info(
+            "[companion] listening on wss://%s:%s and https://%s:%s",
+            ip,
+            option(self._options, "ws_port"),
+            ip,
+            option(self._options, "http_port"),
+        )
+
+    def _serve_http(self, ip: str) -> Any:
+        """Starts the HTTPS static server on its own thread."""
+        import http.server
+
+        handler = make_http_handler(str(option(self._options, "web_root")))
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        server = Server((ip, int(option(self._options, "http_port"))), handler)
+        server.socket = self._ssl.wrap_socket(server.socket, server_side=True)
+
+        def run() -> None:
+            try:
+                server.serve_forever(poll_interval=0.5)
+            except Exception as err:
+                log.debug("[companion] http server on %s stopped: %s", ip, err)
+
+        threading.Thread(target=run, daemon=True).start()
+        return server
+
+    def _serve_ws(self, ip: str) -> Any:
+        """Starts the WSS server on the shared asyncio loop."""
+        if self._client_handler is None:
+            return None
+        import asyncio
+
+        loop = self._ensure_loop()
+        serve = resolve_ws_serve()
+        coroutine = serve(
+            self._client_handler,
+            ip,
+            int(option(self._options, "ws_port")),
+            ssl=self._ssl,
+        )
+        future = asyncio.run_coroutine_threadsafe(self._start_server(coroutine), loop)
+        return future.result(timeout=10)
+
+    @staticmethod
+    async def _start_server(coroutine: Any) -> Any:
+        """Awaits a serve() coroutine, tolerating both the async-context and plain forms."""
+        server = await coroutine
+        return server
+
+    def _ensure_loop(self) -> Any:
+        """Starts the private asyncio loop on first use."""
+        import asyncio
+
+        if self._loop is not None:
+            return self._loop
+        loop = asyncio.new_event_loop()
+
+        def run() -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        thread = threading.Thread(target=run, daemon=True, name="companion-ws")
+        thread.start()
+        self._loop, self._loop_thread = loop, thread
+        return loop
+
+    def _close(self, iface: str) -> None:
+        """Closes both listeners for one interface."""
+        entry = self._bound.pop(iface, None)
+        if entry is None:
+            return
+        _, http_server, ws_server = entry
+        self._shutdown_http(http_server)
+        self._shutdown_ws(ws_server)
+
+    @staticmethod
+    def _shutdown_http(server: Any) -> None:
+        if server is None:
+            return
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+
+    def _shutdown_ws(self, server: Any) -> None:
+        if server is None or self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(server.close)
+        except Exception:
+            pass
 
     def stop(self) -> None:
         """Closes every listener. Idempotent."""
-        raise NotImplementedError
+        for iface in list(self._bound):
+            self._close(iface)
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except Exception:
+                pass
+            self._loop = None
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +1763,18 @@ class Companion(plugins.Plugin):
     __help__ = __help__
 
     def __init__(self) -> None:
-        raise NotImplementedError
+        self.options: dict[str, Any] = dict(DEFAULTS)
+        self.deps = Deps()
+        self._agent: Any = None
+        self._session: SessionCache | None = None
+        self._gps: GpsResolver | None = None
+        self._battery: BatteryReader | None = None
+        self._router: Router | None = None
+        self._listeners: Listeners | None = None
+        self._clients: set[Any] = set()
+        self._clients_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._last_face: tuple[str, str] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -723,15 +1784,152 @@ class Companion(plugins.Plugin):
         Without a usable certificate this logs an explicit error and starts
         nothing at all.
         """
-        raise NotImplementedError
+        self.options = {**DEFAULTS, **(self.options or {})}
+        log.info("[companion] %s loading (websockets %s)", __version__, websockets_version())
+
+        context = build_ssl_context(
+            str(option(self.options, "tls_cert")), str(option(self.options, "tls_key"))
+        )
+        if context is None:
+            # No plaintext fallback, deliberately. iOS will not install a PWA
+            # over http, so a fallback would not serve the app - it would only
+            # expose an unencrypted socket while looking like it worked (D4).
+            log.error("[companion] no usable TLS material: not starting any listener")
+            return
+
+        self._battery = BatteryReader(self.options, self.deps)
+        self._session = SessionCache(
+            lambda: self._agent, self.deps, float(option(self.options, "session_poll_interval"))
+        )
+        self._gps = GpsResolver(self.options, self.deps, self._session)
+        self._router = Router(
+            self.options,
+            self.deps,
+            lambda: self._agent,
+            self._session,
+            self._gps,
+            self._battery,
+            self._handshake_store,
+        )
+        self._listeners = Listeners(self.options, self.deps, context, self._serve_client)
+        self._listeners.reconcile()
+
+    # -- internals ---------------------------------------------------------
+
+    def _handshake_store(self) -> HandshakeStore:
+        """A store over the configured capture directory, read fresh each time."""
+        directory = ""
+        try:
+            directory = self._agent._config["bettercap"]["handshakes"]
+        except Exception:
+            directory = ""
+        return HandshakeStore(directory)
+
+    async def _serve_client(self, websocket: Any, *_: Any) -> None:
+        """One WebSocket connection.
+
+        Takes *_ so it works with both websockets handler signatures: the legacy
+        one passes (websocket, path), the modern one passes (websocket) alone.
+        """
+        import asyncio
+
+        authenticated = not (self._router and self._router.auth_required)
+        deadline = self.deps.now() + float(option(self.options, "auth_timeout"))
+        with self._clients_lock:
+            self._clients.add(websocket)
+        try:
+            if self._router is not None:
+                for message in self._router.initial_burst():
+                    await websocket.send(json.dumps(message))
+            async for raw in websocket:
+                if not authenticated and self.deps.now() > deadline:
+                    await websocket.close(code=1008, reason="authentication timeout")
+                    return
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    await websocket.send(
+                        json.dumps(error_envelope("bad_request", "invalid JSON", self.deps.now()))
+                    )
+                    continue
+                if not isinstance(parsed, Mapping):
+                    await websocket.send(
+                        json.dumps(error_envelope("bad_request", "not an object", self.deps.now()))
+                    )
+                    continue
+                if self._router is None:
+                    continue
+                replies = self._router.handle(parsed, authenticated)
+                if parsed.get("type") == "auth" and replies and replies[0].get("type") == "acknowledgment":
+                    authenticated = True
+                for reply in replies:
+                    await websocket.send(json.dumps(reply))
+                if any(r.get("type") == "error" and r["data"]["code"] == "unauthorized" for r in replies):
+                    await websocket.close(code=1008, reason="unauthorized")
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            log.debug("[companion] client disconnected: %s", err)
+        finally:
+            with self._clients_lock:
+                self._clients.discard(websocket)
+
+    def broadcast(self, message: Mapping[str, Any]) -> None:
+        """Sends one message to every connected client. A dead client is dropped."""
+        if not message:
+            return
+        payload = json.dumps(message)
+        with self._clients_lock:
+            targets = list(self._clients)
+        listeners = self._listeners
+        if listeners is None or listeners._loop is None:
+            return
+        import asyncio
+
+        for client in targets:
+            try:
+                asyncio.run_coroutine_threadsafe(client.send(payload), listeners._loop)
+            except Exception:
+                with self._clients_lock:
+                    self._clients.discard(client)
+
+    def _background(self) -> None:
+        """Refreshes the session and gpsd caches, and reconciles the listeners.
+
+        Everything slow lives here so that no request handler ever blocks on an
+        HTTP call to bettercap or a gpsd socket.
+        """
+        poll = float(option(self.options, "session_poll_interval"))
+        rebind = float(option(self.options, "rebind_interval"))
+        next_rebind = 0.0
+        while not self._stop.is_set():
+            try:
+                if self._session is not None:
+                    self._session.refresh()
+                if self._gps is not None:
+                    self._gps.refresh_gpsd()
+                now = self.deps.now()
+                if self._listeners is not None and now >= next_rebind:
+                    self._listeners.reconcile()
+                    next_rebind = now + rebind
+            except Exception:
+                log.exception("[companion] background pass failed")
+            self._stop.wait(poll)
 
     def on_ready(self, agent: Any) -> None:
         """Captures the agent and starts the background refresh and rebind threads."""
-        raise NotImplementedError
+        self._agent = agent
+        if self._session is not None:
+            self._session.refresh()
+        self.deps.spawn(self._background)
 
     def on_unload(self, ui: Any = None) -> None:
         """Stops the threads and closes every listener."""
-        raise NotImplementedError
+        self._stop.set()
+        if self._listeners is not None:
+            self._listeners.stop()
+            self._listeners = None
 
     # -- pushes ------------------------------------------------------------
 
@@ -741,36 +1939,87 @@ class Companion(plugins.Plugin):
         Both argument shapes are accepted: this hook is fired from two paths with
         different types (SPEC F20).
         """
-        raise NotImplementedError
+        if self._router is None or self._gps is None:
+            return
+        try:
+            gps = self._gps.current()
+            if gps.get("fix"):
+                self._handshake_store().write_sidecar(filename, gps, self.deps.now())
+        except Exception:
+            log.exception("[companion] could not write the GPS sidecar")
+        try:
+            self.broadcast(
+                self._router.on_handshake_message(filename, access_point, client_station)
+            )
+        except Exception:
+            log.exception("[companion] could not push the handshake")
 
     def on_peer_detected(self, agent: Any, peer: Any) -> None:
         """Pushes `peer_detected`."""
-        raise NotImplementedError
+        if self._router is None:
+            return
+        try:
+            self.broadcast(self._router.push("peer_detected", normalise_peer(peer)))
+        except Exception:
+            log.exception("[companion] could not push peer_detected")
 
     def on_wifi_update(self, agent: Any, access_points: Iterable[Mapping[str, Any]]) -> None:
         """Pushes `wifi_update`."""
-        raise NotImplementedError
+        if self._router is None:
+            return
+        try:
+            mapped = [map_access_point(ap) for ap in (access_points or []) if isinstance(ap, Mapping)]
+            self.broadcast(self._router.push("wifi_update", mapped))
+        except Exception:
+            log.exception("[companion] could not push wifi_update")
 
     def on_channel_hop(self, agent: Any, channel: int) -> None:
         """Pushes `channel_hop`."""
-        raise NotImplementedError
+        if self._router is None:
+            return
+        try:
+            self.broadcast(self._router.push("channel_hop", {"channel": int(channel)}))
+        except Exception:
+            log.exception("[companion] could not push channel_hop")
 
     def on_ui_update(self, ui: Any) -> None:
         """Pushes `face_status` only when the face or status text actually changed."""
-        raise NotImplementedError
+        if self._router is None:
+            return
+        try:
+            current = self._router.face_status()
+        except Exception:
+            return
+        signature = (current.get("face", ""), current.get("status", ""))
+        if signature == self._last_face:
+            # This hook fires on every display refresh. Pushing unchanged text
+            # down a Bluetooth link several times a second is pure waste.
+            return
+        self._last_face = signature
+        self.broadcast(self._router.push("face_status", current))
+
+    def _push_mood(self, mood: str) -> None:
+        """Pushes a status_change for one of the mood hooks."""
+        if self._router is None:
+            return
+        try:
+            status = self._router.face_status().get("status", "")
+            self.broadcast(self._router.push("status_change", {"status": status, "mood": mood}))
+        except Exception:
+            log.exception("[companion] could not push status_change")
 
     def on_bored(self, agent: Any) -> None:
         """Pushes `status_change` with mood "bored"."""
-        raise NotImplementedError
+        self._push_mood("bored")
 
     def on_excited(self, agent: Any) -> None:
         """Pushes `status_change` with mood "excited"."""
-        raise NotImplementedError
+        self._push_mood("excited")
 
     def on_lonely(self, agent: Any) -> None:
         """Pushes `status_change` with mood "lonely"."""
-        raise NotImplementedError
+        self._push_mood("lonely")
 
     def on_sad(self, agent: Any) -> None:
         """Pushes `status_change` with mood "sad"."""
-        raise NotImplementedError
+        self._push_mood("sad")

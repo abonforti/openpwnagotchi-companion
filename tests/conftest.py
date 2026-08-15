@@ -350,6 +350,7 @@ def options(handshake_dir, tmp_path) -> dict[str, Any]:
         "save_gps_log": False,
         "gps_log_path": str(tmp_path / "gps.log"),
         "mirror_auto_interval": 5,
+        "keepalive_interval": 20,
     }
 
 
@@ -561,8 +562,23 @@ def bind_recorder(monkeypatch) -> BindRecorder:
 
 
 @pytest.fixture
-def free_port() -> int:
-    """A TCP port that was free a moment ago on the loopback interface."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+def free_ports() -> tuple[int, int]:
+    """Two ports, for the WSS and HTTPS listeners, free a moment ago.
+
+    Both come from the kernel. An earlier version handed out one ephemeral port
+    and left the caller to use `port + 1` for the second listener, which the
+    kernel never promised anything about: it held up in a single file and failed
+    only in a full run, once enough listeners had come and gone for something to
+    be sitting on the neighbour.
+
+    Both probes ask for port 0, which `BindRecorder` deliberately ignores as
+    harness noise. Reserving a concrete port here instead would show up as a
+    bind the plugin never made, and the tests that assert a broken certificate
+    binds nothing would fail on this fixture's own socket.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as first, socket.socket(
+        socket.AF_INET, socket.SOCK_STREAM
+    ) as second:
+        first.bind(("127.0.0.1", 0))
+        second.bind(("127.0.0.1", 0))
+        return first.getsockname()[1], second.getsockname()[1]

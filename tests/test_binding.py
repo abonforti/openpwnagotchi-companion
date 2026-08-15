@@ -33,14 +33,14 @@ def ssl_context(tls_material):
 
 
 @pytest.fixture
-def bind_options(tmp_path, tls_material, free_port):
+def bind_options(tmp_path, tls_material, free_ports):
     web_root = tmp_path / "web"
     web_root.mkdir()
     (web_root / "index.html").write_text("<!doctype html><title>t</title>")
     return {
         "interfaces": ["bnep0", "usb0"],
-        "ws_port": free_port,
-        "http_port": free_port + 1,
+        "ws_port": free_ports[0],
+        "http_port": free_ports[1],
         "tls_cert": str(tls_material["cert"]),
         "tls_key": str(tls_material["key"]),
         "web_root": str(web_root),

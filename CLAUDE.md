@@ -56,6 +56,16 @@ git config core.hooksPath .githooks
 git config companion.denylist /path/to/your/denylist.txt   # outside this repo
 ```
 
+## Tickets
+
+**Every problem becomes a GitHub issue.** A defect, a gap, an audit finding, a dead link, a
+TODO left behind: if it is worth mentioning, it is worth a ticket. Nothing lives only in a
+conversation, because a conversation is not a backlog and neither of us will remember.
+
+Group related work into one issue rather than filing several near-duplicates. Label it, put it
+in a milestone if it belongs to one, and give it acceptance criteria that someone else could
+check.
+
 ## Rules
 
 - Present a plan and get explicit approval before non-trivial code. The owner drives plan→code.

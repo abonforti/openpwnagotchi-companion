@@ -987,6 +987,19 @@ Routing is hand-rolled in `lib/router.ts` against the History API. Seven static 
 parameters, no nesting and no guards do not justify a routing library, and every dependency here
 is paid for over a Bluetooth link.
 
+Two consequences of using real history, both of which decide behaviour the user notices:
+
+- **A path that matches no route resolves to the Dashboard and the address bar is rewritten to
+  `/`**, with `replaceState` rather than `pushState`. The static server hands the shell exactly
+  those URLs (§2.15, D14), and leaving the address bar on the unmatched path makes the URL and
+  the view disagree for the rest of the session: a later tap on Dashboard pushes `/`, so Back
+  returns to the unknown path, which resolves to the Dashboard again and reads as a dead Back
+  button.
+- **Choosing the entry for the view already showing is not a navigation.** It changes nothing and
+  pushes no history entry, so Back still leads out of the view rather than replaying it. On a
+  phone the bar is easy to hit twice, and a router that stacked a duplicate would need two Backs
+  to leave a view the user only entered once.
+
 This is therefore site navigation and not a tab control. The bar is a `<nav>` whose current
 entry carries `aria-current="page"`; because `aria-current` belongs on a link, the anchors above
 are what makes the attribute correct rather than decorative. The fifth slot opens a dialog

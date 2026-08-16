@@ -19,7 +19,7 @@ from plugin import companion
 from pwnagotchi.mesh.peer import Peer
 
 FULL_ADVERTISEMENT = {
-    "name": "sn0wtest",
+    "name": "TestPeer_001",
     "identity": "aabbccddeeff00112233445566778899",
     "version": "2.9.5.6",
     "face": "(⌐■_■)",
@@ -58,9 +58,9 @@ def make_peer(**overrides):
 def test_every_field_maps():
     mapped = companion.normalise_peer(make_peer())
 
-    assert mapped["name"] == "sn0wtest"
+    assert mapped["name"] == "TestPeer_001"
     assert mapped["fingerprint"] == "aabbccddeeff00112233445566778899"
-    assert mapped["fullName"] == "sn0wtest@aabbccddeeff00112233445566778899"
+    assert mapped["fullName"] == "TestPeer_001@aabbccddeeff00112233445566778899"
     assert mapped["rssi"] == -61
     assert mapped["channel"] == 11
     assert mapped["encounters"] == 3
@@ -203,7 +203,7 @@ def test_one_exploding_accessor_does_not_lose_the_others():
     mapped = companion.normalise_peer(Hostile(FULL_ADVERTISEMENT, rssi=-55))
 
     assert mapped["face"] is None
-    assert mapped["name"] == "sn0wtest"
+    assert mapped["name"] == "TestPeer_001"
     assert mapped["rssi"] == -55
 
 
@@ -217,7 +217,7 @@ def test_peers_are_read_from_the_underscore_dict(router_factory, agent_factory):
 
     entries = router_factory(agent).peers()
 
-    assert {entry["name"] for entry in entries} == {"sn0wtest", "other"}
+    assert {entry["name"] for entry in entries} == {"TestPeer_001", "other"}
 
 
 def test_no_peers_is_an_empty_list_not_a_null(router):
@@ -237,4 +237,4 @@ def test_peer_detected_carries_the_same_shape(router):
     message = router.push("peer_detected", companion.normalise_peer(make_peer()))
 
     assert message["type"] == "peer_detected"
-    assert message["data"]["fullName"] == "sn0wtest@aabbccddeeff00112233445566778899"
+    assert message["data"]["fullName"] == "TestPeer_001@aabbccddeeff00112233445566778899"

@@ -28,6 +28,18 @@ updates:
         dependency-type: development
         patterns:
           - "*"
+    ignore:
+      # TypeScript 7 is held back by svelte-check, not by us. Its latest release
+      # declares `typescript: "^5.0.0 || ^6.0.0"`, so a bump to 7 breaks
+      # `npm run check` on the first pull request that takes it, which is
+      # precisely what happened.
+      #
+      # The pin is on the major only: 6.x patches and minors still arrive.
+      # Remove this block when svelte-check declares support for 7, and let the
+      # bump come through normally rather than being applied by hand.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
 
   # Workflow actions are pinned to major tags today. A tag is mutable, so the
   # supply chain of CI rests on whoever can move it; pinning to a full-length

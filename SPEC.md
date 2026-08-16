@@ -726,7 +726,24 @@ On `on_handshake`, write a sidecar next to the capture.
 `on_handshake`, `on_peer_detected`, `on_wifi_update`, `on_channel_hop`, and the mood hooks
 (`on_bored` / `on_excited` / `on_lonely` / `on_sad` → `status_change`) broadcast to connected
 clients through the async queue, as pwnios does. `on_ui_update` diffs face/status and pushes
-`face_status` (text only — no PNG). Keep the heartbeat/keepalive machinery from pwnios.
+`face_status` (text only — no PNG). Both texts come from `agent.view().get('face')` and
+`.get('status')` (F28), which return the values themselves rather than the widgets; an absent
+key answers `None` and is sent as an empty string, because the schema types both fields as
+strings. Keep the heartbeat/keepalive machinery from pwnios.
+
+Three consequences of that source, stated because each was inferred once and should not have to
+be inferred again:
+
+- **`status_change.status` is the same view status**, not a separate string. The mood hooks carry
+  a mood and the text the unit is displaying at that moment, and the view is the only source
+  §11 makes available for it.
+- **A view that cannot be read yields empty strings, never a missing field or a null.** That
+  covers `Agent.view()` raising and `View.get` raising as well as the absent key above. The
+  schema requires three strings, so the alternative is a message that fails its own contract at
+  the moment the unit is already misbehaving.
+- **The rule in §2.5 that `agent.session()` must not be called on the request path is general**,
+  not local to `stats`. It is written under that payload because that is where it was first
+  violated upstream, but it binds every handler and every hook.
 
 **`on_handshake` has two argument shapes.** The agent fires it from two code paths (F20):
 
@@ -1842,6 +1859,7 @@ two allowlists drifting apart is the failure the checker exists to prevent, one 
 | F23 | Custom plugins are loaded from `config['main']['custom_plugins']`, whose default is `/usr/local/share/pwnagotchi/custom-plugins/`. The key is optional: `load_from_path` is called only `if 'custom_plugins' in config['main']` | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
 | F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |
 | F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`, which is **not** the `defaults.toml` value. The two disagree, so the directory must be resolved from the running configuration and never hardcoded | `stage3/06-patches/files/profile` vs `pwnagotchi/defaults.toml:27` |
+| F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked in full**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `v2.9.5.6` or `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
 
 ### 11.1 Explicitly forbidden
 

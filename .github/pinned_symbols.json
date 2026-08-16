@@ -20,7 +20,20 @@
     "Not covered, deliberately: F12 lives in another repository",
     "(abonforti/pwnagotchi-plugins) and is a soft dependency; F22 is a historical",
     "note about the project this forks and describes bugs, not a dependency.",
-    "Every other fact in section 11 has at least one entry here."
+    "Every other fact in section 11 has at least one entry here.",
+    "",
+    "F28 is the reason an entry can now assert an absence. What agent.view() hands",
+    "back on a unit is a pwnagotchi.ui.display.Display, not a bare View, so the",
+    "delegation chain F28b and F28c pin holds only while Display declares no get of",
+    "its own - an override would intercept every read before View.get was reached.",
+    "F28d asserts that absence.",
+    "",
+    "It needed a fourth entry, and the id convention used to stop at c:",
+    "tests/tools/test_pinned_facts mapped an entry back to its section 11 fact with",
+    "id.rstrip('abc'). That capped a fact at three files for no reason anyone chose,",
+    "and would have left this half of F28 checked by review rather than by anything",
+    "that runs. It now matches the F-number instead, so a fact may have as many",
+    "entries as it has files to rest on."
   ],
   "facts": [
     {
@@ -306,6 +319,46 @@
         "pip install"
       ],
       "why": "the reason the installed websockets version is a property of a unit rather than of a release: the unit reinstalls after the image is built, so no observed version generalises and the section 2.3.2 shim cannot be dropped"
+    },
+    {
+      "id": "F28a",
+      "file": "pwnagotchi/agent.py",
+      "kind": "methods",
+      "class": "Agent",
+      "names": [
+        "view"
+      ],
+      "why": "face_status calls agent.view(); a rename leaves the plugin reporting an empty face for ever"
+    },
+    {
+      "id": "F28b",
+      "file": "pwnagotchi/ui/view.py",
+      "kind": "contains_all",
+      "text": [
+        "def get(self, key)",
+        "return self._state.get(key)",
+        "'face': Text(",
+        "'status': Text("
+      ],
+      "why": "the reader the plugin calls, its body, and the two keys it asks for. The body is pinned and not just the signature: _view_text has no widget-unwrapping branch, so a View.get that stopped delegating to State.get and handed back the element would keep this signature, keep both keys, and turn every face into an empty string on a healthy unit. If either key leaves the initial state, get answers None and face_status goes silently blank"
+    },
+    {
+      "id": "F28c",
+      "file": "pwnagotchi/ui/state.py",
+      "kind": "contains_all",
+      "text": [
+        "return self._state[key].value if key in self._state else None"
+      ],
+      "why": "the return contract, not just the name: the value rather than the widget, and None for an absent key. _view_text has no widget-unwrapping branch because this line says it cannot happen"
+    },
+    {
+      "id": "F28d",
+      "file": "pwnagotchi/ui/display.py",
+      "kind": "absent",
+      "text": [
+        "def get"
+      ],
+      "why": "agent.view() returns a Display, not a bare View, so the delegation chain F28b and F28c pin only holds while Display adds no get of its own. An override here would intercept every read before View.get is reached, and the plugin would never know"
     }
   ]
 }

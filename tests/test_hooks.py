@@ -34,6 +34,7 @@ from referencing.jsonschema import DRAFT202012
 
 from plugin import companion
 from pwnagotchi.mesh.peer import Peer
+from pwnagotchi.ui.view import View
 
 # Synthetic throughout: a documentation MAC, a made-up SSID and a position in
 # the South Atlantic. Fixtures are published, and a real BSSID with a real
@@ -174,43 +175,28 @@ def hooked(options, harness, agent, tls_material, handshake_dir, tmp_path):
     plugin.on_unload()
 
 
-class FakeView:
-    """The UI view, reduced to the text lookup a face status needs.
+def a_view(face: str, status: str) -> View:
+    """The UI view a display refresh presents, holding the two keys the initial
+    state always carries (F28).
 
-    `get` returns plain strings. The real view returns widget objects whose text
-    lives on `.value`, and both shapes are in play across pwnagotchi versions;
-    the plugin is expected to tolerate either, and the widget shape gets its own
-    test below.
+    `get` returns the value and never a widget: `State.get` unwraps the widget
+    itself, so no caller on a device can ever observe one. A fake that offered
+    the widget shape would make a widget-unwrapping branch look tested while
+    being unreachable on hardware.
     """
-
-    def __init__(self, face: str, status: str) -> None:
-        self._state = {"face": face, "status": status}
-
-    def get(self, key: str):
-        return self._state.get(key)
-
-
-class Widget:
-    def __init__(self, value) -> None:
-        self.value = value
-
-
-class WidgetView(FakeView):
-    def get(self, key: str):
-        return Widget(self._state.get(key))
+    return View({"face": face, "status": status})
 
 
 def show(hooked: Hooked, view) -> None:
     """Presents a face/status to the plugin the way a display refresh does.
 
     SPEC 2.13 says `on_ui_update` "diffs face/status" and does not say where it
-    reads them from; the hook is handed the view, and the reply to
-    `get_face_status` has to come from somewhere the request path can reach. The
-    view is therefore offered through both channels so that this test states the
-    diffing contract and nothing about the plumbing. See the ambiguity note in
-    the suite report.
+    reads them from; the hook is handed the view, and F28 pins `agent.view()` as
+    a source the reply to `get_face_status` can reach on its own. The view is
+    therefore offered through both channels, so these tests state the diffing
+    contract and nothing about which of the two the plugin chose.
     """
-    hooked.agent.view = lambda: view
+    hooked.agent._ui_view = view
     hooked.plugin.on_ui_update(view)
 
 
@@ -468,7 +454,7 @@ def test_a_channel_hop_does_not_round_trip_through_the_session(hooked):
 
 
 def test_the_first_display_refresh_pushes_the_face(hooked, check_message):
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
     data = check_message(hooked.only("face_status"), "face_status")
     assert data["face"] == "(⌐■_■)"
@@ -480,9 +466,9 @@ def test_an_unchanged_face_is_not_pushed_again(hooked):
     """The hook fires on every display refresh. Pushing each one would put a
     face on the wire several times a second over a Bluetooth PAN link that SPEC
     9 already asks to keep quiet, and none of them would be news."""
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
     assert hooked.types() == ["face_status"]
 
@@ -497,8 +483,8 @@ def test_an_unchanged_face_is_not_pushed_again(hooked):
     ids=["face", "status", "both"],
 )
 def test_a_changed_face_or_status_is_pushed(hooked, check_message, second, changed):
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
-    show(hooked, FakeView(*second))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view(*second))
 
     assert hooked.types() == ["face_status", "face_status"], (
         f"the {changed} changed and no second face_status went out"
@@ -507,12 +493,14 @@ def test_a_changed_face_or_status_is_pushed(hooked, check_message, second, chang
     assert (data["face"], data["status"]) == second
 
 
-def test_a_face_carried_by_a_widget_reads_the_same(hooked, check_message):
-    show(hooked, WidgetView("(⌐■_■)", "Hi, I'm TestUnit"))
+def test_a_key_the_view_never_set_is_pushed_as_empty_text(hooked, check_message):
+    """F28: `State.get` answers `None` for an absent key, and the schema requires
+    a string. The key that *is* present must still make it out."""
+    show(hooked, View({"face": "(⌐■_■)"}))
 
     data = check_message(hooked.only("face_status"), "face_status")
     assert data["face"] == "(⌐■_■)"
-    assert data["status"] == "Hi, I'm TestUnit"
+    assert data["status"] == ""
 
 
 def test_a_face_the_view_cannot_supply_is_empty_text_not_an_image(hooked, check_message):
@@ -546,7 +534,7 @@ def test_a_face_that_cannot_be_read_at_all_pushes_nothing(hooked):
             raise RuntimeError("the agent is going away")
 
     hooked.plugin.on_ready(Collapsing())
-    hooked.plugin.on_ui_update(FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    hooked.plugin.on_ui_update(a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
     assert hooked.sent == []
 
@@ -585,10 +573,10 @@ def test_a_face_lost_to_a_failed_push_goes_out_on_the_next_refresh(hooked, check
     flaky = FlakyBroadcast(failures=1)
     hooked.plugin.broadcast = flaky
 
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
     assert flaky.sent == [], "the fixture did not fail the first push"
 
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
     assert len(flaky.sent) == 1, "the face that failed to send was never retried"
     data = check_message(flaky.sent[0], "face_status")
@@ -604,8 +592,8 @@ def test_a_face_that_was_delivered_is_not_sent_twice(hooked):
     steady = FlakyBroadcast(failures=0)
     hooked.plugin.broadcast = steady
 
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
-    show(hooked, FakeView("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+    show(hooked, a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
     assert len(steady.sent) == 1, "an unchanged face went out twice"
 
@@ -617,11 +605,28 @@ def test_a_face_that_was_delivered_is_not_sent_twice(hooked):
 
 @pytest.mark.parametrize("mood", MOODS)
 def test_each_mood_hook_pushes_its_own_mood(hooked, check_message, mood):
+    """The `status` half is the text the unit is showing right now (F28): the
+    mood names the event, the status is what the display says about it, and a
+    client renders the two together."""
+    hooked.agent._ui_view = View({"face": "(-__-)", "status": "I'm bored ..."})
+
     getattr(hooked.plugin, f"on_{mood}")(hooked.agent)
 
     data = check_message(hooked.only("status_change"), "status_change")
     assert data["mood"] == mood
-    assert isinstance(data["status"], str)
+    assert data["status"] == "I'm bored ..."
+
+
+def test_a_mood_carries_the_status_the_view_is_showing(hooked, check_message):
+    """The complement of the parametrised case: a status that is the same string
+    every time would satisfy it, and would tell the user nothing."""
+    hooked.agent._ui_view = View({"face": "(⇀‿‿↼)", "status": "Hack the planet"})
+
+    hooked.plugin.on_excited(hooked.agent)
+
+    assert check_message(hooked.only("status_change"), "status_change")["status"] == (
+        "Hack the planet"
+    )
 
 
 def test_the_mood_hooks_are_distinguishable(hooked):
@@ -645,7 +650,7 @@ def hook_calls(plugin, agent, capture):
         "on_peer_detected": lambda: plugin.on_peer_detected(agent, Peer({})),
         "on_wifi_update": lambda: plugin.on_wifi_update(agent, [{"mac": AP_MAC}]),
         "on_channel_hop": lambda: plugin.on_channel_hop(agent, 11),
-        "on_ui_update": lambda: plugin.on_ui_update(FakeView("(⌐■_■)", "status")),
+        "on_ui_update": lambda: plugin.on_ui_update(a_view("(⌐■_■)", "status")),
         "on_bored": lambda: plugin.on_bored(agent),
         "on_excited": lambda: plugin.on_excited(agent),
         "on_lonely": lambda: plugin.on_lonely(agent),

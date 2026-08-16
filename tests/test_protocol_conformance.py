@@ -364,9 +364,33 @@ def test_the_frame_is_read_under_the_lock(router, frame_file, stub_ui_web):
     assert not stub_ui_web.frame_lock.locked()
 
 
-def test_the_face_is_text_and_never_an_image(router):
-    face = router.face_status()
+def test_the_face_is_text_and_never_an_image(router_factory, agent_factory):
+    """D11 and F28 together: the text the view holds, carried through as text.
 
-    assert set(face) == {"face", "status", "mode"}
-    assert isinstance(face["face"], str)
-    assert "png" not in repr(face).lower()
+    The values are given explicitly rather than taken from the fixture defaults
+    so that this states what came out, not merely that three keys were present -
+    the shape check alone was satisfied by two empty strings for as long as the
+    stub had no view at all.
+    """
+    agent = agent_factory(face="(⌐■_■)", status="Hi, I'm TestUnit")
+
+    face = router_factory(agent).face_status()
+
+    assert face == {"face": "(⌐■_■)", "status": "Hi, I'm TestUnit", "mode": "AUTO"}
+
+
+def test_no_face_status_leaves_here_empty(produced):
+    """Schema conformance cannot see this: `""` is a perfectly valid string.
+
+    A `face_status` whose fields are empty validates, reports as covered, and
+    shows the user a blank card - which is what every one of these messages did
+    while the agent fake had no view to read.
+    """
+    face_statuses = [
+        message["data"] for message in produced if message["type"] == "face_status"
+    ]
+
+    assert face_statuses, "the router produced no face_status at all"
+    for data in face_statuses:
+        assert data["face"], "a face_status went out with an empty face"
+        assert data["status"], "a face_status went out with an empty status"

@@ -927,7 +927,65 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
   ```
 - `manifest.webmanifest`: `display: standalone`, `scope: "/"`, `start_url: "/"`, dark
   `theme_color` / `background_color`, name/short_name, 192 + 512 icons including
-  `purpose: "maskable"`.
+  `purpose: "maskable"`, and **no `orientation` key** (§4.5.1: locking it either does nothing on
+  iOS or removes the landscape rail from the installed app while leaving it in the browser).
+#### 4.2.1 Two iOS facts measured on the device, not assumed
+
+Both were established on an iPhone 17 Pro running the app from the Home Screen, with a
+diagnostics page reporting the engine's own numbers. Both contradict what the obvious code would
+assume, and both cost a visible defect when they are not known.
+
+**`(display-mode: standalone)` does not match on iOS, even when the app is standalone.** The
+device reported `navigator.standalone === true` and the media query `false` in the same frame.
+Any CSS or JS conditioned on that media query is silently inert on the only platform this app
+targets. **Use `navigator.standalone`**, and treat the media query as a progressive enhancement
+for other engines.
+
+**In standalone with `black-translucent`, the viewport is shorter than the screen by exactly the
+top inset.** Measured in portrait: screen 402x874, `window.innerHeight` 812, top inset 62, and
+874 minus 62 is 812. The web view is placed at the top of the screen but reports a height that
+excludes the status bar, so a strip the height of the status bar is left at the bottom that the
+page cannot paint. It shows as a dead band under the navigation bar.
+
+`position: fixed; inset: 0` is not at fault: it fills the viewport the engine declares, which is
+the correct behaviour and the reason it was chosen over viewport units. The engine declares one
+shorter than the screen.
+
+The lever is in the units, which disagree only in this case: in that same frame `100vh` measured
+**874**, the full screen, while `100svh` and `100dvh` measured 812. So:
+
+> **In standalone, and only in standalone, the shell is `height: 100vh` instead of being pinned
+> by `inset: 0`.** In a browser tab it stays `inset: 0`, because there `100vh` is the large
+> viewport and the bottom bar would sit under Safari's toolbar, which is the bug that made
+> viewport units unusable in the first place.
+
+The condition is `navigator.standalone`, per the fact above.
+
+Landscape is unaffected and was measured too: `100vh`, `100svh`, `100lvh` and `100dvh` all
+reported 402, the fixed box filled 874x402, and the gap was zero. Note that landscape carries a
+**62px inset on both the left and the right**, not only on the leading edge, so content must
+clear the trailing inset as well as the rail clearing the leading one.
+
+**Both were then confirmed on a second device**, an iPhone SE at 320x568 running iOS 15.8, which
+matters because it is notchless and a different iOS major. Same behaviour, same arithmetic:
+`100vh` measured 568, the full screen, while `100svh` and `100dvh` measured 548, and the top
+inset was 20px. 568 minus 20 is 548, exactly as 874 minus 62 was 812. `navigator.standalone` was
+`true` and the media query `false` there too.
+
+The SE also settles a question the first measurement could not. On the 17 Pro the top inset and
+the missing strip were both 62px, so the two candidate explanations, "the inset" and "the status
+bar", produced the same number and could not be told apart. A notchless device separates them:
+its top inset is **not** zero, it is 20px, the height of its status bar. So the inset generalises
+to the status bar rather than to the notch, and the explanation above holds rather than being a
+coincidence of one device.
+
+Landscape was clean on both: every unit agreed, the fixed box filled the viewport, and no strip
+was left over. The anomaly is portrait-only.
+
+Neither fact is reachable by an automated test: jsdom has no viewport, and no browser engine can
+be put into iOS standalone mode. They are verified on hardware, and this section is where that
+verification is recorded so it is not re-derived by the next person to see a black band.
+
 - Global CSS honours safe areas via `env(safe-area-inset-*)`; a sticky top bar accounts for the
   Dynamic Island, a bottom **navigation** bar for the home indicator, and in landscape the
   leading-edge rail for `inset-left`/`inset-right` (§4.5). It is deliberately not called a tab
@@ -986,6 +1044,19 @@ Routing is hand-rolled in `lib/router.ts` against the History API. Seven static 
 parameters, no nesting and no guards do not justify a routing library, and every dependency here
 is paid for over a Bluetooth link.
 
+Two consequences of using real history, both of which decide behaviour the user notices:
+
+- **A path that matches no route resolves to the Dashboard and the address bar is rewritten to
+  `/`**, with `replaceState` rather than `pushState`. The static server hands the shell exactly
+  those URLs (§2.15, D14), and leaving the address bar on the unmatched path makes the URL and
+  the view disagree for the rest of the session: a later tap on Dashboard pushes `/`, so Back
+  returns to the unknown path, which resolves to the Dashboard again and reads as a dead Back
+  button.
+- **Choosing the entry for the view already showing is not a navigation.** It changes nothing and
+  pushes no history entry, so Back still leads out of the view rather than replaying it. On a
+  phone the bar is easy to hit twice, and a router that stacked a duplicate would need two Backs
+  to leave a view the user only entered once.
+
 This is therefore site navigation and not a tab control. The bar is a `<nav>` whose current
 entry carries `aria-current="page"`; because `aria-current` belongs on a link, the anchors above
 are what makes the attribute correct rather than decorative. The fifth slot opens a dialog
@@ -999,6 +1070,17 @@ an entry; focus trapped while open and **returned to the More control on close**
 rest, so its controls are neither focusable nor in the accessibility tree. Focus that is trapped
 but never returned is the most common defect in this pattern and the one screen-reader users
 notice first.
+
+Two boundaries in that paragraph were left unsaid and cost a round of disagreement between the
+implementation and the tests written against it, so they are pinned here:
+
+- **`inert` may sit on the dialog or on the container around it.** Inertness inherits, so a
+  wrapper carrying the attribute makes the dialog inside it inert just as effectively. Tests
+  assert the sheet is inert, not which element holds the attribute.
+- **The focus trap covers the modal container, not the dialog element alone.** A close
+  affordance such as a backdrop button legitimately lives beside the dialog rather than inside
+  it, and it belongs in the tab cycle: a keyboard user reaching the end of the entries should
+  find the way out rather than wrap silently.
 
 **Landscape.** The rail applies at exactly `@media (orientation: landscape) and (max-height:
 560px)`; landscape taller than that keeps the bottom bar. The word "landscape" alone is not a
@@ -1033,7 +1115,53 @@ Log keeps its buffer and scroll position, rather than re-initialising on every v
 memory for seven views; the alternative is a Leaflet instance that re-centres every time the user
 checks something else, which reads as a bug.
 
-### 4.5.1 Views
+### 4.5.1 Presentation and safety decisions
+
+Each of these was decided by the owner while reviewing an interactive mockup. They are recorded
+here because a decision that lives only in a conversation is one the next agent will reinvent,
+and because several of them have a plausible wrong answer that costs a rebuild to discover.
+
+**Theme.** `prefers-color-scheme` is followed by default. An explicit control offers light, dark
+and follow-system, and **the forced choice persists across launches**; follow-system is the
+initial state, not a fallback for a missing value.
+
+**Orientation is not locked.** `manifest.webmanifest` must not carry `"orientation"`. The
+original intent was landscape for the Log only and portrait elsewhere, and that is not
+achievable: `ScreenOrientation.lock()` is unavailable in iOS Safari, and the manifest field is
+largely ignored there, so a lock either does nothing or removes the rail from the installed app
+while leaving it in the browser. Orientation is handled by layout instead, which is what §4.5
+already specifies.
+
+**Density.** The compact switch changes layout only, never which values exist. The goal is an
+app that is not a long scroll, so where a detail is secondary it moves behind a disclosure or a
+popover, and where it answers "is my unit all right", it stays visible without interaction. A
+density control that hides a value the operator is looking for has failed at the thing it was
+added for.
+
+**Two-step confirm** applies to: mode switch, reboot, shutdown (D9, D12) and **leaving PASV**
+(§4.5.2). Entering PASV already confirms; leaving it did not, and the asymmetry was accidental.
+
+**Ports are diagnostics, not settings.** The Settings view shows the negotiated ports read-only.
+Making them editable means the plugin accepts writes to its own configuration and then restarts
+to apply them, which drops the socket carrying the confirmation: the operation destroys the
+channel that would report whether it worked. Ports are changed in `config.toml` on the unit.
+
+**Writing to the unit sits behind an Advanced section with a disclaimer** that says plainly that
+a bad edit can leave the pwnagotchi unbootable, and that recovery then means pulling the SD card
+and using a reader to read logs or roll back. That is the real recovery path and the disclaimer
+should name it rather than gesture at risk.
+
+**Host validation accepts IPv4 only.** Not a simplification: the plugin binds IPv4 literals
+only (D5.1, with the `/24` prefix floor), and `gen-cert.sh` refuses IPv6 outright because a
+certificate carrying a DNS name would not be matched by iOS against the address the app connects
+to. Accepting an IPv6 host would offer a path that neither the binding nor the certificate can
+serve. Revisit only if all three change together.
+
+**Log** carries both a level filter and a font-size control.
+
+**Switching unit is done from the host list** in Settings. There is no separate device selector.
+
+### 4.5.2 Views
 
 - **Dashboard**: text face + status card, mode badge (AUTO / **PASV** / MANU), uptime, battery
   (percentage, charging), temperature, channel, counters (APs / handshakes / peers), GPS source

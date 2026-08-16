@@ -1001,6 +1001,17 @@ rest, so its controls are neither focusable nor in the accessibility tree. Focus
 but never returned is the most common defect in this pattern and the one screen-reader users
 notice first.
 
+Two boundaries in that paragraph were left unsaid and cost a round of disagreement between the
+implementation and the tests written against it, so they are pinned here:
+
+- **`inert` may sit on the dialog or on the container around it.** Inertness inherits, so a
+  wrapper carrying the attribute makes the dialog inside it inert just as effectively. Tests
+  assert the sheet is inert, not which element holds the attribute.
+- **The focus trap covers the modal container, not the dialog element alone.** A close
+  affordance such as a backdrop button legitimately lives beside the dialog rather than inside
+  it, and it belongs in the tab cycle: a keyboard user reaching the end of the entries should
+  find the way out rather than wrap silently.
+
 **Landscape.** The rail applies at exactly `@media (orientation: landscape) and (max-height:
 560px)`; landscape taller than that keeps the bottom bar. The word "landscape" alone is not a
 condition: `(orientation: landscape)` and `(min-aspect-ratio: 1/1)` disagree, and on iOS the

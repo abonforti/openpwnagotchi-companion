@@ -927,7 +927,8 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
   ```
 - `manifest.webmanifest`: `display: standalone`, `scope: "/"`, `start_url: "/"`, dark
   `theme_color` / `background_color`, name/short_name, 192 + 512 icons including
-  `purpose: "maskable"`.
+  `purpose: "maskable"`, and **no `orientation` key** (§4.5.1: locking it either does nothing on
+  iOS or removes the landscape rail from the installed app while leaving it in the browser).
 - Global CSS honours safe areas via `env(safe-area-inset-*)`; a sticky top bar accounts for the
   Dynamic Island, a bottom **navigation** bar for the home indicator, and in landscape the
   leading-edge rail for `inset-left`/`inset-right` (§4.5). It is deliberately not called a tab
@@ -1033,7 +1034,53 @@ Log keeps its buffer and scroll position, rather than re-initialising on every v
 memory for seven views; the alternative is a Leaflet instance that re-centres every time the user
 checks something else, which reads as a bug.
 
-### 4.5.1 Views
+### 4.5.1 Presentation and safety decisions
+
+Each of these was decided by the owner while reviewing an interactive mockup. They are recorded
+here because a decision that lives only in a conversation is one the next agent will reinvent,
+and because several of them have a plausible wrong answer that costs a rebuild to discover.
+
+**Theme.** `prefers-color-scheme` is followed by default. An explicit control offers light, dark
+and follow-system, and **the forced choice persists across launches**; follow-system is the
+initial state, not a fallback for a missing value.
+
+**Orientation is not locked.** `manifest.webmanifest` must not carry `"orientation"`. The
+original intent was landscape for the Log only and portrait elsewhere, and that is not
+achievable: `ScreenOrientation.lock()` is unavailable in iOS Safari, and the manifest field is
+largely ignored there, so a lock either does nothing or removes the rail from the installed app
+while leaving it in the browser. Orientation is handled by layout instead, which is what §4.5
+already specifies.
+
+**Density.** The compact switch changes layout only, never which values exist. The goal is an
+app that is not a long scroll, so where a detail is secondary it moves behind a disclosure or a
+popover, and where it answers "is my unit all right", it stays visible without interaction. A
+density control that hides a value the operator is looking for has failed at the thing it was
+added for.
+
+**Two-step confirm** applies to: mode switch, reboot, shutdown (D9, D12) and **leaving PASV**
+(§4.5.2). Entering PASV already confirms; leaving it did not, and the asymmetry was accidental.
+
+**Ports are diagnostics, not settings.** The Settings view shows the negotiated ports read-only.
+Making them editable means the plugin accepts writes to its own configuration and then restarts
+to apply them, which drops the socket carrying the confirmation: the operation destroys the
+channel that would report whether it worked. Ports are changed in `config.toml` on the unit.
+
+**Writing to the unit sits behind an Advanced section with a disclaimer** that says plainly that
+a bad edit can leave the pwnagotchi unbootable, and that recovery then means pulling the SD card
+and using a reader to read logs or roll back. That is the real recovery path and the disclaimer
+should name it rather than gesture at risk.
+
+**Host validation accepts IPv4 only.** Not a simplification: the plugin binds IPv4 literals
+only (D5.1, with the `/24` prefix floor), and `gen-cert.sh` refuses IPv6 outright because a
+certificate carrying a DNS name would not be matched by iOS against the address the app connects
+to. Accepting an IPv6 host would offer a path that neither the binding nor the certificate can
+serve. Revisit only if all three change together.
+
+**Log** carries both a level filter and a font-size control.
+
+**Switching unit is done from the host list** in Settings. There is no separate device selector.
+
+### 4.5.2 Views
 
 - **Dashboard**: text face + status card, mode badge (AUTO / **PASV** / MANU), uptime, battery
   (percentage, charging), temperature, channel, counters (APs / handshakes / peers), GPS source

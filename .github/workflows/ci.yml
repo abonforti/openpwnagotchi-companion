@@ -28,7 +28,12 @@ env:
   # in requires-python (SPEC section 11, F21), not what the image installs. Every
   # green run before this one was a statement about an interpreter nobody runs.
   PYTHON_VERSION: "3.13"
-  NODE_VERSION: "20"
+  # 22, not 20. jsdom brings undici, which calls webidl.util.markAsUncloneable,
+  # a function the Node 20 line does not have: on 20 the vitest workers fail to
+  # start at all, with an error that names undici rather than the Node version.
+  # 22 is also what the development host runs, so a green run here now means the
+  # same thing a green run there does.
+  NODE_VERSION: "22"
 
 jobs:
   schemas:

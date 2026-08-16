@@ -1161,6 +1161,29 @@ serve. Revisit only if all three change together.
 
 **Switching unit is done from the host list** in Settings. There is no separate device selector.
 
+**The bottom bar sits above everything, and content stops above it.** A scrolled list ends
+where the bar begins; nothing passes underneath it. The bar is translucent in appearance, and
+that is styling rather than an invitation to scroll content beneath it: content half-visible
+through a blur is not readable, and the last row of a list has to be reachable without
+guesswork. The views area therefore reserves exactly the bar's outer height, border included,
+and the two are one expression rather than two numbers that must agree (§10.5).
+
+**Touch targets need separation as well as size.** 44px is the floor for how large a control
+is, and says nothing about how far it sits from its neighbour. Those are different failures: a
+small target is hard to hit, while two large targets flush against each other are easy to hit
+*wrongly*, which matters most where the neighbour does something serious. The bar entries, and
+any row of adjacent controls, carry a gap.
+
+**Contrast is WCAG 2.1 level AA**: 4.5:1 for body text, 3:1 for large text (>= 24px, or >=
+18.66px at weight >= 700) and for icons and other non-text indicators (1.4.11). AAA is not
+adopted: 7:1 is not reachable on a dark palette without flattening it, and a level nobody can
+meet gets waived case by case until it means nothing.
+
+**No `background-image` behind text.** A gradient has a different contrast ratio at every point,
+so text over it can be legible at one end and not the other, and no automated check can return
+a verdict. Forbidding it is what keeps the contrast gate meaningful; the gate reports any it
+finds rather than silently passing them.
+
 ### 4.5.2 Views
 
 - **Dashboard**: text face + status card, mode badge (AUTO / **PASV** / MANU), uptime, battery
@@ -1662,21 +1685,39 @@ These three certificate assertions encode the exact failures already hit on this
 
 ### 10.7 Coverage gate
 
-Every line and every branch of `plugin/` and `frontend/src/lib/` is covered. This is enforced,
-not aspired to:
+**The floor is 85% of lines and branches. The target is as high as the code allows.** Those are
+two different numbers on purpose, and confusing them is how a coverage gate turns into
+theatre.
 
-- `pytest --cov=plugin --cov-branch --cov-fail-under=100`. **Branch** coverage, not line
-  coverage: `if a and b` has four outcomes, not one.
-- **`# pragma: no cover` is banned.** A CI grep fails the build on any occurrence. Without that
-  rule the gate is trivially defeated and the number becomes a lie.
-- Vitest thresholds set to 100 for lines and branches on `frontend/src/lib/`. Svelte view
-  components are excluded — they are exercised by hand, and a coverage number for markup buys
+- **CI fails below 85%.** `pytest --cov=plugin --cov-branch --cov-fail-under=85`, and vitest
+  thresholds at 85. **Branch** coverage, not line coverage: `if a and b` has four outcomes, not
+  one.
+- **85 is not the goal.** Writing exactly enough tests to reach 85 and stopping is a misreading
+  of this section. The number exists so a gap fails the build, not so effort can stop once it
+  is cleared.
+- **A drop is reported even when it stays above the floor.** The current figure is recorded and
+  compared on every run, and a fall produces a warning rather than a failure. Without that, a
+  regression from 100% to 86% passes silently, which is the failure mode a flat floor has.
+- **`# pragma: no cover` is banned.** A CI grep fails the build on any occurrence. A lower floor
+  makes this rule more important, not less: an opt-out plus a floor is a number that means
   nothing.
+- **The frontend gate covers `src/lib/` and `src/shell/`.** The shell holds the focus trap, the
+  `inert` handling and the Escape and Tab paths, which is logic, and logic that breaks quietly:
+  an accessibility regression does not throw, it just stops helping someone. `src/views/` stays
+  outside, because that genuinely is markup.
+
+100% was the earlier rule and it was wrong in a specific way rather than merely ambitious. It is
+reachable for a parser and unreachable for a component whose compiled output has branches with
+no source-level counterpart, so a single global 100 either forces the exclusion of everything
+awkward, which is how the shell came to be outside the gate in the first place, or produces a
+threshold nobody can meet and everybody learns to work around.
 
 Two honest limits, and what is done about each:
 
-1. **100% branch coverage is not "every possible case."** It proves every path was executed,
-   not that the assertions were meaningful. The complement is **mutation testing** (`mutmut`,
+1. **Branch coverage, at any percentage, is not "every possible case."** It proves a path was
+   executed, not that the assertion behind it was meaningful. A test that executes a branch and
+   asserts nothing useful counts exactly the same as one that pins it. The complement is
+   **mutation testing** (`mutmut`,
    §5.1): it mutates the source and checks the suite notices. Reported on a schedule, not on
    every pull request, because it is slow.
 2. **Enumerated cases miss what nobody thought of.** The complement is **property-based

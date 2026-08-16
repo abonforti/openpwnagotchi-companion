@@ -251,7 +251,7 @@
         "requires-python = \">=3.11\"",
         "\"websockets\""
       ],
-      "why": "the Python floor the plugin targets, and websockets unconstrained, which is why 2.3.2 exists"
+      "why": "the Python floor the plugin targets, and websockets unconstrained, which is why section 2.3.2 exists"
     },
     {
       "id": "F23",

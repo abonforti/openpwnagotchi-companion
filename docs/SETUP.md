@@ -13,14 +13,17 @@ You need:
 - A pwnagotchi running the [jayofelony fork](https://github.com/jayofelony/pwnagotchi), reachable
   over a tether. Development targets 2.9.5.6 on a Pi Zero 2 W.
 - Your phone tethered to it, or the unit joined to your phone's Personal Hotspot over Bluetooth.
-- A computer with `openssl`, to issue the certificates. Not the Pi.
+- A computer with `openssl`, to issue the certificates. Not the pwnagotchi itself.
+
+Throughout this document, **the unit** means the machine running pwnagotchi, and **your
+computer** means the one you are typing on. They are never the same machine.
 
 Two facts about the network that save time later. Over an iPhone Personal Hotspot the Bluetooth
 PAN subnet is always `172.20.10.0/28`, so the unit's address is somewhere in that range. The USB
 gadget interface is `10.0.0.2` and is fine for a laptop, but **an iPhone cannot use it** - if you
 are setting this up for a phone, the tether address is the one that matters.
 
-Find the unit's address before continuing. On the Pi:
+Find the unit's address before continuing. On the unit:
 
 ```sh
 ip -4 addr show bnep0
@@ -44,21 +47,21 @@ Replace those addresses with the ones you wrote down. List every one.
 You now have four files in `~/pwn-pki`: `ca.key`, `ca.crt`, `server.key`, `server.crt`.
 
 Keep this directory. `ca.key` signs every certificate you will ever issue for this device, it
-never goes on the Pi, and it must not end up in a repository. `gen-ca.sh` refuses to overwrite an
-existing CA for a reason: regenerating it invalidates every certificate issued from it and every
+never goes on the unit, and it must not end up in a repository. `gen-ca.sh` refuses to
+overwrite an existing CA for a reason: regenerating it invalidates every certificate issued from it and every
 phone that trusts it.
 
 Why these scripts rather than any certificate: iOS enforces three rules and fails silently when
 any is missed. [`CERTIFICATES.md`](CERTIFICATES.md) explains them, and matters if you want to
 issue from a CA you already run.
 
-## 2. Copy the server certificate to the Pi
+## 2. Copy the server certificate to the unit
 
 ```sh
-ssh <user>@<pi> 'sudo mkdir -p /etc/pwnagotchi/companion'
-ssh <user>@<pi> 'sudo install -m 600 -o root -g root /dev/stdin \
+ssh <user>@<unit> 'sudo mkdir -p /etc/pwnagotchi/companion'
+ssh <user>@<unit> 'sudo install -m 600 -o root -g root /dev/stdin \
     /etc/pwnagotchi/companion/server.key' < ~/pwn-pki/server.key
-ssh <user>@<pi> 'sudo install -m 644 -o root -g root /dev/stdin \
+ssh <user>@<unit> 'sudo install -m 644 -o root -g root /dev/stdin \
     /etc/pwnagotchi/companion/server.crt' < ~/pwn-pki/server.crt
 ```
 
@@ -69,10 +72,10 @@ key here, so a password prompt would read the key's first line as the password.
 The key is piped to its final location with the mode set as it is created, rather than copied to
 `/tmp` and moved. `/tmp` is world-readable and world-writable: a private key staged there is
 briefly readable by every account on the unit, and a symlink planted at that name beforehand
-redirects the write somewhere you did not choose. On a single-user Pi that is unlikely, but the
+redirects the write somewhere you did not choose. On a single-user unit that is unlikely, but the
 correct command is no longer than the incorrect one.
 
-Only the server certificate and its key go to the Pi. `ca.key` does not.
+Only the server certificate and its key go to the unit. `ca.key` does not.
 
 ## 3. Install the companion
 
@@ -88,13 +91,13 @@ Only the server certificate and its key go to the Pi. `ca.key` does not.
 > Safari at step 6 yet. When a release exists, or once you can build `frontend/` yourself, the
 > full command below installs both halves and this note goes away.
 
-Clone this repository on the Pi and run the installer as root:
+Clone this repository on the unit and run the installer as root:
 
 ```sh
 sudo ./tools/install-on-pi.sh
 ```
 
-The default path downloads the latest release, so the Pi needs to reach `api.github.com` and
+The default path downloads the latest release, so the unit needs to reach `api.github.com` and
 `github.com`. If it does not have internet access, build the archive elsewhere and pass it with
 `--archive` - a `SHA256SUMS` must sit beside it, and verification cannot be skipped:
 

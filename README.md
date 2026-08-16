@@ -1,9 +1,14 @@
+![openpwnagotchi-companion](docs/assets/banner.jpg)
+
+<sub>Banner artwork, AI-generated. The phone in it is an illustration, not a screenshot: the
+frontend does not exist yet.</sub>
+
 # openpwnagotchi-companion
 
 A free, self-hostable **PWA companion for pwnagotchi** (jayofelony fork). It does what the paid
 iOS app [Pwnagotchi Companion](https://apps.apple.com/us/app/pwnagotchi-companion/id6751243451)
 by Braeden Pelletier does, plus the things it does not, and it runs entirely on your own device:
-the pwnagotchi serves the app, your phone installs it from the Pi, nothing is hosted by anyone
+the pwnagotchi serves the app, your phone installs it from the unit, nothing is hosted by anyone
 else.
 
 > **Status: in development.** The specification is complete and locked
@@ -25,7 +30,7 @@ else.
 | Peer / mesh view | no | yes |
 | Live log viewer | no | yes |
 | Full e-ink screen mirror | partial | yes |
-| GPS with wardriving map | partial | yes, on-Pi source first with browser fallback |
+| GPS with wardriving map | partial | yes, on-device source first with browser fallback |
 | Price | $5.99 (App Store, at the time of writing) | free, GPL-3.0 |
 | Platforms | iOS 16.6+ | anything with a modern browser |
 
@@ -40,9 +45,9 @@ This exists for people who want the source, the self-hosting, and the three feat
 ## How it works
 
 ```
-iPhone  ──BT PAN──  Pi (pwnagotchi)
+iPhone  ──BT PAN──  pwnagotchi unit
    │                    ├── companion plugin: WSS :8082, HTTPS :8443
-   └── PWA installed from https://<pi-ip>:8443
+   └── PWA installed from https://<unit-ip>:8443
 ```
 
 The plugin binds **only** to the tether addresses you configure, never `0.0.0.0`, and
@@ -50,8 +55,8 @@ only over TLS. There is no plaintext fallback and no cloud component.
 
 ## Security model, honestly
 
-To install a PWA and open a WebSocket, iOS requires real HTTPS. The Pi has no public hostname,
-so you generate a **private CA**, issue a server certificate carrying your Pi's IP addresses as
+To install a PWA and open a WebSocket, iOS requires real HTTPS. The unit has no public hostname,
+so you generate a **private CA**, issue a server certificate carrying the unit's IP addresses as
 `iPAddress` SANs, and install and fully trust that CA on your phone.
 
 That is a real trust decision and the docs do not soften it:
@@ -88,11 +93,11 @@ in [`SPEC.md`](SPEC.md) §11.
 
 Not yet: there is no release to install. Once there is, the shape is:
 
-1. `tools/gen-ca.sh` then `tools/gen-cert.sh <pi-ip> [<pi-ip> ...]` on your machine.
-2. Copy `server.crt` / `server.key` to the Pi, install `plugin/companion.py`, enable it in
+1. `tools/gen-ca.sh` then `tools/gen-cert.sh <unit-ip> [<unit-ip> ...]` on your machine.
+2. Copy `server.crt` / `server.key` to the unit, install `plugin/companion.py`, enable it in
    `config.toml`.
-3. `tools/install-on-pi.sh` to install both halves on the Pi: the plugin and the built PWA.
-4. Install and fully trust `ca.crt` on the phone, open `https://<pi-ip>:8443` in Safari, and
+3. `tools/install-on-pi.sh` to install both halves on the unit: the plugin and the built PWA.
+4. Install and fully trust `ca.crt` on the phone, open `https://<unit-ip>:8443` in Safari, and
    Add to Home Screen.
 
 See [`docs/SETUP.md`](docs/SETUP.md).
@@ -105,7 +110,7 @@ See [`docs/SETUP.md`](docs/SETUP.md).
 | `frontend/` | Svelte + TypeScript + Vite PWA |
 | `docs/schemas/` | JSON Schema: the authoritative wire format |
 | `docs/` | setup, certificates, protocol, pinned pwnagotchi facts |
-| `tools/` | CA and certificate generation, protocol type generation, on-Pi install |
+| `tools/` | CA and certificate generation, protocol type generation, on-unit install |
 | `tests/` | plugin test suite (runs without a pwnagotchi installation) |
 | `SPEC.md` | the complete build specification |
 
@@ -126,3 +131,7 @@ GPL with attribution preserved. Thanks to that project for publishing the backen
 
 pwnagotchi itself is by [evilsocket](https://github.com/evilsocket) and maintained in the
 [jayofelony fork](https://github.com/jayofelony/pwnagotchi).
+
+---
+
+Proudly built on [Raspberry Pi](https://www.raspberrypi.com/). _Slowly_.

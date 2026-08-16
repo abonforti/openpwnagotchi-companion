@@ -5,7 +5,7 @@ caution for its own sake: iOS will not install a web app served over `http`, and
 worker will not register without a secure context, so a plaintext mode would not give you a
 working app. It would give you an unencrypted socket that looks like it works.
 
-Since the Pi is reached at a bare IP address over a tether, no public certificate authority can
+Since the unit is reached at a bare IP address over a tether, no public certificate authority can
 issue for it. You run your own, which takes two commands. The rest of this document is about
 why the certificate has to look exactly the way it does, because iOS enforces three rules and
 breaks **silently** when any of them is missed.
@@ -17,10 +17,10 @@ breaks **silently** when any of them is missed.
 ./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.7 10.0.0.2
 ```
 
-Copy `server.crt` and `server.key` to the Pi, point `tls_cert` and `tls_key` at them, and
+Copy `server.crt` and `server.key` to the unit, point `tls_cert` and `tls_key` at them, and
 install `ca.crt` on the phone. Full walkthrough in [SETUP.md](SETUP.md).
 
-Keep `~/pwn-pki` off the Pi and out of any repository. `ca.key` signs every certificate you will
+Keep `~/pwn-pki` off the unit and out of any repository. `ca.key` signs every certificate you will
 ever issue for this device; anyone holding it can impersonate your pwnagotchi to your phone.
 
 ## The three rules iOS enforces
@@ -60,7 +60,7 @@ SAN is missing or wrong will be rejected while looking correct in every human-re
 `DNS:` entry in the SAN, and the failure surfaces on the phone as what looks like a network
 problem rather than a certificate one.
 
-List **every** address you will reach the Pi on. Over an iPhone Personal Hotspot the BT PAN
+List **every** address you will reach the unit on. Over an iPhone Personal Hotspot the BT PAN
 subnet is always `172.20.10.0/28`, and the USB gadget interface is `10.0.0.2` but is not usable
 from a phone. Adding an address later means reissuing.
 
@@ -155,8 +155,8 @@ CA or the phone, because the root is unchanged and still trusted:
 ./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.7 10.0.0.2
 ```
 
-Copy the new `server.crt` and `server.key` to the Pi and restart pwnagotchi. Reissue the same
-way if the Pi's address changes or you add one.
+Copy the new `server.crt` and `server.key` to the unit and restart pwnagotchi. Reissue the same
+way if the unit's address changes or you add one.
 
 **Do not regenerate the CA to fix a server certificate problem.** `gen-ca.sh` refuses to
 overwrite an existing CA without `--force` precisely because that is the tempting wrong move: a
@@ -170,7 +170,7 @@ The private CA protects the link between your phone and your pwnagotchi. It is a
 your phone: anything it signs will be trusted by that device. Two consequences.
 
 Keep `ca.key` on the machine that issued it, with the mode the script gave it (`0600`), and
-nowhere else. It never needs to go to the Pi.
+nowhere else. It never needs to go to the unit.
 
 Prefer a CA dedicated to this over an existing organisational one. A root whose only job is to
 sign one certificate for one device is a root whose compromise costs you one device.

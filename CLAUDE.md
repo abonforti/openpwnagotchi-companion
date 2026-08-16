@@ -40,7 +40,11 @@ Work lands through a pull request against `master`. For every change, in this or
    agents. The test author writes from `SPEC.md` and `docs/schemas/` without reading the
    implementation — that independence is the only reason the tests can catch an implementation
    bug rather than mirror it.
-3. `companion-qa` runs the gates and reports the real numbers.
+3. `companion-qa` runs the gates and reports the real numbers. **Locally, run the tests the
+   change touches, not the whole suite.** The development host is a Raspberry Pi; a full run
+   costs it several minutes, dominated by `tests/tools/`, and it duplicates what CI does on
+   every push anyway. The full suite with branch coverage is CI's job, and its result is what
+   the pull request is judged on.
 4. `companion-reviewer` reviews the diff against §11, §11.1 and §2.14.
 5. `companion-security-auditor` audits before **every** commit and before **every** push.
 6. Open the pull request only once QA, review and audit are all green.

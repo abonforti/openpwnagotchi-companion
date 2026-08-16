@@ -251,7 +251,7 @@
         "requires-python = \">=3.11\"",
         "\"websockets\""
       ],
-      "why": "the Python floor the plugin targets, and websockets unconstrained, which is why 2.3.2 exists"
+      "why": "the Python floor the plugin targets, and websockets unconstrained, which is why section 2.3.2 exists"
     },
     {
       "id": "F23",
@@ -288,6 +288,24 @@
         "/etc/pwnagotchi/custom-plugins/"
       ],
       "why": "disagrees with defaults.toml on purpose; if this ever matches, the resolution can be simplified"
+    },
+    {
+      "id": "F26",
+      "file": "stage3/06-patches/files/01-motd",
+      "kind": "contains_all",
+      "text": [
+        "/opt/.pwn/lib/python3.13"
+      ],
+      "why": "the interpreter CI must test on. If this stops matching, the image moved to another Python minor and PYTHON_VERSION in ci.yml is stale"
+    },
+    {
+      "id": "F27",
+      "file": "pwnagotchi/plugins/default/auto-update.py",
+      "kind": "contains_all",
+      "text": [
+        "pip install"
+      ],
+      "why": "the reason the installed websockets version is a property of a unit rather than of a release: the unit reinstalls after the image is built, so no observed version generalises and the section 2.3.2 shim cannot be dropped"
     }
   ]
 }

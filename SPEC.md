@@ -261,6 +261,14 @@ The pwnagotchi image pins no `websockets` version (`pyproject.toml` lists a bare
 the legacy handler signature is `(websocket, path)`, the modern one is `(websocket)`, and
 `websockets.serve` was superseded by `websockets.asyncio.server.serve`.
 
+The reason to write both is the **absence of a pin**, not a guess about which version is out
+there. Nothing constrains the dependency (F21) and `auto-update.py` runs `pip install` on the unit
+after the image is built, so the installed major is a property of one unit's build-and-update
+history rather than of the release it claims to be. A unit running 2.9.5.6 was observed at 17.0.1
+(F27), which proves a modern major occurs in the field; it does not license assuming one, and it
+does not license dropping the legacy branch either. Both forms must work, and neither may be
+treated as the expected case.
+
 Implementers MUST write both tolerantly and MUST NOT pick one form:
 
 ```python
@@ -977,9 +985,10 @@ on-Pi fix, whether from bettercap or gpsd, always wins.
 - **plugin-lint**: `.github/check_plugin.py` (AST-based, adapted from the owner's
   `check_plugins.py`: parses without importing, verifies the `plugins.Plugin` subclass and the
   required metadata, and greps for committed secrets), then `python -m compileall plugin/`.
-- **plugin-tests**: `pytest` on **Python 3.11**, matching the device (the fork declares
-  `requires-python = ">=3.11"`, F21). No pwnagotchi installation required — the fake package in
-  `tests/fakes/pwnagotchi_stub/` stands in. The coverage gate of §10.8 runs here and is what
+- **plugin-tests**: `pytest` on **Python 3.13**, the version the device ships (F26), and again on
+  **3.11**, the floor upstream declares (F21). The device's version is the one that blocks a merge;
+  the floor runs because somebody can be on an older image. No pwnagotchi installation required:
+  the fake package in `tests/fakes/pwnagotchi_stub/` stands in. The coverage gate of §10.8 runs here and is what
   fails the build, not a warning. `tests/tools/test_certs.py` runs in the same job; the runner
   already has `openssl`.
 - **language**: there is no automated check, deliberately. One was written and removed. A
@@ -1491,7 +1500,9 @@ two allowlists drifting apart is the failure the checker exists to prevent, one 
 | F18 | `pwnagotchi.ui.web` is a **package** whose `__init__.py` defines `frame_path = '/var/tmp/pwnagotchi/pwnagotchi.png'`, `frame_format = 'PNG'`, `frame_ctype = 'image/png'`, and `frame_lock = threading.Lock()` | `pwnagotchi/ui/web/__init__.py` |
 | F19 | Bettercap GPS lives at `session()['gps']` with capitalised keys `Latitude`, `Longitude`, `Altitude`. The stock plugin skips writing when latitude or longitude is falsy, and dumps the raw dict to `<name>.gps.json`. `Updated`, `FixQuality`, `NumSatellites` and `HDOP` come from **bettercap's** payload, not from any pwnagotchi source, so they are used defensively and cannot be verified against this repository. | `pwnagotchi/plugins/default/gps.py:47-61` for the first three |
 | F20 | `on_handshake` is fired from two paths with different argument types: `plugins.on('handshake', self, filename, ap_mac, sta_mac)` (strings) and `plugins.on('handshake', self, filename, ap, sta)` (dicts) | `pwnagotchi/agent.py:396,404` |
-| F21 | `pyproject.toml` declares `websockets` with **no version constraint**; `requires-python = ">=3.11"` | `pyproject.toml` |
+| F21 | `pyproject.toml` declares `websockets` with **no version constraint**; `requires-python = ">=3.11"`. That is a **floor, not the shipped version** - see F26 and F27 | `pyproject.toml` |
+| F26 | The image installs its Python under `/opt/.pwn/`, and that tree is **3.13**, not the `>=3.11` floor of F21. CI must test the shipped version | `stage3/06-patches/files/01-motd` reads `/opt/.pwn/lib/python3.13/site-packages/pwnagotchi/_version.py`; `/opt/.pwn/bin` is likewise hardcoded in `stage3/06-patches/files/profile`, `sudoers` and `pwnagotchi-launcher`. Confirmed as 3.13.5 on a unit running 2.9.5.6 |
+| F27 | The **installed `websockets` version is not knowable from upstream** and must not be assumed. `pyproject.toml` pins nothing (F21), so it is whatever pip resolved when that image was built, and `plugins/default/auto-update.py` runs `pip install` on the unit afterwards. One unit running 2.9.5.6 was observed at 17.0.1 - evidence that a modern major occurs in the field, not that every unit has one | `pwnagotchi/plugins/default/auto-update.py`; `pyproject.toml` |
 | F22 | Upstream `pwnios.py` binds `websockets.serve(self._handle_client, "0.0.0.0", 8082, ...)` and reads `self.agent.access_points` before falling back to `_access_points` — both are bugs this fork fixes | `BraedenP232/PwnIOS/pwnios.py:292-293,653-656,678-680` |
 | F23 | Custom plugins are loaded from `config['main']['custom_plugins']`, whose default is `/usr/local/share/pwnagotchi/custom-plugins/`. The key is optional: `load_from_path` is called only `if 'custom_plugins' in config['main']` | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
 | F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |

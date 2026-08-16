@@ -1,0 +1,51 @@
+# Dependency updates, grouped on purpose.
+#
+# Seven direct devDependencies pull 430 packages. Ungrouped, a weekly run opens
+# a pull request per package, and a queue nobody reads is worse than no queue:
+# the updates that matter end up buried with the ones that do not.
+version: 2
+
+updates:
+  # The PWA. package.json lives in frontend/, not at the repository root, and
+  # Dependabot looks where it is told rather than searching for manifests.
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - "type: infra"
+      - "area: frontend"
+    commit-message:
+      prefix: "deps"
+    groups:
+      # There are no runtime dependencies, by design: everything here is build
+      # or test tooling and none of it reaches the unit. One pull request a week
+      # for the lot is the right granularity for something that cannot ship a
+      # vulnerability to a device.
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - "*"
+
+  # Workflow actions are pinned to major tags today. A tag is mutable, so the
+  # supply chain of CI rests on whoever can move it; pinning to a full-length
+  # commit SHA would fix that, at the cost of Dependabot no longer raising
+  # vulnerability alerts for these actions. That trade is not taken here, and it
+  # is written down so the next person weighs it rather than discovering it.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - "type: infra"
+      - "area: ci"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"

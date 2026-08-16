@@ -23,9 +23,11 @@ are setting this up for a phone, the tether address is the one that matters.
 Find the unit's address before continuing. On the Pi:
 
 ```sh
-ip -4 addr show bnep0
-ip -4 addr show usb0
+ip -4 addr
 ```
+
+The tether address is the one in `172.20.10.0/28` if you are on an iPhone hotspot, and `10.0.0.2`
+on the USB gadget. Note which is which: you will need both again when configuring the plugin.
 
 Write down every address you will connect from. You need them all in the certificate, and adding
 one later means reissuing.
@@ -137,7 +139,7 @@ of a running pwnagotchi can break far more than it installs. Add this to
 ```toml
 [main.plugins.companion]
 enabled = true
-interfaces = ["bnep0", "usb0"]
+bind_addresses = ["172.20.10.0/28", "10.0.0.2"]
 ws_port = 8082
 http_port = 8443
 tls_cert = "/etc/pwnagotchi/companion/server.crt"
@@ -146,9 +148,25 @@ web_root = "/var/www/openpwn-companion"
 token = ""
 ```
 
-`interfaces` is the whole security model: the plugin binds only the current address of the
-interfaces you list, never `0.0.0.0`. Do not add an interface that faces a network you would not
-want the unit reachable from.
+`bind_addresses` is the whole security model: the plugin binds only local addresses that match
+what you list, never `0.0.0.0`. Do not list a network you would not want the unit reachable from.
+
+Each entry is either an exact address or a CIDR block. The defaults above cover the two normal
+cases: `172.20.10.0/28` is the subnet every iPhone Personal Hotspot uses, written as a block
+because the phone's DHCP server picks the host part and it is not always the same number, and
+`10.0.0.2` is the fixed USB gadget address. If your unit sits on a different tether, replace
+these with what `ip -4 addr` showed you earlier.
+
+The plugin refuses a block wider than `/24`, so there is no way to spell "everything" here. An
+address that appears on no interface simply gets no listener, and an entry it cannot parse is
+logged and skipped rather than taking the plugin down with it.
+
+Configuring **addresses rather than interface names** is deliberate. A name like `bnep0` is
+assigned in the order Bluetooth peers connect, so on a unit that is also paired with a laptop it
+can belong to the laptop today and the phone tomorrow. An address is a network you chose.
+
+If you are upgrading from an earlier version, the old `interfaces` key is ignored and warned
+about in the log rather than honoured. Replace it.
 
 `token` is an optional shared secret, empty by default, and empty means no authentication at all.
 
@@ -230,9 +248,11 @@ sudo journalctl -u pwnagotchi -n 100 | grep companion
 means the plugin is not where pwnagotchi looks - run `sudo ./tools/install-on-pi.sh --dry-run`
 and compare the plugins directory it prints against `main.custom_plugins` in your config.
 
-**It worked and then stopped after a tether drop.** Expected, briefly. The plugin re-resolves
+**It worked and then stopped after a tether drop.** Expected, briefly. The plugin re-enumerates
 addresses every 30 seconds and rebinds; the app reconnects on its own. If it does not come back,
-confirm the interface has an address again with `ip -4 addr show bnep0`.
+run `ip -4 addr` and confirm an address matching `bind_addresses` is present again. A phone that
+handed out a different address after reconnecting is covered if you configured the block rather
+than the single address.
 
 **The app loads but shows nothing.** The static server works and the WebSocket does not. Both
 use the same certificate, so this is usually `ws_port` blocked or a `token` set on the unit and

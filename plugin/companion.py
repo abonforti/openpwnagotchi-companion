@@ -1,7 +1,7 @@
 """openpwnagotchi-companion - pwnagotchi side of a self-hosted PWA companion.
 
 Serves the built PWA over HTTPS and speaks the WebSocket contract in
-docs/schemas/ over WSS, bound only to the tether interfaces. See SPEC.md for the
+docs/schemas/ over WSS, bound only to the tether addresses. See SPEC.md for the
 full brief and, in particular, section 11 for the allowlist of pwnagotchi
 symbols this file may use.
 
@@ -29,6 +29,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -48,14 +49,14 @@ __version__ = "0.0.1"
 __license__ = "GPL3"
 __description__ = (
     "Self-hosted companion backend: serves an installable PWA over HTTPS and "
-    "speaks a WebSocket protocol to it, bound only to tether interfaces, TLS only."
+    "speaks a WebSocket protocol to it, bound only to tether addresses, TLS only."
 )
 __name_of_plugin__ = "companion"
 
 __help__ = """
 Serves the openpwnagotchi-companion PWA from the unit itself and speaks its
 WebSocket protocol. Both listeners are TLS only and bind exclusively to the
-IPv4 addresses of the configured tether interfaces; the plugin will not start a
+local IPv4 addresses that match `bind_addresses`; the plugin will not start a
 listener without a usable certificate, and never falls back to plaintext.
 
 You need a certificate whose subjectAltName lists each Pi IP as an iPAddress
@@ -63,14 +64,20 @@ You need a certificate whose subjectAltName lists each Pi IP as an iPAddress
 docs/CERTIFICATES.md - iOS is strict here and fails silently when it is not met.
 
     [main.plugins.companion]
-    enabled    = true
-    interfaces = ["bnep0", "usb0"]   # bind on each one's current IPv4, skip if absent
-    ws_port    = 8082                # WSS
-    http_port  = 8443                # HTTPS, serves the PWA
-    tls_cert   = "/etc/pwnagotchi/companion/server.crt"
-    tls_key    = "/etc/pwnagotchi/companion/server.key"
-    web_root   = "/var/www/openpwn-companion"
-    token      = ""                  # optional shared secret, empty disables auth
+    enabled        = true
+    bind_addresses = ["172.20.10.0/28", "10.0.0.2"]  # IPv4 addresses or CIDR blocks
+    ws_port        = 8082            # WSS
+    http_port      = 8443            # HTTPS, serves the PWA
+    tls_cert       = "/etc/pwnagotchi/companion/server.crt"
+    tls_key        = "/etc/pwnagotchi/companion/server.key"
+    web_root       = "/var/www/openpwn-companion"
+    token          = ""              # optional shared secret, empty disables auth
+
+A local address is bound when it equals one of those entries or falls inside a
+block; a block shorter than /24 is refused, and so is anything that is not an
+IPv4 address or block. Nothing is bound if no entry survives that check. The
+older `interfaces` key is ignored: an interface name identifies a device, not a
+network, and `bnep0` is only whichever Bluetooth peer connected first.
 
 Full option reference and defaults: SPEC.md section 2.2.
 """
@@ -80,7 +87,7 @@ Full option reference and defaults: SPEC.md section 2.2.
 # ---------------------------------------------------------------------------
 
 DEFAULTS: dict[str, Any] = {
-    "interfaces": ["bnep0", "usb0"],
+    "bind_addresses": ["172.20.10.0/28", "10.0.0.2"],
     "ws_port": 8082,
     "http_port": 8443,
     "tls_cert": "/etc/pwnagotchi/companion/server.crt",
@@ -105,6 +112,10 @@ HANDSHAKE_LIMIT = 500
 # (SPEC 2.3.4). It has to be a poll rather than a check on the next frame,
 # because the peer the deadline exists to stop is the one that never sends one.
 AUTH_POLL_INTERVAL = 0.25
+# Shortest prefix a `bind_addresses` block may carry. Without a floor the block
+# syntax becomes a way back to binding everything: 0.0.0.0/0 matches every
+# address the host holds, which is D5 defeated in one line of config.
+BIND_MIN_PREFIX = 24
 LOG_LINES_DEFAULT = 200
 LOG_LINES_MAX = 1000
 BROWSER_GPS_TTL = 10.0
@@ -155,23 +166,118 @@ def _finite(value: Any) -> float | None:
 
 
 def is_bindable_address(value: Any) -> bool:
-    """Whether a value is a literal IP address this plugin is willing to bind.
+    """Whether a value is a literal IPv4 address this plugin is willing to bind.
 
-    Decision D5 is "bind only the tether interfaces", and two things defeat it:
+    Decision D5 is "bind only the tether addresses", and two things defeat it:
     a wildcard, which binds every interface at once, and a hostname, which
     resolves at bind time to whatever DNS happens to answer - possibly a
     wildcard, possibly an address on a network the unit should not be reachable
     from. Only a literal address is accepted, and never an unspecified one.
     """
-    import ipaddress
-
     if not isinstance(value, str) or not value:
         return False
     try:
-        address = ipaddress.ip_address(value)
-    except ValueError:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError:
         return False
     return not address.is_unspecified
+
+
+def parse_bind_entry(value: Any) -> ipaddress.IPv4Address | ipaddress.IPv4Network:
+    """Parses one `bind_addresses` entry, raising ValueError with the reason.
+
+    An entry is either a literal IPv4 address or an IPv4 block. Blocks exist
+    because the literal address is less certain than it looks: over a Personal
+    Hotspot the subnet is always 172.20.10.0/28 but the host part comes from
+    the phone's DHCP server, so a literal-only configuration leaves some units
+    with no listener and the unhelpful symptom "nothing started".
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("not a string")
+    if "/" in value:
+        try:
+            block = ipaddress.IPv4Network(value, strict=False)
+        except ValueError as err:
+            raise ValueError(str(err)) from err
+        if block.network_address.is_unspecified:
+            # The network address is the lowest address of a block, so a block
+            # holds 0.0.0.0 exactly when its network address is the wildcard -
+            # true at every prefix length, independently of the floor checked
+            # below. D5 forbids the wildcard in any bind call unconditionally,
+            # and that outranks "it parses".
+            raise ValueError("block contains the wildcard address")
+        if block.prefixlen < BIND_MIN_PREFIX:
+            raise ValueError(f"prefix shorter than /{BIND_MIN_PREFIX}")
+        return block
+    if not is_bindable_address(value):
+        raise ValueError("not a bindable IPv4 address")
+    return ipaddress.IPv4Address(value)
+
+
+def parse_bind_addresses(entries: Any) -> list[ipaddress.IPv4Address | ipaddress.IPv4Network]:
+    """Validates `bind_addresses` once, logging and dropping each bad entry.
+
+    A rejected entry never contributes a listener and never takes the good
+    entries down with it. When nothing survives, the plugin binds nothing at
+    all: falling back to a default here would bind more than the owner asked
+    for, which is the exposure D5.1 exists to close.
+    """
+    if not isinstance(entries, list):
+        log.error("[companion] bind_addresses is not a list: %r", entries)
+        return []
+    selectors: list[ipaddress.IPv4Address | ipaddress.IPv4Network] = []
+    for entry in entries:
+        try:
+            selectors.append(parse_bind_entry(entry))
+        except ValueError as err:
+            log.error("[companion] ignoring bind_addresses entry %r: %s", entry, err)
+    if not selectors:
+        log.error("[companion] no usable entry in bind_addresses: nothing will be bound")
+    return selectors
+
+
+def bind_addresses_option(options: Mapping[str, Any]) -> Any:
+    """Reads `bind_addresses`, keeping a nulled key distinct from a missing one.
+
+    `option()` cannot tell them apart, and here they must: the shipped default
+    binds a whole subnet, so a key the owner wrote and left unusable has to
+    resolve to nothing rather than to more. Emptying the key is a plausible way
+    to try to stop the plugin listening, and it must not do the opposite.
+    """
+    if options is None or "bind_addresses" not in options:
+        return DEFAULTS.get("bind_addresses")
+    return options.get("bind_addresses")
+
+
+def select_bind_addresses(
+    local: Iterable[Any],
+    selectors: Sequence[ipaddress.IPv4Address | ipaddress.IPv4Network],
+) -> list[str]:
+    """Picks the local addresses to bind: equal to a literal, or inside a block.
+
+    The interface carrying an address is not consulted and never reaches this
+    function (D5.1). Anything the host reports that is not a bindable literal
+    IPv4 is dropped here, which is the single gate keeping 0.0.0.0 out of a
+    bind call even if a block were to contain it.
+    """
+    selected: list[str] = []
+    for raw in local:
+        if not is_bindable_address(raw):
+            continue
+        address = ipaddress.IPv4Address(raw)
+        text = str(address)
+        if text in selected:
+            continue
+        for selector in selectors:
+            matched = (
+                address in selector
+                if isinstance(selector, ipaddress.IPv4Network)
+                else address == selector
+            )
+            if matched:
+                selected.append(text)
+                break
+    return selected
 
 
 def envelope(kind: str, data: Any, timestamp: float, message_id: str | None = None) -> dict:
@@ -576,7 +682,7 @@ class Deps:
     run_command: Callable[[Sequence[str]], int] = None  # type: ignore[assignment]
     read_gpsd: Callable[[str, int, float], dict | None] = None  # type: ignore[assignment]
     read_pisugar_i2c: Callable[[], tuple[float | None, bool | None]] = None  # type: ignore[assignment]
-    resolve_interface_ip: Callable[[str], str | None] = None  # type: ignore[assignment]
+    list_local_ipv4: Callable[[], list[str]] = None  # type: ignore[assignment]
     spawn: Callable[[Callable[[], None]], None] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -598,8 +704,8 @@ class Deps:
             self.read_gpsd = default_read_gpsd
         if self.read_pisugar_i2c is None:
             self.read_pisugar_i2c = default_read_pisugar_i2c
-        if self.resolve_interface_ip is None:
-            self.resolve_interface_ip = default_resolve_interface_ip
+        if self.list_local_ipv4 is None:
+            self.list_local_ipv4 = default_list_local_ipv4
         if self.spawn is None:
             self.spawn = default_spawn
 
@@ -678,39 +784,42 @@ def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
     return percent, None
 
 
-def default_resolve_interface_ip(iface: str) -> str | None:
-    """Returns the current IPv4 of an interface, or None if it has none.
+def default_list_local_ipv4() -> list[str]:
+    """Returns every IPv4 address the host currently holds.
 
     Uses netifaces when importable and falls back to parsing `ip -4 addr show`,
-    so the plugin does not add a hard dependency for something this small.
+    so the plugin does not add a hard dependency for something this small. An
+    interface name is walked over on the way to the addresses and dropped here:
+    it is a device identifier, not a network, and it must not reach a bind
+    decision (D5.1).
     """
     try:
         import netifaces  # type: ignore[import-not-found]
 
-        addresses = netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []
-        for entry in addresses:
-            address = entry.get("addr")
-            if address:
-                return address
-        return None
+        found: list[str] = []
+        for iface in netifaces.interfaces():
+            for entry in netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []:
+                address = entry.get("addr")
+                if address:
+                    found.append(address)
+        return found
     except ImportError:
         pass
     except Exception:
-        return None
+        return []
 
     # netifaces is not a hard dependency for something this small.
     try:
         output = subprocess.run(
-            ["ip", "-4", "addr", "show", iface],
+            ["ip", "-4", "addr", "show"],
             capture_output=True,
             text=True,
             check=False,
             timeout=5,
         ).stdout
     except Exception:
-        return None
-    match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", output)
-    return match.group(1) if match else None
+        return []
+    return re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", output)
 
 
 def default_spawn(target: Callable[[], None]) -> None:
@@ -1678,20 +1787,23 @@ def make_http_handler(web_root: str) -> type:
 
 
 class Listeners:
-    """Owns the bound sockets and reconciles them as interfaces come and go.
+    """Owns the bound sockets and reconciles them as addresses come and go.
 
-    bnep0 usually has no address until the tether is up, so binding is a
-    continuous reconciliation rather than a one-off at load. The state is keyed
-    on the resolved IP:
+    The tether address usually does not exist at load - a PAN link has none
+    until the phone connects - so binding is a continuous reconciliation rather
+    than a one-off. The state is keyed on the address itself, which is what
+    lets a new DHCP lease converge without a plugin reload:
 
-        has an IP, nothing bound      bind both listeners
-        lost its IP                   close both, drop the clients
-        IP changed                    close the old, bind the new
-        absent entirely               skip quietly after the first log
-        bind raises OSError           log, leave unbound, retry next pass
+        selected address, nothing bound    bind both listeners
+        bound address gone from the host   close both, drop its clients
+        another address in the same block  a new selection: bind it, drop the old
+        nothing matches                    skip quietly after the first log
+        bind raises OSError                log, leave unbound, retry next pass
+        enumeration itself raises          log, change nothing, retry next pass
 
-    Never binds 0.0.0.0, :: or a hostname. A failure here is logged and retried,
-    never fatal: an unbindable interface must not take down the ones that work.
+    Never binds 0.0.0.0, :: or a hostname, and never decides a bind from an
+    interface name (D5.1). A failure here is logged and retried, never fatal:
+    one unbindable address must not take down the ones that work.
     """
 
     def __init__(
@@ -1705,60 +1817,66 @@ class Listeners:
         self._deps = deps
         self._ssl = ssl_context
         self._client_handler = client_handler
-        # iface -> (ip, http_server, ws_server)
-        self._bound: dict[str, tuple[str, Any, Any]] = {}
-        self._missing_logged: set[str] = set()
+        if options is not None and "interfaces" in options:
+            # Honouring it would keep the exposure D5.1 closes: an interface
+            # name says which device, not which network, and bnep numbering
+            # follows the order peers connected rather than the owner's intent.
+            log.warning("[companion] the `interfaces` option is ignored, use `bind_addresses`")
+        self._selectors = parse_bind_addresses(bind_addresses_option(options))
+        # ip -> (ws_server, http_server)
+        self._bound: dict[str, tuple[Any, Any]] = {}
+        self._nothing_logged = False
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
 
-    def reconcile(self) -> dict[str, str | None]:
-        """Runs one reconciliation pass. Returns the interface-to-IP map after it."""
-        result: dict[str, str | None] = {}
-        for iface in list(option(self._options, "interfaces") or []):
-            try:
-                ip = self._deps.resolve_interface_ip(iface)
-            except Exception as err:
-                log.debug("[companion] could not resolve %s: %s", iface, err)
-                ip = None
-            result[iface] = ip
-            current = self._bound.get(iface)
+    def reconcile(self) -> list[str]:
+        """Runs one reconciliation pass. Returns the addresses bound after it."""
+        try:
+            local = list(self._deps.list_local_ipv4() or [])
+        except Exception as err:
+            # A failed enumeration observed nothing, so it cannot be read as
+            # "no address is local": tearing the bound set down on a hiccup of
+            # `ip -4 addr show` would drop a healthy tether. Leave it as it is
+            # and let the next pass decide.
+            log.warning("[companion] could not enumerate local addresses: %s", err)
+            return sorted(self._bound)
+        selected = select_bind_addresses(local, self._selectors)
 
-            if ip is None:
-                if current is not None:
-                    log.info("[companion] %s lost its address, closing listeners", iface)
-                    self._close(iface)
-                elif iface not in self._missing_logged:
-                    log.info("[companion] %s has no address yet, waiting", iface)
-                    self._missing_logged.add(iface)
-                continue
+        for ip in [bound for bound in self._bound if bound not in selected]:
+            log.info("[companion] %s is no longer a local address, closing its listeners", ip)
+            self._close(ip)
 
-            self._missing_logged.discard(iface)
-            if current is not None:
-                if current[0] == ip:
-                    continue
-                log.info("[companion] %s moved %s -> %s, rebinding", iface, current[0], ip)
-                self._close(iface)
+        if not selected:
+            if not self._nothing_logged:
+                log.info("[companion] no local address matches bind_addresses, waiting")
+                self._nothing_logged = True
+            return []
 
-            self._open(iface, ip)
-        return result
+        self._nothing_logged = False
+        for ip in selected:
+            if ip not in self._bound:
+                self._open(ip)
+        return sorted(self._bound)
 
-    def _open(self, iface: str, ip: str) -> None:
-        """Binds both listeners on one address. A failure is logged, never fatal."""
-        if not is_bindable_address(ip):
-            # A wildcard binds every interface, defeating D5 entirely; a hostname
-            # resolves at bind time to whatever DNS says, which may be either.
-            # Both are refused loudly rather than quietly accepted.
-            log.error("[companion] refusing to bind %r on %s", ip, iface)
-            return
+    def _open(self, ip: str) -> None:
+        """Binds both listeners on one address. A failure is logged, never fatal.
+
+        Precondition: `ip` came out of `select_bind_addresses`, which is where
+        D5.1 is enforced - it drops anything that is not a literal, bindable
+        IPv4, so 0.0.0.0, :: and hostnames cannot reach here. The check is not
+        repeated in this method so that there is exactly one gate rather than
+        two that could drift apart; any new caller must go through that
+        selection, not call `_open` with an address from elsewhere.
+        """
         http_server = ws_server = None
         try:
             http_server = self._serve_http(ip)
             ws_server = self._serve_ws(ip)
         except OSError as err:
-            log.warning("[companion] could not bind on %s (%s): %s", ip, iface, err)
+            log.warning("[companion] could not bind on %s: %s", ip, err)
             self._shutdown_http(http_server)
             return
-        self._bound[iface] = (ip, http_server, ws_server)
+        self._bound[ip] = (ws_server, http_server)
         log.info(
             "[companion] listening on wss://%s:%s and https://%s:%s",
             ip,
@@ -1829,12 +1947,12 @@ class Listeners:
         self._loop, self._loop_thread = loop, thread
         return loop
 
-    def _close(self, iface: str) -> None:
-        """Closes both listeners for one interface."""
-        entry = self._bound.pop(iface, None)
+    def _close(self, ip: str) -> None:
+        """Closes both listeners bound on one address, dropping its clients."""
+        entry = self._bound.pop(ip, None)
         if entry is None:
             return
-        _, http_server, ws_server = entry
+        ws_server, http_server = entry
         self._shutdown_http(http_server)
         self._shutdown_ws(ws_server)
 
@@ -1872,8 +1990,8 @@ class Listeners:
 
     def stop(self) -> None:
         """Closes every listener. Idempotent."""
-        for iface in list(self._bound):
-            self._close(iface)
+        for ip in list(self._bound):
+            self._close(ip)
         loop, thread = self._loop, self._loop_thread
         self._loop, self._loop_thread = None, None
         if loop is None:

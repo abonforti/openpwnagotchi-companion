@@ -25,7 +25,7 @@ def options_for(tmp_path, tls_cert, tls_key, ws_port, http_port):
     web_root.mkdir(exist_ok=True)
     (web_root / "index.html").write_text("<!doctype html><title>t</title>")
     return {
-        "interfaces": ["lo"],
+        "bind_addresses": ["127.0.0.1"],
         "ws_port": ws_port,
         "http_port": http_port,
         "tls_cert": str(tls_cert),

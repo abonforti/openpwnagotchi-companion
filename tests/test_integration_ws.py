@@ -216,9 +216,9 @@ class RunningServer:
 def wss_server(tmp_path, pki, agent_factory, options):
     """Starts the plugin's WSS listener on a loopback ephemeral port.
 
-    `Listeners.reconcile()` is driven with a faked `resolve_interface_ip` so the
-    tether interface resolves to `127.0.0.1`; nothing else about the binding path
-    is bypassed, so this is the same code the device runs.
+    `Listeners.reconcile()` is driven with a faked `list_local_ipv4` so the host
+    enumeration reports `127.0.0.1` and `bind_addresses` selects it; nothing else
+    about the binding path is bypassed, so this is the same code the device runs.
     """
     started: list = []
 
@@ -231,7 +231,7 @@ def wss_server(tmp_path, pki, agent_factory, options):
         resolved = dict(options)
         resolved.update(
             {
-                "interfaces": ["bnep0"],
+                "bind_addresses": [HOST],
                 "ws_port": ws_port,
                 "http_port": http_port,
                 "tls_cert": str(pki["cert"]),
@@ -243,7 +243,7 @@ def wss_server(tmp_path, pki, agent_factory, options):
         resolved.update(overrides or {})
 
         harness = DepsHarness()
-        harness.interface_ips = {"bnep0": HOST}
+        harness.local_ipv4 = [HOST]
         deps = harness.deps
         subject = agent if agent is not None else agent_factory()
 

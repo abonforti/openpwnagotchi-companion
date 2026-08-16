@@ -12,8 +12,27 @@ against real hardware.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking configuration change.** The plugin binds by address rather than by interface name:
+  `interfaces = ["bnep0", "usb0"]` is replaced by
+  `bind_addresses = ["172.20.10.0/28", "10.0.0.2"]`, whose entries are IPv4 addresses or CIDR
+  blocks. A configuration still carrying `interfaces` is warned about and ignored; it binds
+  nothing, so anyone who installed from `master` must edit their `config.toml`.
+
 ### Security
 
+- Binding by interface name was unsound. `bnep` devices are numbered in the order PAN links come
+  up, so `bnep0` is whichever Bluetooth peer connected first - on a unit paired with more than
+  one machine, not necessarily the one the owner meant. With `token` empty by default, that put
+  an unauthenticated WebSocket and an HTTPS server on a network nobody chose. An address is a
+  network the owner selected; a device name is not.
+- A `bind_addresses` value that is present but unusable no longer falls back to the shipped
+  default. It resolved to a default that binds an entire subnet, so a caller nulling the key -
+  the plausible way to stop the plugin listening - achieved the opposite.
+- The wildcard is refused as a configured entry as well as at bind time. `0.0.0.0` parses as a
+  valid IPv4 address, so the generic validation path accepted it; a block wider than `/24` is
+  refused for the same reason, which is that neither is a network anyone chose.
 - The unprompted `stats` / `access_points` / `face_status` burst is no longer sent before a
   client has authenticated, and a connection no longer joins the broadcast set on accept. With
   a token configured, an unauthenticated peer previously received the unit's name, its access

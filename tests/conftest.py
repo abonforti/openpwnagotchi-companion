@@ -249,7 +249,7 @@ class DepsHarness:
         self.spawned: list[Callable[[], None]] = []
         self.gpsd_reply: dict | None = None
         self.pisugar_reply: tuple[float | None, bool | None] = (None, None)
-        self.interface_ips: dict[str, str | None] = {}
+        self.local_ipv4: list[str] = []
         self.command_status = 0
         self.deps = companion.Deps(
             now=self._now,
@@ -259,7 +259,7 @@ class DepsHarness:
             run_command=self._run_command,
             read_gpsd=self._read_gpsd,
             read_pisugar_i2c=self._read_pisugar_i2c,
-            resolve_interface_ip=self._resolve_interface_ip,
+            list_local_ipv4=self._list_local_ipv4,
             spawn=self._spawn,
         )
 
@@ -289,9 +289,15 @@ class DepsHarness:
         self.calls.append(("read_pisugar_i2c", ()))
         return self.pisugar_reply
 
-    def _resolve_interface_ip(self, iface: str) -> str | None:
-        self.calls.append(("resolve_interface_ip", (iface,)))
-        return self.interface_ips.get(iface)
+    def _list_local_ipv4(self) -> list[str]:
+        """The only address seam (SPEC 10.7, D5.1).
+
+        It takes no argument on purpose: the enumeration returns addresses and
+        the interface that carries one is not available to the caller, so a bind
+        decision physically cannot be made from a name.
+        """
+        self.calls.append(("list_local_ipv4", ()))
+        return list(self.local_ipv4)
 
     def _spawn(self, target: Callable[[], None]) -> None:
         self.calls.append(("spawn", (target,)))
@@ -333,7 +339,7 @@ def deps(harness) -> Any:
 def options(handshake_dir, tmp_path) -> dict[str, Any]:
     """A configuration with the defaults, pointed at throwaway paths."""
     return {
-        "interfaces": ["bnep0", "usb0"],
+        "bind_addresses": ["172.20.10.0/28", "10.0.0.2"],
         "ws_port": 8082,
         "http_port": 8443,
         "tls_cert": str(tmp_path / "server.crt"),

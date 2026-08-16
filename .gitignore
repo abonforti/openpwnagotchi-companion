@@ -21,6 +21,8 @@ whitelist*
 frontend/node_modules/
 frontend/dist/
 frontend/dev-dist/
+frontend/coverage/
+frontend/.svelte-kit/
 dist.tgz
 *.tgz
 SHA256SUMS

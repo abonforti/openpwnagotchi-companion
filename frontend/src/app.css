@@ -1,0 +1,88 @@
+/* Global styles: dark by default, safe areas, and nothing else yet.
+   The views bring their own; this file owns only what is genuinely global. */
+
+:root {
+  /* Dark is the default rather than a preference, because the unit is used
+     outdoors at night and a white flash is the wrong thing to hand someone
+     holding a pwnagotchi in the dark. prefers-color-scheme is respected below
+     for anyone who asked for light. */
+  --bg: #0e1116;
+  --surface: #161b22;
+  --border: #232b36;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #4ae3a0;
+  --danger: #f85149;
+
+  /* Read once here so a view never has to remember the env() spelling. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0f7b5f;
+    --danger: #cf222e;
+
+    color-scheme: light;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+
+  /* The tab bar is fixed to the bottom; without this the page bounces past it. */
+  overscroll-behavior-y: none;
+
+  /* Stops iOS enlarging text in landscape and breaking a tuned layout. */
+  -webkit-text-size-adjust: 100%;
+}
+
+#app {
+  min-height: 100%;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+/* Touch targets. Apple's own floor is 44 points and the unit is operated
+   one-handed, often while walking. */
+button {
+  min-height: 44px;
+  min-width: 44px;
+  font: inherit;
+  color: inherit;
+}
+
+/* Respect a request for less motion rather than animating regardless. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

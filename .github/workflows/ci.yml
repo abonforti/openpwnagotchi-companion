@@ -98,6 +98,44 @@ jobs:
       - name: Byte-compile the plugin
         run: python -m compileall -q plugin/
 
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci, never npm install: it installs exactly the committed lock and
+      # fails if package.json and the lock disagree, so CI cannot silently
+      # resolve a different tree than the one that was reviewed.
+      - name: Install
+        run: npm ci
+
+      # Three checks that fail for different reasons and are worth keeping
+      # apart: svelte-check reads the components, tsc reads everything else,
+      # and a component can typecheck while its markup does not.
+      - name: Check components
+        run: npm run check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Last, because a build that succeeds on code that does not typecheck is
+      # not information worth having.
+      - name: Build
+        run: npm run build
+
   hygiene:
     name: Repository hygiene
     runs-on: ubuntu-latest

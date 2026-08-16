@@ -22,9 +22,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The device runs Python 3.11. Testing on anything newer would let a difference
-  # reach a Raspberry Pi that CI never saw.
-  PYTHON_VERSION: "3.11"
+  # The version the device actually ships. Measured on a unit running jayofelony
+  # 2.9.5.6: /opt/.pwn/lib/python3.13, Python 3.13.5. This used to say 3.11 and
+  # cite the device for it, which was wrong: 3.11 is the floor upstream declares
+  # in requires-python (SPEC section 11, F21), not what the image installs. Every
+  # green run before this one was a statement about an interpreter nobody runs.
+  PYTHON_VERSION: "3.13"
   NODE_VERSION: "20"
 
 jobs:
@@ -62,14 +65,23 @@ jobs:
         run: node tools/gen-protocol-types.mjs --check
 
   plugin:
-    name: Plugin tests
+    name: Plugin tests (${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The device's version first, then the floor upstream declares in
+        # requires-python, because somebody can be on an older image. Spelled out
+        # rather than read from env: the env context is not available inside
+        # strategy. fail-fast is off so a break on one is not hidden by the other
+        # going red first.
+        python: ["3.13", "3.11"]
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: tests/requirements.txt
 

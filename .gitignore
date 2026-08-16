@@ -22,6 +22,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/dev-dist/
 frontend/coverage/
+# playwright artifacts: screenshots and traces are uploaded by CI, never
+# committed, and there are no screenshot baselines by design (SPEC 10.5).
+frontend/test-results/
+frontend/playwright-report/
 frontend/.svelte-kit/
 dist.tgz
 *.tgz

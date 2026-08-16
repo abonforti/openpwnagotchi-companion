@@ -88,11 +88,14 @@ openpwnagotchi-companion/
 │       │   ├── protocol.ts          # GENERATED from docs/schemas — do not hand-edit
 │       │   ├── stores.ts            # Svelte stores
 │       │   ├── settings.ts          # persisted connection settings (localStorage)
+│       │   ├── router.ts            # the seven routes of §4.5, and nothing more
 │       │   └── geo.ts               # browser Geolocation acquisition + push to plugin
+│       ├── shell/                   # the navigation shell (§4.5), not a view
+│       │   ├── Nav.svelte           # bottom bar in portrait, leading rail in landscape
+│       │   └── MoreSheet.svelte     # dialog holding Peers, Mirror, Settings
 │       ├── views/
 │       │   ├── Dashboard.svelte
-│       │   ├── Networks.svelte
-│       │   ├── Handshakes.svelte
+│       │   ├── WiFi.svelte            # Nearby + Captured segments, see §4.5
 │       │   ├── Peers.svelte
 │       │   ├── Map.svelte
 │       │   ├── Log.svelte
@@ -926,7 +929,10 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
   `theme_color` / `background_color`, name/short_name, 192 + 512 icons including
   `purpose: "maskable"`.
 - Global CSS honours safe areas via `env(safe-area-inset-*)`; a sticky top bar accounts for the
-  Dynamic Island, a bottom tab bar for the home indicator.
+  Dynamic Island, a bottom **navigation** bar for the home indicator, and in landscape the
+  leading-edge rail for `inset-left`/`inset-right` (§4.5). It is deliberately not called a tab
+  bar: §4.5 rejects tab semantics for it, and the name is what an implementer reaches for when
+  choosing the ARIA role.
 - Optimised for iPhone 17 Pro: dark theme by default, large touch targets, `prefers-color-scheme`
   respected, smooth at 120 Hz — animate transforms and opacity, avoid layout thrash.
 
@@ -951,16 +957,102 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
 Svelte writable/derived stores: `connection`, `stats`, `accessPoints`, `handshakes`, `peers`,
 `log`, `gps`, `face`, `capabilities`. Views subscribe; pushes from the plugin update them live.
 
-### 4.5 Views
+### 4.5 Navigation model
+
+Seven views, five slots. The bottom bar carries **Dashboard, Wi-Fi, Map, Log, More**; the More
+control opens a sheet holding **Peers, Mirror, Settings**.
+
+Log sits in the bar rather than Peers because a log is read while something is going wrong,
+often one-handed and in a hurry, whereas the peer list is consulted deliberately.
+
+**Every view is a route**, and the bar entries are anchors, not buttons:
+
+| View | Route |
+|---|---|
+| Dashboard | `/` |
+| Wi-Fi | `/wifi` |
+| Map | `/map` |
+| Log | `/log` |
+| Peers | `/peers` |
+| Mirror | `/mirror` |
+| Settings | `/settings` |
+
+Routes are not decoration. D14 and §2.15 make the static server serve `index.html` for any path
+that resolves to no file, and that fallback has nothing to fall back *for* unless deep links
+exist. The Wi-Fi segment is **not** in the URL: it is view state, not a location, and `/wifi`
+must resolve without one.
+
+Routing is hand-rolled in `lib/router.ts` against the History API. Seven static routes with no
+parameters, no nesting and no guards do not justify a routing library, and every dependency here
+is paid for over a Bluetooth link.
+
+This is therefore site navigation and not a tab control. The bar is a `<nav>` whose current
+entry carries `aria-current="page"`; because `aria-current` belongs on a link, the anchors above
+are what makes the attribute correct rather than decorative. The fifth slot opens a dialog
+rather than switching a panel, so a `tablist` role on the bar would be a lie. **While a
+sheet-hosted view is current, the More entry carries `aria-current="page"`**, otherwise the
+indicator vanishes from the bar entirely whenever the user is in Peers, Mirror or Settings.
+
+The More sheet is a dialog and carries a dialog's obligations: `role="dialog"` with
+`aria-modal="true"` and an accessible name; dismissed by Escape, by the backdrop, or by choosing
+an entry; focus trapped while open and **returned to the More control on close**; `inert` at
+rest, so its controls are neither focusable nor in the accessibility tree. Focus that is trapped
+but never returned is the most common defect in this pattern and the one screen-reader users
+notice first.
+
+**Landscape.** The rail applies at exactly `@media (orientation: landscape) and (max-height:
+560px)`; landscape taller than that keeps the bottom bar. The word "landscape" alone is not a
+condition: `(orientation: landscape)` and `(min-aspect-ratio: 1/1)` disagree, and on iOS the
+software keyboard flips `orientation` underneath the layout.
+
+In that range the bar becomes a **72px rail on the leading edge** and the header collapses to
+one line, keeping the unit name and the connection state. The 72px is content width **outside**
+`env(safe-area-inset-left/right)`: the leading edge in landscape is exactly where that inset is
+non-zero, and which side it lands on depends on the rotation direction, so a rail that ignores
+it puts controls under the notch. Rail entries are **icon-only with an `aria-label`**; 72px does
+not hold a label like "Dashboard" at a readable size, and a truncated one is worse than none.
+
+Landscape exists for the Log and the Map, which are the two views that gain from width; every
+other view keeps a reading measure rather than stretching.
+
+**Wi-Fi is one view with two segments**, `Nearby` (access points currently seen) and `Captured`
+(handshake files on disk). They were two separate views in an earlier draft and are merged
+because they answer one question, what is on the air and what did we get, and because the fifth
+slot is worth more to the Log.
+
+The segmented control inside the view *is* a real `tablist`: roving tabindex, Arrow/Home/End
+movement, **automatic activation** (selection follows focus), each tab owning a
+`role="tabpanel"` labelled back by `aria-labelledby`. Both panels stay mounted so an expanded row
+survives a switch, but **the inactive panel carries `hidden`**. Left merely present, it exposes
+two tab panels to VoiceOver at once, which is the exact defect the role is being claimed to
+avoid. `Nearby` is selected on first launch; the choice is kept while the app is open and is not
+persisted across launches.
+
+**Views stay mounted when navigated away from.** The Map keeps its viewport and zoom, and the
+Log keeps its buffer and scroll position, rather than re-initialising on every visit. The cost is
+memory for seven views; the alternative is a Leaflet instance that re-centres every time the user
+checks something else, which reads as a bug.
+
+### 4.5.1 Views
 
 - **Dashboard**: text face + status card, mode badge (AUTO / **PASV** / MANU), uptime, battery
   (percentage, charging), temperature, channel, counters (APs / handshakes / peers), GPS source
   and fix indicator, connection banner. Controls: mode switch, PASV toggle (rendered only when
   `capabilities.pasv`), reboot, shutdown. **Mode switch, reboot and shutdown all use the
   two-step confirm** (D9 + D12) and all show the `restarting` state afterwards.
-- **Networks**: live AP list, sortable by RSSI/channel, with client counts, encryption, vendor.
-- **Handshakes**: directory-backed list (SSID, BSSID, time, size, GPS pin when tagged), with the
-  `truncated` notice when the cap is hit. v1 is view-only; download-over-BT is roadmap.
+- **Wi-Fi**: one view, two segments (§4.5).
+  - *Nearby*: live AP list, sortable by RSSI/channel, with client counts, encryption, vendor.
+  - *Captured*: directory-backed handshake list (SSID, BSSID, time, size, GPS pin when tagged),
+    with the `truncated` notice when the cap is hit. v1 is view-only; download-over-BT is
+    roadmap.
+  - Each segment badge shows the length of the list it names, and renders `500+` when
+    `truncated` is set. **It is not required to agree with the Dashboard counters**, and on the
+    reference hardware it will not: §2.5 defines `stats.handshakes` as `*.pcapng` only, so that
+    it matches the number on the e-ink display (F15), while the Captured list is directory-backed
+    over both extensions and includes legacy `.pcap` files. The list and `stats` also arrive on
+    separate pushes, so they differ between frames even when the totals agree. The authoritative
+    number for "how many handshakes does this unit have" is `stats.handshakesTotal`; the badge
+    answers the narrower question of how many rows are in front of you.
 - **Peers**: pwngrid peers with signal, last-seen, pwnd counters.
 - **Map**: Leaflet plotting handshake sidecar positions plus the current location marker.
 - **Log**: live tail with a text filter and an auto-scroll toggle.
@@ -1220,7 +1312,7 @@ That sentence is the perimeter. Anything that does not serve it belongs in the b
 |---|---|
 | Plugin | Config schema; TLS and address binding with the rebind loop (§2.3); `websockets` compatibility shim; optional token auth; the full message contract (§2.4); `stats`, access points, handshakes, peers, log, screen mirror, face status; the pushes; all four controls including the restart path; battery detection; the GPS abstraction and `.gps.json` sidecars; the HTTPS static server with explicit MIME and SPA fallback |
 | Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
-| Frontend | The eight views, `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
+| Frontend | The seven views and the navigation model (§4.5), `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
 | Tests | The whole of §10, including the 100% branch-coverage gate |
 | CI | `ci.yml`, `release.yml`, `check_plugin.py`, schema validation, protocol type sync, secret scan |
 | Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, `PINNED-FACTS.md`, README, ROADMAP, CONTRIBUTING, issue templates |
@@ -1234,7 +1326,8 @@ export, wpa-sec upload. Web push is closed outright (D10).
 1. A person following `docs/SETUP.md` alone, with no help from the author, gets from a bare Pi
    to an installed PWA. If a step only works because the author knew something, the document is
    not finished.
-2. All eight views work against a real pwnagotchi, from an iPhone, over the BT PAN link.
+2. All seven views work against a real pwnagotchi, from an iPhone, over the BT PAN link, in
+   both orientations, and reachable through the bottom bar and the More sheet.
 3. All four controls exercised on real hardware — including a mode switch, which restarts the
    service and drops the socket, and including the reconnect that follows.
 4. Every CI job green, the coverage gate included.
@@ -1391,7 +1484,34 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
 - `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
-- Playwright is explicitly out of scope for v1.
+- `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
+  because it excuses view components from coverage. That exclusion was written for list markup
+  and does not hold for navigation: current-view selection and `aria-current` including the More
+  slot standing in for a sheet-hosted view, sheet open, Escape, backdrop and choose-an-entry
+  dismissal with focus returned to the More control, segment roving tabindex and arrow movement
+  with the inactive panel `hidden`, the rail breakpoint driven by a `matchMedia` mock, and views
+  surviving navigation with their state intact.
+
+**Playwright is in scope**, reversing an earlier line that ruled it out for v1. The reason is
+evidence: a set of behaviour and geometry checks written against an interactive mockup found
+defects that three rounds of human review had missed, and caught two regressions introduced while
+fixing them. Those checks are worth more as a gate than as a discarded prototype.
+
+- `frontend/tests/e2e/`, run against the built `dist/` in **Chromium and WebKit**, both
+  orientations at 402x874 and 874x402. WebKit is not Safari, but it is the same engine family,
+  and the class of defect that hurt here (viewport units, nested contexts, safe areas) is that
+  family's.
+- Geometry invariants rather than pixels: nothing painted below the content area in either
+  orientation, the map never owning the full width or height of the views area so a drag always
+  has somewhere to scroll the app, touch targets at 44px, contrast computed for every token
+  against every surface it can land on.
+- **Screenshot baselines are not committed.** They are platform-specific, CI runs amd64 and the
+  review host is arm64, so a shared baseline fails on font rendering alone and a gate nobody
+  trusts is worse than no gate. Screenshots are uploaded as workflow artifacts for human review
+  instead.
+- Known harness limitation: headless WebKit paints nothing in a full-viewport screenshot when the
+  shell is `position: fixed` (issue #40, ruled out on real Safari). Element screenshots and the
+  geometry assertions are unaffected; a blank WebKit screenshot is not a product defect.
 
 ### 10.6 Tools (`tests/tools/test_certs.py`)
 
@@ -1663,8 +1783,12 @@ Each step ships with the tests named in §10 and is not done until they pass (§
 4. `tools/gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh`; `docs/CERTIFICATES.md`, `docs/SETUP.md`.
    Tests §10.6.
 5. `tests/test_integration_ws.py` — plugin and certificate scripts exercised together.
-6. Frontend scaffold (Vite + Svelte + TS + PWA), `lib/` (generated `protocol.ts`, `ws`, `stores`,
-   `settings`, `geo`), then the views Dashboard → Settings. Tests §10.5.
+6. Frontend scaffold (Vite + Svelte + TS + PWA), then **the navigation shell** (§4.5: routes,
+   bottom bar, landscape rail, More sheet, theme, safe areas), then `lib/` (generated
+   `protocol.ts`, `ws`, `stores`, `settings`, `geo`), then the seven views. Tests §10.5.
+   The shell comes before the views on purpose: it is where every layout defect this project has
+   hit so far lives, and it is far cheaper to get right against one placeholder view than to
+   retrofit under seven.
 7. `.github/check_plugin.py`, `release.yml` (CI landed early, see §5.1).
 8. README, ROADMAP, CONTRIBUTING, issue templates, `docs/PINNED-FACTS.md`.
 9. GitHub project: labels, milestones, seed issues, epic (via `gh`).

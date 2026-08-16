@@ -929,6 +929,47 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
   `theme_color` / `background_color`, name/short_name, 192 + 512 icons including
   `purpose: "maskable"`, and **no `orientation` key** (§4.5.1: locking it either does nothing on
   iOS or removes the landscape rail from the installed app while leaving it in the browser).
+#### 4.2.1 Two iOS facts measured on the device, not assumed
+
+Both were established on an iPhone 17 Pro running the app from the Home Screen, with a
+diagnostics page reporting the engine's own numbers. Both contradict what the obvious code would
+assume, and both cost a visible defect when they are not known.
+
+**`(display-mode: standalone)` does not match on iOS, even when the app is standalone.** The
+device reported `navigator.standalone === true` and the media query `false` in the same frame.
+Any CSS or JS conditioned on that media query is silently inert on the only platform this app
+targets. **Use `navigator.standalone`**, and treat the media query as a progressive enhancement
+for other engines.
+
+**In standalone with `black-translucent`, the viewport is shorter than the screen by exactly the
+top inset.** Measured in portrait: screen 402x874, `window.innerHeight` 812, top inset 62, and
+874 minus 62 is 812. The web view is placed at the top of the screen but reports a height that
+excludes the status bar, so a strip the height of the status bar is left at the bottom that the
+page cannot paint. It shows as a dead band under the navigation bar.
+
+`position: fixed; inset: 0` is not at fault: it fills the viewport the engine declares, which is
+the correct behaviour and the reason it was chosen over viewport units. The engine declares one
+shorter than the screen.
+
+The lever is in the units, which disagree only in this case: in that same frame `100vh` measured
+**874**, the full screen, while `100svh` and `100dvh` measured 812. So:
+
+> **In standalone, and only in standalone, the shell is `height: 100vh` instead of being pinned
+> by `inset: 0`.** In a browser tab it stays `inset: 0`, because there `100vh` is the large
+> viewport and the bottom bar would sit under Safari's toolbar, which is the bug that made
+> viewport units unusable in the first place.
+
+The condition is `navigator.standalone`, per the fact above.
+
+Landscape is unaffected and was measured too: `100vh`, `100svh`, `100lvh` and `100dvh` all
+reported 402, the fixed box filled 874x402, and the gap was zero. Note that landscape carries a
+**62px inset on both the left and the right**, not only on the leading edge, so content must
+clear the trailing inset as well as the rail clearing the leading one.
+
+Neither fact is reachable by an automated test: jsdom has no viewport, and no browser engine can
+be put into iOS standalone mode. They are verified on hardware, and this section is where that
+verification is recorded so it is not re-derived by the next person to see a black band.
+
 - Global CSS honours safe areas via `env(safe-area-inset-*)`; a sticky top bar accounts for the
   Dynamic Island, a bottom **navigation** bar for the home indicator, and in landscape the
   leading-edge rail for `inset-left`/`inset-right` (§4.5). It is deliberately not called a tab

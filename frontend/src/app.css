@@ -21,7 +21,10 @@
   --safe-left: env(safe-area-inset-left, 0px);
 
   /* Shell geometry (SPEC 4.5). The rail is 72px of content width, outside the
-     leading safe-area inset, which the rail adds on top of this figure. */
+     leading safe-area inset, which the rail adds on top of this figure. The bar
+     figure is an outer height: its hairline border is inside it, because the
+     content area reserves exactly this number and a border added on top of it
+     would put the last scrollable row under the bar. */
   --header-height: 44px;
   --nav-bar-height: 56px;
   --nav-rail-width: 72px;

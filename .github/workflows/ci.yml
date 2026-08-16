@@ -144,6 +144,67 @@ jobs:
       - name: Build
         run: npm run build
 
+  e2e:
+    name: End-to-end (Chromium, WebKit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # The cache key has to be the exact Playwright version, not the lockfile
+      # hash: browser revisions are pinned to that version, and a cache restored
+      # for another one leaves Playwright downloading them again anyway.
+      - name: Resolve the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browsers
+        id: browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install browsers
+        if: steps.browsers.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium webkit
+
+      # The apt packages WebKit links against live outside ~/.cache and are not
+      # in the cache, so they are installed even on a hit. This is the cheap half
+      # of the step above; the browser downloads are the slow half.
+      - name: Install browser system dependencies
+        if: steps.browsers.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium webkit
+
+      # Builds dist/ and serves it through the webServer in playwright.config.ts.
+      # The suite runs against what ships, not against the dev server.
+      - name: Run the end-to-end suite
+        run: npm run test:e2e
+
+      # Screenshots are evidence for a human, never a baseline: this runner is
+      # amd64 and the review host is arm64, so a shared baseline would fail on
+      # font rendering alone (SPEC 10.5). Uploaded on failure too, which is when
+      # somebody actually wants to look at them.
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-screenshots
+          path: frontend/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
   hygiene:
     name: Repository hygiene
     runs-on: ubuntu-latest
@@ -160,6 +221,18 @@ jobs:
       # that a diff is safe to publish.
       - name: Secret scan
         run: python .github/check_secrets.py
+
+      # SPEC 10.5 rules out screenshot baselines outright, so the assertion that
+      # would create one is banned rather than discouraged. Without this, the
+      # first `toHaveScreenshot` commits a baseline that CI can only fail on.
+      - name: No screenshot baselines
+        run: |
+          if git grep -n -E 'toHaveScreenshot|toMatchSnapshot' -- 'frontend/tests' > /dev/null 2>&1; then
+            echo "::error::screenshot baselines are banned (SPEC.md 10.5)."
+            git grep -n -E 'toHaveScreenshot|toMatchSnapshot' -- 'frontend/tests'
+            exit 1
+          fi
+          echo "no screenshot baselines found"
 
       # The 100% branch-coverage gate is only meaningful if nobody can opt out of
       # it, so the opt-out is banned outright rather than discouraged.

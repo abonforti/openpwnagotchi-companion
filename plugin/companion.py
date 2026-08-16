@@ -1510,11 +1510,14 @@ class Router:
 
     def face_status(self) -> dict:
         """Current face and status as text. Faces are unicode, never images (D11)."""
-        agent = self._agent()
         face = status = ""
-        view = None
         try:
-            view = agent.view() if callable(getattr(agent, "view", None)) else None
+            # No hasattr guard: F28a pins `Agent.view`, so the only ways this
+            # fails are the agent being None before on_ready and a fork that
+            # renamed the accessor. Both raise, both mean the same empty pair,
+            # and one `except` covers them - where the guard added a leg that
+            # coverage.py cannot see, being a ternary rather than a statement.
+            view = self._agent().view()
         except Exception:
             view = None
         if view is not None:
@@ -1524,16 +1527,20 @@ class Router:
 
     @staticmethod
     def _view_text(view: Any, key: str) -> str:
-        """Reads one text element from the UI view, tolerating every shape of it."""
+        """Reads one text element from the UI view.
+
+        `View.get` returns the element's value rather than the widget, and `None`
+        for a key the state does not hold (F28). Both `face` and `status` exist
+        on a running unit, so `None` can only mean a future version renamed a
+        key; it becomes an empty string because the protocol types both fields
+        as strings and a null is not a shape the schema allows. The `try` stays
+        because this is a third-party fork that updates itself underneath us,
+        and nothing may escape into the event loop.
+        """
         try:
-            element = view.get(key)
+            value = view.get(key)
         except Exception:
             return ""
-        if element is None:
-            return ""
-        if isinstance(element, str):
-            return element
-        value = getattr(element, "value", None)
         return value if isinstance(value, str) else ""
 
     def capabilities(self) -> dict:

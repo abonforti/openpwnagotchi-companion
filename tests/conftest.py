@@ -44,6 +44,8 @@ import pwnagotchi.mesh.peer  # noqa: E402
 import pwnagotchi.plugins  # noqa: E402
 import pwnagotchi.ui.web  # noqa: E402
 
+from pwnagotchi.ui.view import View  # noqa: E402
+
 assert Path(pwnagotchi.__file__).is_relative_to(STUB_DIR), (
     "the real pwnagotchi package is shadowing the stub; the suite must run "
     "without a pwnagotchi installation"
@@ -147,6 +149,13 @@ DEFAULT_ACCESS_POINTS: list[dict[str, Any]] = [
 ]
 
 
+#: What a running unit's view holds. Synthetic, and deliberately unicode: D11
+#: makes the face text rather than an image, so a face that survives to the wire
+#: unchanged is the whole of the rendering contract.
+DEFAULT_FACE = "(⌐■_■)"
+DEFAULT_STATUS = "Hi, I'm TestUnit"
+
+
 class FakeAgent:
     """The pwnagotchi agent, reduced to what SPEC section 11 pins.
 
@@ -159,12 +168,18 @@ class FakeAgent:
     rule in SPEC 2.5: the call is a 30-second-timeout HTTP GET, so a single one
     on the request path stalls every connected client, and `get_stats` must make
     exactly zero of them.
+
+    `view()` returns the stub `View` (F28), holding `face` and `status` the way
+    the initial UI state does. A test that needs a different view - one missing a
+    key, or one that refuses to answer - assigns `agent._ui_view` directly.
     """
 
     def __init__(
         self,
         *,
         mode: str = "auto",
+        face: str = DEFAULT_FACE,
+        status: str = DEFAULT_STATUS,
         access_points: list[dict[str, Any]] | None = None,
         handshakes: dict[str, Any] | None = None,
         peers: dict[str, Any] | None = None,
@@ -183,10 +198,17 @@ class FakeAgent:
         }
         self._session_payload = {} if session_payload is None else session_payload
         self.session_calls = 0
+        #: Scaffolding, not a pinned attribute name. `view()` is what is pinned;
+        #: where the agent keeps the object is nobody's business but its own.
+        self._ui_view = View({"face": face, "status": status})
 
     def session(self) -> dict[str, Any]:
         self.session_calls += 1
         return self._session_payload
+
+    def view(self):
+        """F28: the `View` the agent was constructed with."""
+        return self._ui_view
 
     def get_access_points(self):
         """Forbidden by SPEC 11.1 - side-effecting.

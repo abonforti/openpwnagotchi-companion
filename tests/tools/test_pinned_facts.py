@@ -38,6 +38,23 @@ def load_module():
 cpf = load_module()
 
 
+def fact_number(entry_id: str) -> str:
+    """`F28b` and `F9a` both belong to the fact `F28` and `F9`.
+
+    One fact often needs several manifest entries, because an entry checks one
+    file and a fact can rest on three. The suffix is how they are told apart.
+
+    This used to be `id.rstrip("abc")`, which quietly capped a fact at three
+    entries: `F28d` came back as `F28d`, matched nothing in SPEC, and the
+    cross-check below failed. A fact that needs a fourth file to be verifiable
+    would have had to go unverified, which is the opposite of what these two
+    tests exist to enforce.
+    """
+    match = re.match(r"(F\d+)", entry_id)
+    assert match is not None, f"manifest entry id {entry_id!r} does not start with an F-number"
+    return match.group(1)
+
+
 SOURCE = '''
 import os
 
@@ -218,8 +235,7 @@ def test_the_manifest_covers_every_fact_section_11_pins():
     spec = (REPO_ROOT / "SPEC.md").read_text(encoding="utf-8")
     pinned = set(re.findall(r"^\| (F\d+) \|", spec, re.M))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    # F9 is split into F9a/F9b/F9c, F16 into F16/F16b: strip the suffix.
-    covered = {fact["id"].rstrip("abc") for fact in manifest["facts"]}
+    covered = {fact_number(fact["id"]) for fact in manifest["facts"]}
 
     missing = pinned - covered - not_checkable
 
@@ -235,6 +251,6 @@ def test_the_manifest_invents_no_facts():
     pinned = set(re.findall(r"^\| (F\d+) \|", spec, re.M))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-    invented = {fact["id"].rstrip("abc") for fact in manifest["facts"]} - pinned
+    invented = {fact_number(fact["id"]) for fact in manifest["facts"]} - pinned
 
     assert not invented, f"pinned_symbols.json checks {sorted(invented)}, not in SPEC section 11"

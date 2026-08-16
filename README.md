@@ -45,7 +45,7 @@ iPhone  ──BT PAN──  Pi (pwnagotchi)
    └── PWA installed from https://<pi-ip>:8443
 ```
 
-The plugin binds **only** to your tether interfaces (`bnep0`, `usb0`), never `0.0.0.0`, and
+The plugin binds **only** to the tether addresses you configure, never `0.0.0.0`, and
 only over TLS. There is no plaintext fallback and no cloud component.
 
 ## Security model, honestly

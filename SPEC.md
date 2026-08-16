@@ -36,7 +36,8 @@ with no further design decisions required.
 | D2 | Frontend stack | Svelte + TypeScript + Vite + `vite-plugin-pwa` (Workbox). Map: Leaflet + OSM tiles. |
 | D3 | Repo name | `openpwnagotchi-companion`, public. |
 | D4 | Transport security | Private CA. Server cert with `iPAddress` SAN, `basicConstraints=critical,CA:TRUE` on the CA, server validity ≤ 825 days. HTTPS static on 8443, WSS on 8082. No plaintext fallback. |
-| D5 | Socket auth | Bind only to configured tether interfaces (default `bnep0`, `usb0`), never `0.0.0.0`. Optional shared token, disabled by default. |
+| D5 | Socket auth | Bind only to configured tether addresses, never `0.0.0.0`. Optional shared token, disabled by default. |
+| D5.1 | Binding identifier | Supersedes the interface-name form of D5 (`interfaces = ["bnep0", "usb0"]`). Listeners are chosen by `bind_addresses`, a list of IPv4 addresses or CIDR blocks (§2.3.1). An interface name identifies a device, not a network: `bnep` devices are numbered by the order PAN links come up, so `bnep0` is whichever Bluetooth peer connected first, which on a unit paired with more than one machine is not the one the owner meant. With `token` empty by default, that put an unauthenticated socket on a link nobody chose. |
 | D6 | Delivery | GitHub Actions builds the PWA into `dist.tgz`, attached to a Release. An install script pulls it onto the Pi; the plugin serves it over HTTPS. Each user runs their own; nothing centrally hosted. |
 | D7 | Config | All IPs and ports configurable in the PWA settings screen. BT PAN IP prefilled (`172.20.10.7`). USB IP (`10.0.0.2`) supported as an extra configurable host. |
 | D8 | v1 features | Full parity with the paid app + three gaps it lacks: detailed handshake list, peer/mesh view, live log viewer. Plus full GPS (Pi-source detection + browser fallback) and wardriving map, and full e-ink screen mirror (on-demand + slow auto ~5 s). |
@@ -169,7 +170,7 @@ install script or by manual copy, documented in SETUP.md — do NOT rely on the 
 ```toml
 [main.plugins.companion]
 enabled = true
-interfaces = ["bnep0", "usb0"]     # bind WSS+HTTPS on the current IPv4 of each; skip if absent
+bind_addresses = ["172.20.10.0/28", "10.0.0.2"]   # IPv4 addresses or CIDR blocks (§2.3.1)
 ws_port = 8082                     # WSS
 http_port = 8443                   # HTTPS static (serves the PWA)
 tls_cert = "/etc/pwnagotchi/companion/server.crt"   # PEM, must carry iPAddress SAN
@@ -182,7 +183,7 @@ gps_source = "auto"                # auto | bettercap | gpsd | none (browser fal
 gpsd_host = "127.0.0.1"
 gpsd_port = 2947
 session_poll_interval = 5          # seconds between background bettercap session refreshes
-rebind_interval = 30               # seconds between interface IPv4 re-resolution passes
+rebind_interval = 30               # seconds between local-address re-enumeration passes
 save_gps_log = false
 gps_log_path = "/var/tmp/pwnagotchi_gps.log"
 mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
@@ -196,31 +197,62 @@ never raise; use `self.options.get(key, default)`.
 
 - On `on_loaded`, start a background thread running a private asyncio loop (same shape as
   pwnios).
-- Resolve each configured interface's current IPv4 via `netifaces` if importable, else parse
-  `ip -4 addr show <iface>`. Do not add a hard dependency on `netifaces`.
-- For each resolved IP:
+- Enumerate the host's current IPv4 addresses via `netifaces` if importable, else parse
+  `ip -4 addr show`. Do not add a hard dependency on `netifaces`. The enumeration returns
+  addresses; which interface carries one is not consulted and must not reach a bind decision.
+- Select the addresses to bind by matching that enumeration against `bind_addresses` (§2.3.1).
+- For each selected IP:
   - Start a WSS server (see §2.3.1 for the `websockets` API compatibility rule).
   - Start an HTTPS static server serving `web_root` (§2.15), bound to `(ip, http_port)`.
 - `ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ssl_ctx.load_cert_chain(tls_cert, tls_key)`.
   If cert/key are missing or unreadable: log an explicit error and **start no listener at all**
   (no plaintext fallback — iOS requires TLS, and a plaintext server would be a silent security
   foot-gun). Set `ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2`.
-- Never bind `0.0.0.0`, `::`, or a hostname. Only literal interface IPv4 addresses.
+- Never bind `0.0.0.0`, `::`, or a hostname. Only literal IPv4 addresses the host actually has,
+  selected by §2.3.1.
 
-#### 2.3.1 Rebinding loop (was underspecified in v1)
+#### 2.3.1 Address selection and the rebinding loop
 
-A `rebind_interval` timer (default 30 s) re-resolves every configured interface and reconciles:
+`bind_addresses` is a list whose entries are each either a literal IPv4 address or an IPv4 CIDR
+block. A local address is selected when it equals a literal entry or falls inside a block entry.
+
+Blocks exist because the literal address is less certain than it looks: over an iPhone Personal
+Hotspot the subnet is always `172.20.10.0/28`, but the host part comes from the phone's DHCP
+server, so a literal-only default would leave some units with no listener and the unhelpful
+symptom "nothing started".
+
+Entries are validated when `Listeners` is constructed, before any pass runs, and a rejected entry
+never contributes a listener. An address that matches more than one entry is bound once, and so
+is an address the enumeration itself reports more than once - the same IPv4 configured on two
+interfaces, or a backend that lists it under both a primary and a secondary label:
+
+| Entry | Action |
+|---|---|
+| valid IPv4 address, or block with prefix `/24` or longer | accepted |
+| the wildcard, as an address (`0.0.0.0`) or inside a block (`0.0.0.0/24`) | rejected, logged at error. D5 and §11.1 forbid it in any bind call unconditionally, and that rule outranks "it parses as an IPv4 address". The same refusal applies to a wildcard arriving from the address enumeration, not only to a configured entry. |
+| block with a prefix **shorter than `/24`** | rejected, logged at error. A block is a declaration of which network the owner chose, and one wider than a `/24` stops being a choice. `0.0.0.0/0` is refused by the wildcard row above before this one is reached; what this row actually catches is a plausible-looking private-range block, a `/8` or a `/16` copied out of somebody's router configuration. |
+| block written with host bits set (`172.20.10.5/28`) | accepted, normalised to its network (`172.20.10.0/28`). The intent is unambiguous and refusing it would only produce a puzzling error. |
+| anything else (hostname, IPv6, malformed) | rejected, logged at error; the remaining entries still bind |
+| `bind_addresses` is not a list at all (a bare string, a number, a table) | treated as empty, logged at error. A string is iterable, and iterating one character by character would turn a typo into a pile of nonsense entries. The type check is `isinstance(value, list)`: TOML produces nothing else, so accepting other sequences would only widen what counts as a configuration. |
+| `bind_addresses` is present but null | treated as empty, logged at error — **not** as absent. TOML has no null literal, so this does not arrive from `config.toml`; it arrives from a caller passing the options dict directly, which is how the plugin is driven under test and how it could be driven by anything embedding it. The rule exists because `self.options.get(key, default)` cannot tell a nulled key from a missing one, and the shipped default binds a whole subnet: a present-but-unusable value must never resolve to something more permissive than nothing. |
+| every entry rejected, or the list empty | no listener at all, logged at error. Never fall back to a default that binds more. |
+
+A legacy `interfaces` key is **ignored**, with a warning naming `bind_addresses`. Carrying the
+old behaviour over silently would preserve the exposure D5.1 exists to close.
+
+A `rebind_interval` timer (default 30 s) re-enumerates the host's addresses and reconciles:
 
 | Observed | Action |
 |---|---|
-| interface has an IP, no listener bound | bind WSS + HTTPS on it, log at info |
-| interface lost its IP | close both listeners for that IP, drop its clients, log at info |
-| interface IP **changed** | close listeners on the old IP, bind on the new one |
-| interface absent entirely | skip silently after the first log; do not spam |
+| selected address present, no listener bound | bind WSS + HTTPS on it, log at info |
+| bound address no longer present locally | close both listeners for that address, drop its clients, log at info |
+| a different address in the same block appears | it is a new selection: bind it, and unbind the old one under the rule above |
+| no address matches any entry | skip silently after the first log; do not spam |
 | bind raises `OSError` (`EADDRINUSE`/`EADDRNOTAVAIL`) | log at warning, leave unbound, retry next pass. Never crash the loop. |
+| the **enumeration itself** raises, whatever the exception type | log at warning, make no change to the bound set, retry next pass. A failed enumeration observed nothing, and the rows above are about what was observed: treating it as an empty address list would tear down a healthy tether every time `ip -4 addr show` hiccups. "Never crash the loop" is about staying available, not merely about not propagating. |
 
-State is a dict `{iface: (ip, ws_server, http_server)}`. Reconciliation is keyed on the IP, so
-a flapping tether converges without a plugin reload.
+State is a dict `{ip: (ws_server, http_server)}`, keyed on the address itself, so a flapping
+tether or a new DHCP lease converges without a plugin reload.
 
 #### 2.3.2 `websockets` API compatibility (mandatory)
 
@@ -706,7 +738,8 @@ This is tested in `tests/test_handshakes.py` with both shapes. Never assume the 
 
 ### 2.14 Hardening vs upstream `pwnios.py` (checklist)
 
-- [ ] Bind to interface IPs, never `0.0.0.0` (upstream binds `0.0.0.0:8082`). (D5)
+- [ ] Bind to configured addresses, never `0.0.0.0` (upstream binds `0.0.0.0:8082`), and never
+      decide a bind from an interface name. (D5, D5.1)
 - [ ] TLS mandatory; refuse to start listeners without a usable cert/key. (D4)
 - [ ] `bssid` ← `ap['mac']` (upstream reads `ap['bssid']`, which is always empty). (F4)
 - [ ] Read `_access_points` / `_handshakes` / `_peers` / `mode` directly; delete the
@@ -1176,7 +1209,7 @@ That sentence is the perimeter. Anything that does not serve it belongs in the b
 
 | Area | Work |
 |---|---|
-| Plugin | Config schema; TLS and interface binding with the rebind loop (§2.3); `websockets` compatibility shim; optional token auth; the full message contract (§2.4); `stats`, access points, handshakes, peers, log, screen mirror, face status; the pushes; all four controls including the restart path; battery detection; the GPS abstraction and `.gps.json` sidecars; the HTTPS static server with explicit MIME and SPA fallback |
+| Plugin | Config schema; TLS and address binding with the rebind loop (§2.3); `websockets` compatibility shim; optional token auth; the full message contract (§2.4); `stats`, access points, handshakes, peers, log, screen mirror, face status; the pushes; all four controls including the restart path; battery detection; the GPS abstraction and `.gps.json` sidecars; the HTTPS static server with explicit MIME and SPA fallback |
 | Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
 | Frontend | The eight views, `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
 | Tests | The whole of §10, including the 100% branch-coverage gate |
@@ -1263,8 +1296,11 @@ section for web push with the one-line reason (only useful while tethered with t
 10. **`basicConstraints` must be critical on the CA** — without it, iOS will not offer the
     profile for full trust, HTTPS then fails silently and no service worker registers.
 11. **825-day cap** — longer server certificates are rejected by iOS.
-12. **Interface may be down at load** — `bnep0` often has no IP until the tether is up.
-    Re-resolve on a timer, skip without crashing, rebind on change, never fall back to `0.0.0.0`.
+12. **The tether address may not exist at load** — the PAN link often has no address until the
+    tether is up. Re-enumerate on a timer, skip without crashing, rebind on change, never fall
+    back to `0.0.0.0`. Do not identify the link by interface name: `bnep` numbering follows the
+    order peers connect, so on a unit paired with more than one machine `bnep0` is whichever
+    one got there first (D5.1).
 13. **Log and handshake paths differ by image** — always read from config. This fork's log
     default is `/etc/pwnagotchi/log/pwnagotchi.log`.
 14. **`.webmanifest` MIME** — unknown to a minimal image's mimetypes DB; declare it explicitly
@@ -1315,7 +1351,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_controls.py` | `set_mode` calls `pwnagotchi.restart` with `"AUTO"`/`"MANU"` and **never assigns `agent.mode`**; broadcasts `restarting` before restarting; no-op when already in the mode; `set_pasv` errors outside auto and when `pasv_mode` is absent, emits the right event otherwise, and does not read `passive` back; reboot/shutdown call the module-level functions |
 | `test_tls_startup.py` | missing cert, missing key, unreadable key and malformed PEM each result in **zero listeners** and a logged error — the no-plaintext-fallback rule |
 | `test_auth.py` | token accepted, rejected, wrong type, missing; `compare_digest` used; unauthenticated connection closed after `auth_timeout`; auth skipped when no token configured |
-| `test_binding.py` | reconciliation table in §2.3.1: appear, disappear, change, absent, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call |
+| `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 
 ### 10.3 Protocol conformance (`tests/test_protocol_conformance.py`)
@@ -1392,8 +1428,9 @@ Two honest limits, and what is done about each:
    the invariant and let the machine hunt the counterexample.
 
 **Design consequence, binding on the implementer:** every external effect sits behind an
-injectable seam — the clock, the gpsd socket, the I2C bus, `subprocess`, interface address
-resolution, thread spawning, and `pwnagotchi.restart`/`reboot`/`shutdown`. Without those seams,
+injectable seam — the clock, the gpsd socket, the I2C bus, `subprocess`, local address
+enumeration (`Deps.list_local_ipv4() -> list[str]`, §2.3.1), thread spawning, and
+`pwnagotchi.restart`/`reboot`/`shutdown`. Without those seams,
 full branch coverage of the I2C and gpsd paths is unreachable and the gate would have to be
 weakened. Constructor injection with real defaults; no monkeypatching of module internals from
 the tests.
@@ -1476,6 +1513,8 @@ Do not use, do not invent, do not "improve" into existence:
 - Any hardcoded `/var/log/pwnagotchi.log`, `/etc/pwnagotchi/handshakes`, or port number that
   bypasses the config.
 - `0.0.0.0`, `::`, or a hostname in any bind call.
+- An interface name as the reason for a bind. Names are read only while enumerating the host's
+  addresses, and the name must not survive into the selection (D5.1).
 
 If you need something in this list, the answer is a spec change requested from the owner, not a
 workaround.

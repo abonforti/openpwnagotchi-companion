@@ -5,14 +5,20 @@ import { defineConfig } from 'vitest/config'
 // vite-plugin-pwa, which would generate a service worker for every run.
 export default defineConfig({
   plugins: [svelte()],
+
+  // Svelte ships both a server and a browser build. Mounting a component in a
+  // test only works against the browser one, so the condition is stated rather
+  // than inferred.
+  resolve: { conditions: ['browser'] },
+
   test: {
     globals: true,
     include: ['src/__tests__/**/*.spec.ts'],
 
-    // Node, not jsdom. Nothing here touches the DOM yet, and a DOM shim that
-    // exists only to satisfy a config is a dependency bought for nothing.
-    // The views will need one; it arrives with them.
-    environment: 'node',
+    // jsdom, as SPEC 10.5 anticipated: "the views will need one; it arrives
+    // with them." navigation.spec.ts mounts the shell and asserts on roles,
+    // aria-current, focus and the sheet, none of which exist without a DOM.
+    environment: 'jsdom',
 
     coverage: {
       provider: 'v8',
@@ -28,11 +34,10 @@ export default defineConfig({
       // guarantee than coverage: it fails if the file drifts from the schemas.
       exclude: ['src/lib/protocol.ts'],
 
-      // SPEC 10.7 sets these to 100 for lines and branches. They are off until
-      // src/lib holds runtime code to cover: turning them on now would prove
-      // only that an empty set is fully covered, which is the same reason
-      // pytest.ini leaves --cov-fail-under off. They go on with ws.ts.
-      // thresholds: { lines: 100, branches: 100 },
+      // SPEC 10.7. On from the commit that put runtime code in src/lib:
+      // router.ts is that code, and a gate switched on later is a gate that
+      // starts its life failing.
+      thresholds: { lines: 100, branches: 100 },
     },
   },
 })

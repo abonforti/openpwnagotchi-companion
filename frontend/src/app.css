@@ -1,4 +1,4 @@
-/* Global styles: dark by default, safe areas, and nothing else yet.
+/* Global styles: dark by default, safe areas, and the shell's geometry tokens.
    The views bring their own; this file owns only what is genuinely global. */
 
 :root {
@@ -19,6 +19,12 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+
+  /* Shell geometry (SPEC 4.5). The rail is 72px of content width, outside the
+     leading safe-area inset, which the rail adds on top of this figure. */
+  --header-height: 44px;
+  --nav-bar-height: 56px;
+  --nav-rail-width: 72px;
 
   color-scheme: dark;
 }
@@ -55,7 +61,8 @@ body {
   font-size: 16px;
   line-height: 1.5;
 
-  /* The tab bar is fixed to the bottom; without this the page bounces past it. */
+  /* The navigation bar is fixed to the bottom; without this the page bounces
+     past it. */
   overscroll-behavior-y: none;
 
   /* Stops iOS enlarging text in landscape and breaking a tuned layout. */
@@ -64,7 +71,6 @@ body {
 
 #app {
   min-height: 100%;
-  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 
 /* Touch targets. Apple's own floor is 44 points and the unit is operated
@@ -76,6 +82,35 @@ button {
   color: inherit;
 }
 
+/* Every view keeps a reading measure rather than stretching, so a landscape
+   window does not turn a list into a line of text with a metre of whitespace
+   after it. */
+.view {
+  padding: 1rem;
+  max-width: 68ch;
+}
+
+.view > h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+}
+
+.view > p {
+  margin: 0;
+}
+
+/* The two views that gain from width are the ones landscape exists for
+   (SPEC 4.5); the measure would only get in their way. */
+.view[data-view='map'],
+.view[data-view='log'] {
+  max-width: none;
+}
+
+.placeholder {
+  color: var(--text-dim);
+}
+
 /* Respect a request for less motion rather than animating regardless. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -84,5 +119,10 @@ button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+
+    /* Duration alone is not enough: a delay survives it, and the sheet uses one
+       to hold visibility until the slide-out has finished. */
+    animation-delay: 0s !important;
+    transition-delay: 0s !important;
   }
 }

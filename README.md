@@ -1,3 +1,8 @@
+![openpwnagotchi-companion](docs/assets/banner.jpg)
+
+<sub>Banner artwork, AI-generated. The phone in it is an illustration, not a screenshot: the
+frontend does not exist yet.</sub>
+
 # openpwnagotchi-companion
 
 A free, self-hostable **PWA companion for pwnagotchi** (jayofelony fork). It does what the paid

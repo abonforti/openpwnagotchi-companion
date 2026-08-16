@@ -166,9 +166,19 @@
     letter-spacing: 0.01em;
   }
 
-  /* Portrait: a bar across the bottom, clear of the home indicator. */
+  /* Portrait: a bar across the bottom, clear of the home indicator.
+
+     The height is stated here with the same expression main uses to reserve
+     room for it, and box-sizing is border-box globally, so the hairline is
+     counted inside the figure instead of being added on top of it. Sizing the
+     list to the token and letting the border grow the bar past it left the last
+     row of scrollable content one pixel under the bar in both engines. Two
+     places computing the same number is how that came back; one expression,
+     used by both sides, is how it cannot. The rail below already worked this
+     way, which is why the rail seam was exact and this one was not. */
   .nav[data-layout='bar'] {
     inset: auto 0 0 0;
+    height: calc(var(--nav-bar-height) + var(--safe-bottom));
     padding-bottom: var(--safe-bottom);
     padding-inline: var(--safe-left) var(--safe-right);
     border-top: 1px solid var(--border);
@@ -176,7 +186,8 @@
 
   .nav[data-layout='bar'] ul {
     align-items: stretch;
-    height: var(--nav-bar-height);
+    /* What the bar has left after its own border and the home indicator. */
+    height: 100%;
   }
 
   .nav[data-layout='bar'] li {

@@ -80,11 +80,20 @@
   <!-- One line in both layouts; in the rail range it only moves inboard of the
        rail, which is all the collapse SPEC 4.5 asks of it. Unit name and
        connection state land here once the stores exist. -->
-  <header class="app-header" use:inertWhen={sheetOpen}>
+  <!-- data-region="header", the counterpart of data-region="views" below: with
+       both declared, a test can check that the header, the views area and the
+       navigation account for the whole shell, instead of inferring the header
+       from where the views area happens to start. -->
+  <header class="app-header" data-region="header" use:inertWhen={sheetOpen}>
     <span class="app-title">companion</span>
   </header>
 
-  <main use:inertWhen={sheetOpen}>
+  <!-- data-region="views" is a declared DOM hook, like data-view, data-nav,
+       data-layout and data-sheet. SPEC 10.5's map invariant and SPEC 4.5's
+       drag-to-scroll rule are phrased against the views area, and a test cannot
+       derive that region from the view roots: a view keeps a reading measure
+       and is deliberately shorter than the area that scrolls it. -->
+  <main data-region="views" use:inertWhen={sheetOpen}>
     <!-- Every view stays mounted. The Map keeps its viewport and zoom and the
          Log keeps its buffer and scroll position; re-initialising them on each
          visit reads as a bug (SPEC 4.5). -->

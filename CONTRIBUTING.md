@@ -112,7 +112,28 @@ wrong against SPEC, and if SPEC does not say, settle it there first.
 - Commits are squashed on merge, so the pull request title and description become the permanent
   record. Write them for someone reading `git log` in a year.
 
-Commits from the maintainer are GPG-signed. Contributor commits need not be.
+Commits from the maintainer are GPG-signed. Contributor commits need not be: `master` requires
+signatures, and the squash commit GitHub creates on merge carries its own signature, so your
+unsigned commits are not a problem.
+
+### What happens to your pull request
+
+- A pull request from a fork runs with a read-only token and no access to any secret, whatever a
+  workflow asks for. That is GitHub's guarantee rather than ours, and this repository does not
+  undo it: nothing uses `pull_request_target`, no workflow references a secret, and the one job
+  that can write anything is on a schedule a pull request cannot trigger.
+- The owner is requested as a reviewer through `.github/CODEOWNERS`. That routes the request; it
+  is not a gate, and it is not a claim that nobody else may review your work.
+- It gets a review against `SPEC.md`, and an audit for anything that should not be published.
+  Both are done with the help of agents whose instructions live in `.claude/agents/`, and both
+  produce findings a person then acts on. Nothing is approved or merged automatically.
+- Expect questions about **why** more than about style. A change that is correct but that nobody
+  can explain in a year is a change that gets reverted in a year.
+- Three things get read closely, and it is not personal: a new dependency, because it moves trust
+  to someone new; an edit to a generated file, because it will be overwritten; and a change that
+  loosens a gate in `.github/`, `.githooks/` or `tests/conftest.py`, because those decide whether
+  anything else is checked at all. If your change needs one of those, say why in the description
+  and it will go faster, not slower.
 
 ## Comments
 

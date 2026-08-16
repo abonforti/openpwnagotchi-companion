@@ -966,6 +966,22 @@ reported 402, the fixed box filled 874x402, and the gap was zero. Note that land
 **62px inset on both the left and the right**, not only on the leading edge, so content must
 clear the trailing inset as well as the rail clearing the leading one.
 
+**Both were then confirmed on a second device**, an iPhone SE at 320x568 running iOS 15.8, which
+matters because it is notchless and a different iOS major. Same behaviour, same arithmetic:
+`100vh` measured 568, the full screen, while `100svh` and `100dvh` measured 548, and the top
+inset was 20px. 568 minus 20 is 548, exactly as 874 minus 62 was 812. `navigator.standalone` was
+`true` and the media query `false` there too.
+
+The SE also settles a question the first measurement could not. On the 17 Pro the top inset and
+the missing strip were both 62px, so the two candidate explanations, "the inset" and "the status
+bar", produced the same number and could not be told apart. A notchless device separates them:
+its top inset is **not** zero, it is 20px, the height of its status bar. So the inset generalises
+to the status bar rather than to the notch, and the explanation above holds rather than being a
+coincidence of one device.
+
+Landscape was clean on both: every unit agreed, the fixed box filled the viewport, and no strip
+was left over. The anomaly is portrait-only.
+
 Neither fact is reachable by an automated test: jsdom has no viewport, and no browser engine can
 be put into iOS standalone mode. They are verified on hardware, and this section is where that
 verification is recorded so it is not re-derived by the next person to see a black band.

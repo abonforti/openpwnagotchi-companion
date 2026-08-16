@@ -1,0 +1,98 @@
+# Two rules about pull requests themselves rather than about their contents.
+#
+# Deliberately triggered by `pull_request` and never by `pull_request_target`.
+# The difference decides whether this is safe: `pull_request` gives a fork's run
+# a read-only token, so a pull request from a stranger cannot make this workflow
+# merge anything. `pull_request_target` would hand a write token to a run whose
+# code the fork controls, which is how repositories get taken over.
+name: Pull request
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    name: Labelled
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout: the labels are in the event payload, and cloning the
+      # repository to read them would be work for nothing.
+      - name: Every pull request carries at least one label
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          count=$(jq 'length' <<<"$LABELS")
+          if [ "$count" -eq 0 ]; then
+            echo "::error::This pull request has no labels."
+            echo "A label is how work is found again six months later, when the title"
+            echo "no longer means anything to anyone. Add at least one; the taxonomy"
+            echo "is in .github/labels.json."
+            exit 1
+          fi
+
+          # A type: label is what makes the backlog filterable. Not fatal, so a
+          # pull request is never blocked over taxonomy, but said out loud.
+          if ! jq -e 'any(.[]; startswith("type: "))' >/dev/null <<<"$LABELS"; then
+            echo "::warning::No 'type:' label. Consider one of type: bug, feature, docs, infra, security, test."
+          fi
+
+          echo "Labels: $(jq -r 'join(", ")' <<<"$LABELS")"
+
+  auto-merge:
+    name: Auto-merge documentation
+    runs-on: ubuntu-latest
+    # Enabling auto-merge is a write, and only this job needs it.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge when every changed file is documentation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # The decision is made on the list of changed files, never on a label.
+          # A label is a claim someone made; the file list is a fact. Gating on
+          # the label would mean a mislabelled pull request full of code merges
+          # itself, and mislabelling is a slip rather than a rare event.
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+
+          if [ -z "$files" ]; then
+            echo "No files changed; nothing to decide."
+            exit 0
+          fi
+
+          # Documentation is prose and nothing else. Note what is absent:
+          # .github/workflows changes the CI that guards everything, and
+          # docs/schemas is the authoritative wire format from which
+          # protocol.ts is generated, so neither is documentation however much
+          # it looks like configuration or notes.
+          not_docs=$(echo "$files" | grep -vP '^(docs/(?!schemas/).*|[^/]*\.md|\.github/ISSUE_TEMPLATE/.*)$' || true)
+
+          if [ -n "$not_docs" ]; then
+            echo "Not a documentation-only pull request. Leaving it to a human."
+            echo "$not_docs" | sed 's/^/  /'
+            exit 0
+          fi
+
+          echo "Every changed file is documentation:"
+          echo "$files" | sed 's/^/  /'
+
+          # Auto-merge does not bypass anything: the ruleset on master still
+          # requires its checks, so a broken pull request simply waits forever
+          # rather than merging.
+          if gh pr merge "$PR" --repo "$REPO" --auto --squash; then
+            echo "Auto-merge enabled."
+          else
+            # Already enabled, or the pull request is in a state that cannot take
+            # it. Neither is a reason to fail the run and colour the checks red.
+            echo "::notice::Could not enable auto-merge; it may already be on."
+          fi

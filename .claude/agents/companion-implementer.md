@@ -44,7 +44,7 @@ test waiting for it.
 - **Nothing escapes into the event loop.** Every I2C, GPS, socket and file access is guarded.
 - **Everything from config.** No hardcoded path or port that the config already defines.
 
-### Seams, because coverage is enforced at 100%
+### Seams, because coverage is gated and a gap has to be a decision
 
 Every external effect sits behind an injectable seam: the clock, the filesystem, the gpsd
 socket, the I2C bus, `subprocess`, `pwnagotchi.restart`/`reboot`/`shutdown`, and the

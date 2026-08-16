@@ -107,6 +107,18 @@
 
 <style>
   .nav {
+    /* SPEC 4.5.1: "touch targets need separation as well as size". 44px says
+       how large an entry is and nothing about how far it sits from the next
+       one, and two large targets flush against each other are easy to hit
+       wrongly. The separation is non-tappable bar, so it comes out of the
+       entries rather than being added to the bar: at the 402px reference
+       profile five entries share 402 - 4 x 4 = 386px, 77.2px each, still well
+       over the floor. This is a minimum rather than a house figure: the rail
+       already sat further apart than this and keeps its own spacing, because
+       the rule is that entries must not touch, not that every layout has to
+       separate them by the same number of pixels. */
+    --nav-entry-gap: 4px;
+
     /* Absolute, not fixed: fixed would position against the viewport the engine
        declares, which in iOS standalone is shorter than the screen (SPEC
        4.2.1). The shell is the box that knows the right height. */
@@ -188,6 +200,10 @@
     align-items: stretch;
     /* What the bar has left after its own border and the home indicator. */
     height: 100%;
+    /* The gap is taken out of the row, not added to it: `flex: 1 1 0` on the
+       items divides what is left, so the bar's own height and the space main
+       reserves for it are untouched (SPEC 4.5.1). */
+    gap: var(--nav-entry-gap);
   }
 
   .nav[data-layout='bar'] li {
@@ -220,6 +236,9 @@
     justify-content: center;
     height: 100%;
     width: var(--nav-rail-width);
+    /* Unchanged, and comfortably past --nav-entry-gap: the rail has always held
+       its entries apart, so SPEC 4.5.1 asks nothing of it. Narrowing this to
+       the bar's 4px would be tightening a layout that was already right. */
     gap: 0.5rem;
   }
 

@@ -1209,8 +1209,8 @@ class Router:
 
     Deliberately free of sockets, threads and the event loop: `handle` takes a
     parsed dict and returns a list of outgoing dicts. Everything the protocol
-    does can therefore be tested directly, which is what makes 100% branch
-    coverage reachable, and the transport above stays thin enough to be covered
+    does can therefore be tested directly, which is what keeps branch coverage
+    of the protocol within reach, and the transport above stays thin enough to be covered
     by the integration test alone.
 
     Commands that end the process - a mode change, a reboot, a shutdown - return
@@ -2410,8 +2410,14 @@ class Companion(plugins.Plugin):
             # This hook fires on every display refresh. Pushing unchanged text
             # down a Bluetooth link several times a second is pure waste.
             return
+        try:
+            self.broadcast(self._router.push("face_status", current))
+        except Exception:
+            # The signature stays as it was, so the next refresh carrying this
+            # same face is a retry rather than a suppressed duplicate.
+            log.exception("[companion] could not push face_status")
+            return
         self._last_face = signature
-        self.broadcast(self._router.push("face_status", current))
 
     def _push_mood(self, mood: str) -> None:
         """Pushes a status_change for one of the mood hooks."""

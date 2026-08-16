@@ -96,8 +96,21 @@ jobs:
       # No pwnagotchi installation: tests/fakes/pwnagotchi_stub stands in and
       # exposes exactly the symbols pinned in SPEC section 11, so reaching for
       # an API the real fork does not have fails here rather than on a device.
+      #
+      # --cov-fail-under lives on this invocation rather than in pytest.ini
+      # because a targeted local run is legitimately below the floor and must
+      # not be red for it (see the comment there). This is the whole suite, so
+      # here the number means something.
       - name: Run the suite
-        run: python -m pytest
+        run: python -m pytest --cov-fail-under=85
+
+      # The step above fails the run below 85%. This is the other half of
+      # SPEC 10.7: it compares the run against the figure recorded in
+      # .github/coverage-baseline.json and warns on a fall that stays above the
+      # floor, which a flat threshold lets through in silence. It also restates
+      # the floor, so bypassing --cov-fail-under does not bypass the gate.
+      - name: Coverage floor and baseline
+        run: python .github/check_coverage.py plugin
 
       # The plugin must at least parse under the interpreter the device runs.
       - name: Byte-compile the plugin
@@ -138,6 +151,15 @@ jobs:
       # point, and a threshold nothing measures is a comment.
       - name: Test
         run: npm run test:coverage
+
+      # The other half of SPEC 10.7, as in the plugin job: the vitest thresholds
+      # fail below 85%, this reports a fall that stays above it. The path is
+      # relative because this job runs in frontend/; the script resolves the
+      # repository from its own location, so it does not care where it is run
+      # from. python3, not python: no setup-python step runs in this job and
+      # python3 is the name the runner image guarantees.
+      - name: Coverage floor and baseline
+        run: python3 ../.github/check_coverage.py frontend
 
       # Last, because a build that succeeds on code that does not typecheck is
       # not information worth having.
@@ -234,8 +256,10 @@ jobs:
           fi
           echo "no screenshot baselines found"
 
-      # The 100% branch-coverage gate is only meaningful if nobody can opt out of
-      # it, so the opt-out is banned outright rather than discouraged.
+      # The 85% branch-coverage floor is only meaningful if nobody can opt out of
+      # it, so the opt-out is banned outright rather than discouraged. SPEC 10.7:
+      # a lower floor makes this rule more important, not less, because an
+      # opt-out plus a floor is a number that means nothing.
       - name: No coverage exclusions
         run: |
           if git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py' > /dev/null 2>&1; then

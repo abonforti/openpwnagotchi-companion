@@ -60,10 +60,14 @@ plugin are deployed separately.
 
 ### 4. Coverage honesty
 
-The gate is 100% branch coverage, so a green build says little on its own. Look for the ways it
-gets satisfied without being earned: a `# pragma: no cover` (banned outright), a test that
-exercises a branch without asserting anything about it, an assertion on a private helper's call
-count instead of on observable behaviour, a widened stub that hides a missing symbol.
+The gate is a floor of 85% of lines and branches, with the current figure recorded so a drop
+above the floor is still reported (SPEC 10.7). A green build therefore says even less on its own
+than a 100% gate did, and 85 is explicitly not the target. Look for the ways it gets satisfied
+without being earned: a `# pragma: no cover` (banned outright), a test that exercises a branch
+without asserting anything about it, an assertion on a private helper's call count instead of on
+observable behaviour, a widened stub that hides a missing symbol, and — new under a lower floor
+— a gap left unexamined because the number already clears the bar. Whatever is uncovered should
+be named somewhere, not merely absent.
 
 ### 5. Everything else
 

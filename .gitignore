@@ -64,5 +64,9 @@ denylist*
 .coverage
 .coverage.*
 coverage.xml
+# Written by --cov-report=json and read by .github/check_coverage.py. The
+# recorded figures live in .github/coverage-baseline.json, which is committed;
+# the report itself is per-run output.
+coverage.json
 htmlcov/
 .hypothesis/

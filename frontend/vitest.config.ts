@@ -24,9 +24,13 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
 
-      // Only src/lib. Svelte view components are exercised by hand and a
-      // coverage number for markup buys nothing (SPEC 10.7).
-      include: ['src/lib/**/*.ts'],
+      // SPEC 10.7: the gate covers src/lib and src/shell. App.svelte is named
+      // explicitly because it sits outside src/shell/ while holding the router
+      // wiring, the sheet state and the `inert` handling - that is the logic
+      // SPEC 10.7 means by "the shell", and leaving it out would put the part
+      // that breaks quietly outside the gate. src/views/ stays out, because it
+      // genuinely is markup, and a coverage number for markup buys nothing.
+      include: ['src/lib/**', 'src/shell/**', 'src/App.svelte'],
 
       // protocol.ts is generated from docs/schemas and holds types only, so it
       // emits no runtime code to cover. It is checked by
@@ -34,10 +38,13 @@ export default defineConfig({
       // guarantee than coverage: it fails if the file drifts from the schemas.
       exclude: ['src/lib/protocol.ts'],
 
-      // SPEC 10.7. On from the commit that put runtime code in src/lib:
-      // router.ts is that code, and a gate switched on later is a gate that
-      // starts its life failing.
-      thresholds: { lines: 100, branches: 100 },
+      // SPEC 10.7: 85 is the floor, not the target. A compiled Svelte
+      // component has branches with no source-level counterpart, so a single
+      // global 100 either forces the awkward files out of the gate or produces
+      // a threshold nobody meets. The recorded figure in
+      // .github/coverage-baseline.json is what catches a fall that stays above
+      // this line.
+      thresholds: { lines: 85, branches: 85 },
     },
   },
 })

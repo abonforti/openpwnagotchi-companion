@@ -47,8 +47,14 @@ protects everyone; a guess becomes a test that passes for the wrong reason.
 
 ## Coverage
 
-The gate is 100% **branch** coverage of `plugin/`, enforced with
-`--cov-branch --cov-fail-under=100`. `# pragma: no cover` is banned and CI greps for it.
+The gate is a floor of **85%** of lines and branches of `plugin/`, enforced in CI with
+`--cov-branch --cov-fail-under=85`, plus a recorded figure that must not fall (SPEC 10.7).
+`# pragma: no cover` is banned and CI greps for it — a rule that matters more under a lower
+floor, not less, since an opt-out plus a floor is a number that means nothing.
+
+85 is where the build breaks, not where the work stops. Writing exactly enough tests to clear it
+is a misreading of SPEC 10.7, which says so in as many words. Push as high as the code allows
+and name what is left over, so a gap is known rather than unexamined.
 
 Coverage is a floor, not a goal. A branch executed without a meaningful assertion is worse than
 an uncovered one, because it reports as safe. Assert on observable behaviour: the value

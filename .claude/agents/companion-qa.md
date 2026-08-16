@@ -18,8 +18,11 @@ Run all of them even after one fails — a single run that reports every problem
 than a fast stop that hides three.
 
 ```bash
-# plugin suite, branch coverage, 100% floor
-python -m pytest --cov=plugin --cov-branch --cov-fail-under=100 -q
+# plugin suite, branch coverage, 85% floor (SPEC 10.7)
+python -m pytest --cov=plugin --cov-branch --cov-fail-under=85 -q
+
+# the floor is not the target: a drop above it is still reported
+python .github/check_coverage.py plugin
 
 # the coverage gate is only real if this finds nothing
 grep -rn "pragma:\s*no cover" plugin/ tests/

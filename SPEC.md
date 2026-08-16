@@ -1264,8 +1264,8 @@ on-Pi fix, whether from bettercap or gpsd, always wins.
   lives outside the repository by design (§13), so that check is a local pre-commit gate only.
   CI catches secrets that look like secrets to anyone; it cannot catch a hostname it is not
   allowed to know, and a green run is not proof a diff is safe to publish.
-- **no coverage exclusions**: `# pragma: no cover` is banned outright. The 100% branch gate only
-  means something if nobody can opt out of it.
+- **no coverage exclusions**: `# pragma: no cover` is banned outright. The 85% floor only means
+  something if nobody can opt out of it.
 - **mutation** (scheduled, not a PR gate): `mutmut` over `plugin/`, reported not enforced.
   Mutation testing is too slow to block a pull request and too valuable to skip entirely.
 
@@ -1464,7 +1464,7 @@ That sentence is the perimeter. Anything that does not serve it belongs in the b
 | Plugin | Config schema; TLS and address binding with the rebind loop (§2.3); `websockets` compatibility shim; optional token auth; the full message contract (§2.4); `stats`, access points, handshakes, peers, log, screen mirror, face status; the pushes; all four controls including the restart path; battery detection; the GPS abstraction and `.gps.json` sidecars; the HTTPS static server with explicit MIME and SPA fallback |
 | Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
 | Frontend | The seven views and the navigation model (§4.5), `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
-| Tests | The whole of §10, including the 100% branch-coverage gate |
+| Tests | The whole of §10, including the 85% line-and-branch coverage gate |
 | CI | `ci.yml`, `release.yml`, `check_plugin.py`, schema validation, protocol type sync, secret scan |
 | Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, `PINNED-FACTS.md`, README, ROADMAP, CONTRIBUTING, issue templates |
 
@@ -1606,6 +1606,15 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_auth.py` | token accepted, rejected, wrong type, missing; `compare_digest` used; unauthenticated connection closed after `auth_timeout`; auth skipped when no token configured |
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
+| `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
+| `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host — a two-tuple, never raising — plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout |
+
+A rule the `read_pisugar_i2c` row exists to state: **a test may not assert a property of the
+machine it happens to run on.** The first version of that test asserted the read returns nulls
+"when the bus is not there", established nothing, and passed only because the build host has no
+I2C. The reference hardware is a Pi with a PiSugar 3, so it would have gone red on the one
+machine the plugin is written for. Either the precondition is set up by the test or the
+assertion is about the guarantee rather than the environment.
 
 ### 10.3 Protocol conformance (`tests/test_protocol_conformance.py`)
 
@@ -1664,7 +1673,7 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   shell is `position: fixed` (issue #40, ruled out on real Safari). Element screenshots and the
   geometry assertions are unaffected; a blank WebKit screenshot is not a product defect.
 
-### 10.6 Tools (`tests/tools/test_certs.py`)
+### 10.6 Tools (`tests/tools/`)
 
 Written in pytest, not bats: the scripts are driven with `subprocess` and inspected with
 `openssl`, which removes a dependency and puts every Python-side result under one coverage
@@ -1682,6 +1691,11 @@ Run `gen-ca.sh` and `gen-cert.sh` into a `tmp_path`, then assert with
 - `gen-cert.sh` rejects a hostname argument.
 
 These three certificate assertions encode the exact failures already hit on this setup once.
+
+`tests/tools/test_check_coverage.py` covers the gate script described in §10.7.1. It drives it as
+a **subprocess** against a throwaway checkout rather than calling `main()`, because the exit
+status, the printed annotation and the *absence of a traceback* are the contract, and none of the
+three is observable in-process.
 
 ### 10.7 Coverage gate
 
@@ -1740,7 +1754,39 @@ handler is passed to `Listeners`, because the transport is covered by the integr
 (§10.4) rather than by unit tests — putting it on `Deps` would widen the seam surface without
 buying a single covered branch.
 
-### 10.7.1 Where the acknowledgment comes from
+### 10.7.1 What `.github/check_coverage.py` guarantees
+
+The floor, the recorded figure and the drop warning above are prose; this is the contract the
+script implements, stated here so it is reviewable and so the numbers in it do not live in one
+file only. Tested by `tests/tools/test_check_coverage.py`.
+
+- **One argument, `plugin` or `frontend`.** The plugin figure comes from `coverage.json`
+  (`--cov-report=json`), the frontend one from `frontend/coverage/coverage-summary.json`
+  (`json-summary`). Both are build artifacts and both are gitignored.
+- **Which number is "lines".** Under `--cov-branch`, coverage.py publishes three percentages, and
+  the obvious one is the wrong one. `percent_covered` is the **combined** statements-and-branches
+  mean — that is what `--cov-fail-under` gates on — while `percent_statements_covered` is lines
+  and `percent_branches_covered` is branches. Being a weighted mean, the combined figure can sit
+  above 85 while lines sit below it, so this script gates on the separate figures and `"lines"`
+  means lines for both components. The two gates therefore answer slightly different questions on
+  purpose: `--cov-fail-under` is the runner's own coarse floor, and this script is the one that
+  enforces what §10.7 actually says.
+- **A fall of more than 0.1 percentage points below the recorded figure warns.** The tolerance
+  exists because a single line is worth roughly that much at the current size, and it is compared
+  against the committed baseline rather than the previous run, so small falls cannot accumulate
+  unseen.
+- **`.github/coverage-baseline.json` distinguishes "not recorded" from "malformed."** An absent
+  entry, or one that is `null`, means no figure has been recorded yet: the script warns and
+  passes. An entry that is present but is not a pair of numbers is an error, because the one thing
+  a drop detector must not do is fail open.
+- **`--update` refuses to record a figure below the floor.** The build fails on it regardless, so
+  writing it would only leave a committed number that misleads the next reader about where the
+  project stands.
+
+Note that any targeted local run rewrites `coverage.json` with a partial figure, so running the
+script by hand after one reports nonsense. Only CI, which always runs the whole suite, invokes it.
+
+### 10.7.2 Where the acknowledgment comes from
 
 `Router.handle` emits the `acknowledgment` when the incoming message carried a `message_id`, and
 the individual command methods (`set_mode`, `set_pasv`, `reboot`, `shutdown`) return only their

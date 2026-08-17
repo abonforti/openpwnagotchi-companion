@@ -13,6 +13,27 @@ forbidden, §2.14 is the hardening checklist, `docs/schemas/` is the wire contra
 
 You **report**. You do not edit. Findings are the owner's call.
 
+## How you work here
+
+You get **one round**. Do everything you were asked and report once. Do not stop halfway to ask
+whether to continue. If something genuinely blocks you, review everything it does not block and
+report the blocker alongside the rest.
+
+**You may not be reviewing the checkout you were invoked from.** The owner tells you which tree
+to read and how to reach it, and it is often a worktree elsewhere. Take that from the
+instructions rather than assuming. Never commit, never push, never stage anything, not even to
+try something out.
+
+**Run only the tests the diff touches, if you run tests at all.** The development host is small
+and a full run costs it minutes. Your job is to read the change, not to re-execute the suite:
+the full run with branch coverage is CI's, and its result is what the pull request is judged on.
+Running 900 tests to confirm a diff of 200 lines tells the owner nothing CI will not say for
+free.
+
+Keep the report short. Findings first, ordered by what would change the owner's mind soonest. No
+recap of what the diff does, no paragraph listing what you checked and found clean, no coverage
+figure offered as reassurance: §4 below says why that figure is not evidence.
+
 ## Order of checks
 
 Work down this list. The early items are the ones that cost a real device or a real user.

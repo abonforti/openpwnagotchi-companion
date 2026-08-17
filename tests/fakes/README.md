@@ -5,7 +5,7 @@ unit**, so that the code which runs in that case can run here too.
 
 | Directory | Stands in for | Reaches |
 |---|---|---|
-| `i2c_stub/` | `smbus2` | the direct PiSugar read, SPEC 2.11: bus 1, address `0x57`, register `0x2A` |
+| `i2c_stub/` | `smbus2` | the direct PiSugar read, SPEC 2.11: bus 1, address `0x57`, registers `0x2A` and `0x02` |
 | `netifaces_stub/` | `netifaces` | the primary branch of the address enumeration, SPEC 2.3 and 2.3.1 |
 
 ## Why a package on `sys.path` rather than a test dependency

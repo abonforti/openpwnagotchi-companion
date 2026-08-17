@@ -455,10 +455,19 @@ def netifaces_stub(table=None):
 # ---------------------------------------------------------------------------
 
 
-#: SPEC 2.11, tier 2: bus 1, address 0x57, register 0x2A for the percentage.
+#: SPEC 2.11 and 2.11.1, tier 2: bus 1, address 0x57, register 0x2A for the
+#: percentage and bit 7 of register 0x02 for charging, both read as a byte.
 PISUGAR_BUS = 1
 PISUGAR_ADDRESS = 0x57
 PERCENT_REGISTER = 0x2A
+CHARGE_REGISTER = 0x02
+CHARGE_BIT = 0x80
+
+#: The two bytes SPEC 2.11.1 records from the reference unit at firmware v1.3.8:
+#: 0xEC with the cable in, 0x6C with it out. They differ in bit 7 and nowhere
+#: else, which is the whole evidence for the bit.
+CHARGE_REGISTER_ON_EXTERNAL_POWER = 0xEC
+CHARGE_REGISTER_ON_BATTERY = 0x6C
 
 
 def test_the_percentage_is_read_from_the_pinned_bus_address_and_register():
@@ -475,7 +484,10 @@ def test_the_percentage_is_read_from_the_pinned_bus_address_and_register():
         percent, charging = companion.Deps().read_pisugar_i2c()
 
     assert percent == 77
-    assert charging is None or isinstance(charging, bool), charging
+    assert charging is False, (
+        "SPEC 2.11.1 puts charging in bit 7 of 0x02; the stub answers 0x00 there, "
+        f"which is not charging, and the read said {charging!r}"
+    )
     assert device.opened == [PISUGAR_BUS], (
         f"SPEC 2.11 pins I2C bus 1; the buses opened were {device.opened}"
     )
@@ -522,15 +534,22 @@ def test_every_in_range_level_survives_the_read_unchanged(level):
 @given(level=st.integers(min_value=101, max_value=255))
 @settings(max_examples=60, deadline=None)
 def test_a_byte_outside_the_percentage_range_is_not_a_reading(level):
-    """`0xFF` is what an unpowered or mid-firmware-update PiSugar leaves on the
-    bus. Passed through it becomes "255% battery" on the client, and the schema
-    caps the field at 100, so a reading that is not a percentage must be absent
-    rather than clamped into a plausible-looking lie."""
+    """A byte that cannot be a percentage must be absent rather than clamped.
+
+    Why a gauge would produce one is not asserted here; nothing observed says,
+    and SPEC 2.11.1 declines to guess. What matters is the consequence: passed
+    through, 255 becomes "255% battery" on the client, and the schema caps the
+    field at 100, so clamping would turn a broken reading into a plausible-
+    looking lie."""
     with i2c_stub() as device:
         device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = level
-        percent, _ = companion.Deps().read_pisugar_i2c()
+        percent, charging = companion.Deps().read_pisugar_i2c()
 
     assert percent is None, f"register value {level} was reported as {percent}%"
+    assert charging is False, (
+        "SPEC 2.11.2: an unusable percentage discards the percentage alone, and 0x02 read "
+        f"0x00 here, so charging is False; the read returned {charging!r}"
+    )
 
 
 @pytest.mark.parametrize("filler", [0x00, 0xFF])
@@ -549,7 +568,10 @@ def test_the_percentage_comes_from_its_own_register_and_no_other(filler):
         percent, charging = companion.Deps().read_pisugar_i2c()
 
     assert percent == 42
-    assert charging is None or isinstance(charging, bool), charging
+    assert charging is bool(filler & CHARGE_BIT), (
+        f"with every unpinned register at {filler:#04x}, charging follows bit 7 of 0x02 "
+        f"and nothing else; the read said {charging!r}"
+    )
 
 
 def test_the_battery_read_is_nulls_when_the_bus_opens_and_will_not_answer():
@@ -564,6 +586,311 @@ def test_the_battery_read_is_nulls_when_the_bus_opens_and_will_not_answer():
     assert result == (None, None)
     assert device.opened == [PISUGAR_BUS]
     assert device.reads, "the bus was opened but never read"
+
+
+# ---------------------------------------------------------------------------
+# read_pisugar_i2c: charging, SPEC 2.11.1
+# ---------------------------------------------------------------------------
+#
+# Charging used to be null here because no register was known to carry it. One
+# is now: bit 7 of 0x02, read off the reference unit at firmware v1.3.8 and
+# recorded in SPEC 2.11.1 with the two bytes it showed. Those two bytes are the
+# evidence, so they appear below, but they are never the whole test: a plugin
+# that compared the byte against 0xEC would satisfy them and would report a
+# discharging unit as charging on any firmware that moves an unrelated bit.
+
+
+@pytest.mark.parametrize(
+    ("register_value", "expected"),
+    [
+        (CHARGE_REGISTER_ON_EXTERNAL_POWER, True),
+        (CHARGE_REGISTER_ON_BATTERY, False),
+    ],
+    ids=["external-power-0xEC", "battery-0x6C"],
+)
+def test_charging_follows_the_bytes_observed_on_the_reference_unit(register_value, expected):
+    """SPEC 2.11.1: 0xEC with the cable in, 0x6C without it, nothing else moved.
+
+    Identity against `True`/`False` rather than equality, because the wire
+    schema types `charging` as a boolean (`common.json#/$defs/Battery`) and an
+    `int` of 1 - the natural result of returning the masked bit unshifted -
+    serialises as `1`, which that schema rejects.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = register_value
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert charging is expected, (
+        f"register 0x02 = {register_value:#04x} has bit 7 "
+        f"{'set' if register_value & CHARGE_BIT else 'clear'}, so charging is {expected}; "
+        f"the read said {charging!r}"
+    )
+    assert percent == 89
+
+
+@given(register_value=st.integers(min_value=0x00, max_value=0xFF))
+@settings(max_examples=256, deadline=None)
+def test_charging_is_bit_seven_of_the_charge_register_for_every_byte(register_value):
+    """The invariant, over the whole byte rather than the two bytes that were
+    observed: charging is exactly `bit 7 is set`.
+
+    This is what the two literals above cannot establish on their own. It fails
+    an implementation that compares against 0xEC, one that reads a different
+    bit, one that inverts the sense, and one that reports "any non-zero byte
+    means charging" - which 0x6C, a non-zero byte on battery, already disproves
+    on the hardware.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = register_value
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 50
+        _, charging = companion.Deps().read_pisugar_i2c()
+
+    assert charging is bool(register_value & CHARGE_BIT), (
+        f"register 0x02 = {register_value:#04x} -> charging {charging!r}, "
+        f"expected {bool(register_value & CHARGE_BIT)}"
+    )
+
+
+@pytest.mark.parametrize("base", [CHARGE_REGISTER_ON_EXTERNAL_POWER, CHARGE_REGISTER_ON_BATTERY])
+@pytest.mark.parametrize("other_bit", [0, 1, 2, 3, 4, 5, 6])
+def test_no_other_bit_of_the_charge_register_changes_the_answer(base, other_bit):
+    """SPEC 2.11.1: "One bit moves and no other bit of the byte does."
+
+    The other seven bits carry something - a model, a fault flag, a firmware
+    state machine - and whatever it is, it is free to change under the plugin
+    without the charge icon flickering. Each bit is flipped on its own so a
+    failure names the bit that leaked into the answer.
+    """
+    expected = bool(base & CHARGE_BIT)
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = base ^ (1 << other_bit)
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        _, charging = companion.Deps().read_pisugar_i2c()
+
+    assert charging is expected, (
+        f"flipping bit {other_bit} of {base:#04x} changed charging to {charging!r}"
+    )
+
+
+def test_charging_comes_from_its_own_register_and_not_a_neighbour():
+    """0x01 and 0x03 are other registers, and on a PiSugar they answer.
+
+    Both are held at 0xFF - bit 7 set - while 0x02 says not charging. An
+    off-by-one in the register number, or a word read at 0x02 that folds 0x03
+    into the high byte and then tests the wrong bit of the result, reports
+    charging on a unit running off its battery.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, 0x01)] = 0xFF
+        device.registers[(PISUGAR_ADDRESS, 0x03)] = 0xFF
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_BATTERY
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert charging is False
+    assert percent == 89
+
+
+def test_both_readings_are_byte_reads_of_exactly_their_own_registers():
+    """SPEC 2.11.1 settles the byte-versus-word question, and settles it against
+    the word read *even where the word read agrees*: 0x2A read as a word is
+    right only while 0x2B happens to be zero, and 0x2B is a separate register
+    that promises nothing.
+
+    The stub records one `(address, register)` per byte transferred, so a word
+    read at 0x2A shows up as a read of 0x2B and a block read of the map shows up
+    as a read of everything. The set is asserted exactly, which is the only form
+    of this assertion a returned value cannot fake.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert (percent, charging) == (89, True)
+    assert set(device.read_registers(PISUGAR_ADDRESS)) == {CHARGE_REGISTER, PERCENT_REGISTER}, (
+        "SPEC 2.11.1 pins two byte reads, 0x02 and 0x2A; the registers read at 0x57 were "
+        f"{[hex(register) for register in device.read_registers(PISUGAR_ADDRESS)]}"
+    )
+    assert device.opened == [PISUGAR_BUS]
+    assert device.read_addresses() == {PISUGAR_ADDRESS}
+
+
+def test_a_nonzero_neighbouring_byte_does_not_reach_either_reading():
+    """The same point as above, made through the returned values instead of the
+    recording, so that neither assertion depends on the other being kept.
+
+    0x2B and 0x03 both hold 0xFF, which is what makes a word read visible: as a
+    word, 0x2A becomes 0xFF59 = 65369, far outside a percentage, and 0x02
+    becomes 0xFF6C, whose bit 7 is still clear but whose bit 15 is not.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER + 1)] = 0xFF
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_BATTERY
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER + 1)] = 0xFF
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert percent == 89, (
+        "0x2A is a byte read (SPEC 2.11.1); folding 0x2B in gives 65369, not 89, "
+        f"and the read returned {percent!r}"
+    )
+    assert charging is False
+
+
+def test_charging_is_null_and_never_false_when_the_bus_cannot_be_opened(broken_smbus2):
+    """SPEC 2.11 tier 3 is `{percent: null, charging: null}`, and the difference
+    between null and `False` is the whole point of the field: null hides the
+    icon, `False` claims the cable is out. A unit with no bus knows neither.
+    """
+    percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert charging is None, f"no bus, and charging was reported as {charging!r}"
+    assert percent is None
+
+
+def test_a_bus_that_will_not_answer_reports_neither_reading():
+    """SPEC 2.11 and 2.14: the direct read is wrapped, and nothing escapes it
+    onto the session poll thread. Both registers are populated so that a failure
+    here is a failure to notice the transfer error, not an empty device."""
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        device.read_error = OSError(121, "Remote I/O error")
+        result = companion.Deps().read_pisugar_i2c()
+
+    assert result == (None, None)
+
+
+def test_a_bus_that_will_not_close_discards_both_readings():
+    """SPEC 2.11.2: a close that raises is a transport fault, so the answer is
+    `(None, None)` even though both reads had already succeeded and both values
+    were in range.
+
+    This is the one case the transport/content line does not decide by itself,
+    because the readings were in hand before anything went wrong. SPEC puts it
+    with transport: a handle that will not close is evidence about the channel,
+    and the alternative is a fourth rule for an event nobody has observed.
+
+    The registers are asserted to have been read and the values are the good
+    ones on purpose. Without that, the test would pass against a plugin that
+    never got as far as the reads, and the rule it is here to pin - that
+    perfectly good values are dropped - would not be the reason it was green.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.close_error = OSError(5, "Input/output error")
+        result = companion.Deps().read_pisugar_i2c()
+
+    assert set(device.read_registers(PISUGAR_ADDRESS)) == {CHARGE_REGISTER, PERCENT_REGISTER}, (
+        "both registers must have been read and answered, or the close is not what "
+        f"discarded them; the registers read were {device.read_registers(PISUGAR_ADDRESS)}"
+    )
+    assert device.closed, "the bus was never closed, so nothing raised on the way out"
+    assert result == (None, None), (
+        "SPEC 2.11.2: a bus that will not close is a transport fault, and 89% with the "
+        f"cable in is not reported anyway; the read returned {result!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "failing_register",
+    [CHARGE_REGISTER, PERCENT_REGISTER],
+    ids=["charge-register-naks", "percent-register-naks"],
+)
+def test_a_register_that_will_not_answer_discards_both_readings(failing_register):
+    """SPEC 2.11.2: if *either* read raises, the answer is `(None, None)`.
+
+    Never the half-populated tuple, and the reason is not squeamishness about
+    the surviving byte. `(percent, None)` is already the *meaningful* answer of
+    tier 1 - a PiSugar plugin that exposes a level and no charge state - so
+    reusing that shape for "the bus is misbehaving" would make two unrelated
+    situations indistinguishable to `battery_info` one layer up.
+
+    Both directions, because they are separate code paths and a plugin that
+    reads the percentage first has an obvious way to keep it and no obvious way
+    to keep the charge bit.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 89
+        device.read_errors[(PISUGAR_ADDRESS, failing_register)] = OSError(121, "Remote I/O error")
+        result = companion.Deps().read_pisugar_i2c()
+
+    assert result == (None, None), (
+        f"register {failing_register:#04x} did not answer, so SPEC 2.11.2 discards both "
+        f"readings; the read returned {result!r}"
+    )
+    assert result[1] is not False, "a bus that failed cannot report that the cable is out"
+
+
+@pytest.mark.parametrize(
+    ("charge_value", "expected_charging"),
+    [
+        (CHARGE_REGISTER_ON_EXTERNAL_POWER, True),
+        (CHARGE_REGISTER_ON_BATTERY, False),
+    ],
+    ids=["external-power-0xEC", "battery-0x6C"],
+)
+def test_a_percentage_outside_the_range_discards_only_the_percentage(
+    charge_value, expected_charging
+):
+    """SPEC 2.11.2: `0xFF` at `0x2A` is a successful read of a bad value, not a
+    failed read. The gauge is nonsense; the charge bit came off another
+    register, is one bit wide, and is unaffected. Result: `(None, <the bit>)`.
+
+    Both bit states, and the `False` one is the case that matters: an
+    implementation that discards charging whenever the percentage is
+    implausible still answers `(None, False)` by accident when the cable is out,
+    so the `0x6C` row alone cannot distinguish "kept the bit" from "gave up".
+    The `0xEC` row is what forces the bit to be real.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 0xFF
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = charge_value
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert percent is None, f"0xFF is not a percentage; the read returned {percent!r}"
+    assert charging is expected_charging, (
+        f"0x02 answered {charge_value:#04x} and answered it successfully, so charging is "
+        f"{expected_charging} however unusable 0x2A was; the read returned {charging!r}"
+    )
+
+
+def test_transport_failure_and_bad_content_are_told_apart():
+    """The line SPEC 2.11.2 draws, asserted as a line rather than as two cases.
+
+    The two runs differ in exactly one thing: whether `0x2A` raised or answered
+    a byte that is not a percentage. Everything else - the bus, the address, the
+    charge register and its value - is identical, and the percentage is
+    unusable either way. So any difference in the answer is attributable to the
+    distinction the section is about: a read that did not happen says nothing
+    about the register it did not touch, because the fault is in the channel
+    both share, while a read that happened and returned nonsense says something
+    only about itself.
+
+    An implementation that collapses the two - one `except` that also swallows
+    the range check, or a range check that raises - passes each of the tests
+    above in one direction and fails here.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.read_errors[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = OSError(121, "Remote I/O error")
+        transport_fault = companion.Deps().read_pisugar_i2c()
+
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, CHARGE_REGISTER)] = CHARGE_REGISTER_ON_EXTERNAL_POWER
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 0xFF
+        content_fault = companion.Deps().read_pisugar_i2c()
+
+    assert transport_fault == (None, None), transport_fault
+    assert content_fault == (None, True), content_fault
+    assert transport_fault != content_fault, (
+        "a bus that would not answer and a gauge that answered nonsense are different "
+        "events (SPEC 2.11.2) and must not produce the same battery reading"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -14,8 +14,14 @@ breaks **silently** when any of them is missed.
 
 ```sh
 ./tools/gen-ca.sh --out ~/pwn-pki
-./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.7 10.0.0.2
+./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.2 10.0.0.2
 ```
+
+**Those two addresses are examples.** Use your own unit's: every iPhone Personal Hotspot hands
+out addresses from `172.20.10.0/28`, but which one your unit gets is up to that hotspot, and
+`10.0.0.2` is only right if you use the USB gadget path. Read them off the unit with `ip -br a`
+and list every address the app will ever connect to, because adding one later means reissuing
+the certificate.
 
 Copy `server.crt` and `server.key` to the unit, point `tls_cert` and `tls_key` at them, and
 install `ca.crt` on the phone. Full walkthrough in [SETUP.md](SETUP.md).
@@ -45,10 +51,10 @@ exact failure has already cost one debugging session on this setup, which is why
 
 ```
 X509v3 Subject Alternative Name:
-    IP Address:172.20.10.7, IP Address:10.0.0.2
+    IP Address:172.20.10.2, IP Address:10.0.0.2
 ```
 
-When a client connects to `https://172.20.10.7:8443`, it looks for that address among the
+When a client connects to `https://172.20.10.2:8443`, it looks for that address among the
 `iPAddress` entries of the SAN. An address written as a `DNS:` name is not consulted, no matter
 that it reads identically to a human.
 
@@ -139,7 +145,7 @@ You can also test the whole handshake the way the phone will, from any machine t
 CA file:
 
 ```sh
-openssl s_client -connect 172.20.10.7:8443 -CAfile ca.crt -verify_return_error </dev/null
+openssl s_client -connect 172.20.10.2:8443 -CAfile ca.crt -verify_return_error </dev/null
 ```
 
 `Verify return code: 0 (ok)` means the chain and the SAN are right. Note that this proves the
@@ -152,7 +158,7 @@ The server certificate expires after 820 days. Reissuing is one command and does
 CA or the phone, because the root is unchanged and still trusted:
 
 ```sh
-./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.7 10.0.0.2
+./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.2 10.0.0.2
 ```
 
 Copy the new `server.crt` and `server.key` to the unit and restart pwnagotchi. Reissue the same

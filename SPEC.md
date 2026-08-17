@@ -39,7 +39,7 @@ with no further design decisions required.
 | D5 | Socket auth | Bind only to configured tether addresses, never `0.0.0.0`. Optional shared token, disabled by default. |
 | D5.1 | Binding identifier | Supersedes the interface-name form of D5 (`interfaces = ["bnep0", "usb0"]`). Listeners are chosen by `bind_addresses`, a list of IPv4 addresses or CIDR blocks (§2.3.1). An interface name identifies a device, not a network: `bnep` devices are numbered by the order PAN links come up, so `bnep0` is whichever Bluetooth peer connected first, which on a unit paired with more than one machine is not the one the owner meant. With `token` empty by default, that put an unauthenticated socket on a link nobody chose. |
 | D6 | Delivery | GitHub Actions builds the PWA into `dist.tgz`, attached to a Release. An install script pulls it onto the Pi; the plugin serves it over HTTPS. Each user runs their own; nothing centrally hosted. |
-| D7 | Config | All IPs and ports configurable in the PWA settings screen. BT PAN IP prefilled (`172.20.10.7`). USB IP (`10.0.0.2`) supported as an extra configurable host. |
+| D7 | Config | All IPs and ports configurable in the PWA settings screen. BT PAN IP prefilled with `172.20.10.2`, which is a **guess and not a constant**: the `172.20.10.0/28` block is what every iPhone Personal Hotspot uses, but the host inside it is assigned by that hotspot, so the field is editable and the app must not assume it. USB IP (`10.0.0.2`) supported as an extra configurable host. |
 | D8 | v1 features | Full parity with the paid app + three gaps it lacks: detailed handshake list, peer/mesh view, live log viewer. Plus full GPS (Pi-source detection + browser fallback) and wardriving map, and full e-ink screen mirror (on-demand + slow auto ~5 s). |
 | D9 | Controls | AUTO/MANU switch, PASV toggle (soft dependency on `pasv_mode.py`), reboot, shutdown. Destructive actions require a two-step confirm in the UI. |
 | D10 | Web push | Dropped entirely, not even roadmap. Event notifications are in-app only, while the app is open. |
@@ -832,7 +832,7 @@ The hard iOS constraints, all mandatory:
   Python and iOS reject it even though `curl` accepts it — this exact failure has already been
   hit once on this setup.
 - The **server** cert must list each Pi IP as `subjectAltName = IP:<addr>` (an `iPAddress`
-  general name, **not** `DNS:`). Include every IP the app will use (`172.20.10.7`, `10.0.0.2`, …).
+  general name, **not** `DNS:`). Include every IP the app will use (`172.20.10.2`, `10.0.0.2`, …).
 - Server cert validity **≤ 825 days**, or iOS rejects it.
 - The root CA is installed on the iPhone as a profile **and** enabled in
   Settings → General → About → Certificate Trust Settings (full trust).
@@ -927,9 +927,9 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
 - Svelte + TypeScript + Vite. `vite-plugin-pwa` generates the service worker (Workbox,
   `registerType: 'autoUpdate'`, app shell precached) and wires the manifest.
 - Leaflet bundled locally; OSM tiles load from the internet. This works because the phone is
-  the hotspot (it keeps cellular) and the Pi is the BT PAN client at `172.20.10.7` — the phone
-  is not routing through the Pi. Tiles are therefore online-only in v1; offline tile caching is
-  a roadmap item.
+  the hotspot (it keeps cellular) and the Pi is a BT PAN client somewhere in
+  `172.20.10.0/28` — the phone is not routing through the Pi. Tiles are therefore
+  online-only in v1; offline tile caching is a roadmap item.
 - `package-lock.json` is committed. CI runs `npm ci` and will fail without it.
 - Output to `frontend/dist/`, packed to `dist.tgz` by CI.
 
@@ -1225,7 +1225,7 @@ finds rather than silently passing them.
 - **Map**: Leaflet plotting handshake sidecar positions plus the current location marker.
 - **Log**: live tail with a text filter and an auto-scroll toggle.
 - **Mirror**: full e-ink PNG via `get_screen`, manual refresh plus an auto ~5 s toggle.
-- **Settings**: host list (add/edit/remove; BT `172.20.10.7` prefilled, USB `10.0.0.2`
+- **Settings**: host list (add/edit/remove; BT `172.20.10.2` prefilled, USB `10.0.0.2`
   suggested with a note that it is desktop-only — an iPhone cannot use the USB gadget path),
   ws/http ports, optional token, quick-connect from history, diagnostics (last error, latency,
   negotiated plugin version).

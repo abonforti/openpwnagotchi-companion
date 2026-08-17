@@ -41,7 +41,7 @@ On your computer, in a clone of this repository:
 
 ```sh
 ./tools/gen-ca.sh --out ~/pwn-pki
-./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.7 10.0.0.2
+./tools/gen-cert.sh --out ~/pwn-pki 172.20.10.2 10.0.0.2
 ```
 
 Replace those addresses with the ones you wrote down. List every one.
@@ -223,7 +223,7 @@ broken. If anything goes wrong later, check this switch first.
 In Safari on the phone, with the tether up, open:
 
 ```
-https://172.20.10.7:8443
+https://172.20.10.2:8443
 ```
 
 Use your unit's address. It must be the address, and it must be one you put in the certificate.

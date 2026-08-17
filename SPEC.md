@@ -728,29 +728,119 @@ Auto-detect in order, each step guarded:
    these are third-party plugins and their attribute names are not pinned. Probe with `getattr`
    over a small candidate list and treat every miss as "unavailable"; do not import them and do
    not assume a name.
-2. Direct PiSugar I2C read (bus 1, address `0x57`, register `0x2A` for percentage), wrapped in
-   try/except, only if `pisugar = true`. The library is **`smbus2`, and there is no `smbus`
-   fallback** — stated here because until now it was not stated anywhere. The dependency lived
-   only in the implementation, which is how a test stub came to offer a fallback that does not
-   exist: nothing in this document forbade one. The percentage is read as a **byte**, which is
-   what the implementation does and what "percentage in one register" implies, though see the
-   caveat below.
+2. Direct PiSugar I2C read (bus 1, address `0x57`), wrapped in try/except, only if
+   `pisugar = true`. Register `0x2A` carries the percentage and **bit 7 of register `0x02`**
+   carries charging. Both are read as a **byte**. The library is **`smbus2`, and there is no
+   `smbus` fallback** — stated here because until now it was not stated anywhere. The dependency
+   lived only in the implementation, which is how a test stub came to offer a fallback that does
+   not exist: nothing in this document forbade one.
 3. `{percent: null, charging: null}`.
 
 Never hard-fail, never raise into the asyncio loop.
 
-**None of the three I2C constants carries evidence in this repository.** Bus 1, address `0x57`
-and register `0x2A` match the PiSugar 3 documentation as far as anyone here has checked, but §11's
-evidence tables cover pwnagotchi symbols only and nothing cites a source for these. They are
-inherited from the upstream plugin this forks. Treat them as unverified until the first read on
-real hardware, which is also the moment the byte-versus-word question above settles: a word read
-at `0x2A` is not obviously wrong.
+#### 2.11.1 Where the I2C constants come from
 
-**The source of `charging` is unknown outright**, which is worse than unverified. Nothing says
-which register or bit carries it, so no test can assert its value — only that it is a `bool` or
-`null` — and a wrong register there passes the entire suite. The tier-1 plugin attribute names are
-deliberately unpinned too, as the paragraph above says, which is why they are probed rather than
-imported.
+Bus 1, address `0x57` and register `0x2A` were inherited from the upstream plugin this forks and
+carried no evidence here at all, because §11's tables cover pwnagotchi symbols and nothing else.
+The charging bit was not inherited from anywhere: until this change SPEC recorded its source as
+unknown outright. All four positions were established on 2026-08-17 against the reference unit,
+PiSugar firmware **`v1.3.8`**, and this section records how. Positions, not meanings: what the
+charging bit signifies is a separate question and the end of this section does not settle it. Reproduce the dumps with
+`i2cdump -y 1 0x57 b`, which issues reads and no writes. The raw output is attached to issue #70,
+so every row below can be checked rather than taken on trust.
+
+| Constant | Value | How it was confirmed |
+| --- | --- | --- |
+| Bus | `1` | The device answers there. The dump carries `v1.3.8` at `0xE0` and the string `www.pisugar.com` at `0xF0`, so the thing answering is a PiSugar and not a coincidence. |
+| Address | `0x57` | Same read. |
+| Percentage | `0x2A`, byte | Read `0x59` while the on-device display showed 89%. |
+| Neighbour | `0x2B` | Read `0x00` in every dump, which is why a word read at `0x2A` returns the right number. |
+| Charging | `0x02`, bit 7 | `0xEC` on external power, `0x6C` without it, `0xEC` again on reconnect. One bit moves and no other bit of the byte does. |
+
+**The byte-versus-word question is settled, and the word read was wrong even when it agreed.**
+`i2cget -y 1 0x57 0x2A w` returned `0x0058`: low byte `0x2A`, high byte `0x2B`. The low byte is
+`0x58` and the table above records `0x59`, because the two commands ran a moment apart and the
+gauge moved by one point between them, which is the only discrepancy in this section and is
+recorded rather than smoothed. The word agreed only because `0x2B` read `0x00`; `0x2B` is a
+separate register and nothing observed here promises it stays zero.
+
+**What `charging` actually means.** The dumps cannot say. They were taken at 89%, where a cable
+that is connected is also charging, so `0xEC` against `0x6C` is equally consistent with the bit
+meaning *external power present* and with it meaning *current flowing into the battery*. No
+experiment at 89% can separate them.
+
+The best available reading comes from the plugin the reference unit actually runs, which reaches
+the same register and names it:
+
+```python
+ctr1 = self.i2creg[0x02]                      # Read control register 1
+self.power_plugged  = (ctr1 & (1 << 7)) != 0
+self.allow_charging = (ctr1 & (1 << 6)) != 0
+```
+
+That is `pisugarx_ext`, at `abonforti/pwnagotchi-plugins`. It calls bit 7 `power_plugged` and puts
+a separate flag at bit 6.
+
+**How much that is worth, stated plainly.** It is a variable name, so it is evidence of what its
+author understood the bit to mean and not a measurement of what the silicon does. It is also not
+independent: that repository belongs to this project's owner, and nothing records where its own
+bit assignment came from, so it may trace to the same upstream plugin or the same datasheet this
+project would otherwise be reading. Treat it as the strongest available prior, not as a second
+witness.
+
+**And the dumps qualify it further.** Bit 6 is set in both recorded bytes, `0xEC` and `0x6C`
+alike, so `allow_charging` is true with the cable out. It is a permission flag rather than a
+current-flowing signal, which means the register does not carry the *charging current* reading
+that would have made the bit-7 interpretation airtight. The distinction this section is trying to
+draw is one this register may simply not express.
+
+**Where the chosen reading will be wrong**, then, is a full battery on a connected cable: this
+reports charging while nothing is being charged. The divergence is accepted rather than overlooked, because the
+alternative is the field staying `null` forever and a charge icon that lingers at 100% is what
+most devices do. It has still never been *observed*, since the unit sat at 89% throughout, and a
+dump at a full battery would turn the inference above into a measurement. That is the one PiSugar
+question issue #70 keeps open.
+
+**The tier-1 plugin attribute names remain unpinned**, which is why they are probed with `getattr`
+rather than imported. Nothing in this section changes that: it pins the I2C fallback, and the
+fallback is the tier the reference unit never reaches, since it runs `pisugarx_ext`.
+
+#### 2.11.2 When only half the reading arrives
+
+Two registers are read, so there are two ways to get half an answer, and they are not the same
+event.
+
+**A register that will not answer discards both readings.** If either read raises, whether the bus
+is absent, the device NAKs or a transfer collides, the result is `{percent: null, charging: null}`,
+never a half-populated one. Three reasons. The `(percent, charging)` pair where charging is null
+is already the *meaningful* answer of tier 1, a PiSugar plugin that exposes a level and not a
+charge state, so reusing that shape to mean "the I2C bus is misbehaving" would make two unrelated
+situations indistinguishable one layer up in `battery_info`. A bus that has just raised on one
+register is not a bus whose other answer has earned confidence. And it keeps the failure path
+single: one shape for every transport failure, rather than a shape per combination.
+
+**A percentage outside 0-100 discards only the percentage.** A byte that cannot be a percentage is
+a *successful read of a bad value* rather than a failed read; why the gauge produced it is not
+recorded here, because nothing observed says. The charging bit came off a different register, is
+one bit wide, and either matches the observed pattern or does not, so a nonsensical gauge reading
+does not make it suspect. The result is `{percent: null, charging: <the bit>}`.
+
+**A provider has answered when either field arrives.** `capabilities.pisugar` reports whether any
+tier has ever produced a reading, and an out-of-range percentage alongside a charging bit is a
+PiSugar that answered, however poorly. The test is the same one tier 1 already applies to a plugin
+that exposes one field and not the other; the direct read had no reason to be stricter, and looked
+stricter only because it could not produce a charging value at all until now.
+
+**A bus that will not close is a transport fault**, and yields `{percent: null, charging: null}`
+even when both reads succeeded and were in range. This is the one case the transport/content line
+does not decide on its own, since the readings were already in hand. It goes with transport
+because a handle that fails to close is evidence about the channel, and because the alternative
+is a fourth rule for an event nothing has ever observed.
+
+The line between the two rules is transport versus content. A read that did not happen tells you
+nothing about the other read, because the fault is in the channel both share. A read that happened
+and returned nonsense tells you about that register, and the `Battery` schema allows each field to
+be null independently precisely so a partial answer can be reported as one.
 
 ### 2.12 GPS abstraction — Pi-source-first, browser fallback
 
@@ -1704,7 +1794,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
-| `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host — a two-tuple, never raising — plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
+| `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
 
 A rule the `read_pisugar_i2c` row exists to state: **a test may not assert a property of the
 machine it happens to run on.** The first version of that test asserted the read returns nulls

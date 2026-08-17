@@ -34,6 +34,17 @@ class FakeI2CDevice:
         self.open_error: BaseException | None = None
         #: Raised by every read; the bus that is there and does not answer.
         self.read_error: BaseException | None = None
+        #: Raised by a read of exactly one `(address, register)`. A real device
+        #: can NAK a single register while answering the rest - a firmware that
+        #: does not implement it, or a transfer that collides - and that is the
+        #: only way to reach a read where one half of the battery state arrives
+        #: and the other does not.
+        self.read_errors: dict[tuple[int, int], BaseException] = {}
+        #: Raised by `close()`; the handle that will not let go. `smbus2` closes
+        #: a file descriptor, and closing one can fail - EIO, or a device node
+        #: pulled out from under the process - so this is a shape the real
+        #: library produces and not a convenience for the test.
+        self.close_error: BaseException | None = None
 
     def _reset(self) -> None:
         self.__init__()  # noqa: PLC2801 - one definition of "empty", not two
@@ -42,6 +53,9 @@ class FakeI2CDevice:
         self.reads.append((address, register))
         if self.read_error is not None:
             raise self.read_error
+        one_off = self.read_errors.get((address, register))
+        if one_off is not None:
+            raise one_off
         return self.registers.get((address, register), self.default_byte) & 0xFF
 
     def read_addresses(self) -> set[int]:
@@ -79,6 +93,8 @@ class SMBus:
 
     def close(self) -> None:
         device.closed += 1
+        if device.close_error is not None:
+            raise device.close_error
 
     def __enter__(self) -> "SMBus":
         return self

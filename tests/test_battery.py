@@ -185,3 +185,167 @@ def test_battery_reaches_the_stats_payload(router, harness):
     harness.pisugar_reply = (76.0, True)
 
     assert router.stats()["battery"] == {"percent": 76.0, "charging": True}
+
+
+# ---------------------------------------------------------------------------
+# capabilities.pisugar: a provider has answered when either field arrives
+# ---------------------------------------------------------------------------
+#
+# SPEC 2.11.2: "A provider has answered when either field arrives." The flag
+# records whether any tier ever produced a reading, and since 2.11.2 a direct
+# read can produce a charging bit with no percentage: a byte that cannot be a
+# percentage is a successful read of a bad value, and the charging bit came off
+# a different register. That reading is a PiSugar, however poorly it is
+# behaving.
+#
+# Until this section existed, no test anywhere supplied a reading with a null
+# percentage and a non-null charging bit: every fixture gave both or neither.
+# So the `or` in the condition short-circuited on every input the suite had,
+# the rule was fully covered and entirely unverified, and reverting it to the
+# old `percent is not None` left the gate green. These are the inputs that
+# separate the two.
+
+
+@pytest.mark.parametrize(
+    ("reading", "expected"),
+    [
+        ((None, True), True),
+        ((None, False), True),
+        ((76.0, None), True),
+        ((76.0, False), True),
+        ((0.0, None), True),
+        ((None, None), False),
+    ],
+    ids=[
+        "charging-only-true",
+        "charging-only-false",
+        "percent-only",
+        "both",
+        "flat-battery-only",
+        "nothing",
+    ],
+)
+def test_a_provider_has_answered_when_either_field_arrives(
+    options, harness, reading, expected
+):
+    """SPEC 2.11.2, at the I2C tier. `available` is null-ness, not truthiness.
+
+    `charging-only-false` is the row that does the work twice over. An
+    implementation testing `percent is not None` passes `charging-only-true` on
+    nothing but luck and fails here for the same reason; an implementation
+    testing `if percent or charging` passes `charging-only-true` and fails here,
+    because `False` is an answer and `0.0` percent is a reading. The cable being
+    out is something the PiSugar told us.
+    """
+    harness.pisugar_reply = reading
+    reader = companion.BatteryReader(options, harness.deps)
+
+    assert reader.available is False, "nothing has been read yet"
+
+    percent, charging = reading
+    assert reader.read() == {"percent": percent, "charging": charging}
+    assert reader.available is expected, (
+        f"a reading of {reading!r} means a provider {'answered' if expected else 'did not'}; "
+        f"capabilities.pisugar would be {reader.available!r}"
+    )
+
+
+def test_a_provider_that_answered_once_stays_available_afterwards(options, harness):
+    """`available` is "has ever answered", not "answered last time".
+
+    A PiSugar that reports its charging bit and then drops off the bus - the
+    unit going into a firmware update, or a loose header - must not make the
+    client's battery panel appear and disappear. The first reading here has no
+    percentage at all, which is the case 2.11.2 added and the one an
+    implementation is most likely to forget to latch.
+    """
+    reader = companion.BatteryReader(options, harness.deps)
+
+    harness.pisugar_reply = (None, True)
+    reader.read()
+    assert reader.available is True
+
+    harness.pisugar_reply = (None, None)
+    assert reader.read() == NO_BATTERY
+    assert reader.available is True, "the provider answered once; that does not un-happen"
+
+
+def test_a_disabled_pisugar_never_becomes_available(options, harness):
+    """`pisugar: false` skips the I2C tier entirely (SPEC 2.11), so there is no
+    reading to have answered - even though the seam, if it were called, would
+    hand back a charging bit."""
+    options["pisugar"] = False
+    harness.pisugar_reply = (None, True)
+    reader = companion.BatteryReader(options, harness.deps)
+
+    assert reader.read() == NO_BATTERY
+    assert reader.available is False
+    assert "read_pisugar_i2c" not in harness.names()
+
+
+def test_an_i2c_read_that_raises_leaves_the_provider_unanswered(options, harness):
+    """SPEC 2.11.2's transport rule reaching the capability flag: a seam that
+    raises is not a provider that answered, and the guard that swallows the
+    exception must not fall through into marking one."""
+
+    def exploding():
+        raise OSError("no such device on bus 1")
+
+    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=exploding)
+    reader = companion.BatteryReader(options, deps)
+
+    assert reader.read() == NO_BATTERY
+    assert reader.available is False
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected_reading", "expected_available"),
+    [
+        ({"percentage": 41.0, "charging": False}, {"percent": 41.0, "charging": False}, True),
+        ({"charging": True}, {"percent": None, "charging": True}, True),
+        ({"charging": False}, {"percent": None, "charging": False}, True),
+        ({"percentage": 41.0}, {"percent": 41.0, "charging": None}, True),
+        ({"some_other_name": 99}, {"percent": None, "charging": None}, False),
+    ],
+    ids=["both", "charging-only-true", "charging-only-false", "percent-only", "unrecognisable"],
+)
+def test_the_plugin_tier_answers_on_either_field_too(
+    options, harness, stub_plugins, attributes, expected_reading, expected_available
+):
+    """SPEC 2.11.2 says the direct read "had no reason to be stricter" than the
+    test tier 1 already applies, so this pins the tier-1 side of that sentence.
+
+    A third-party plugin exposing a charge state and no level is exactly why the
+    rule is worded around either field, and `charging-only-false` is again the
+    row that separates null-ness from truthiness. The `unrecognisable` row is
+    the boundary: a provider object is present, nothing usable came off it, and
+    that is not an answer - it falls through to the I2C tier, which here has
+    nothing to say either.
+    """
+    stub_plugins.loaded["pisugarx"] = FakeProvider(**attributes)
+    reader = companion.BatteryReader(options, harness.deps)
+
+    assert reader.read() == expected_reading
+    assert reader.available is expected_available
+
+
+@pytest.mark.parametrize(
+    ("reading", "expected"),
+    [((None, True), True), ((None, False), True), ((None, None), False)],
+    ids=["charging-only-true", "charging-only-false", "nothing"],
+)
+def test_capabilities_pisugar_follows_the_same_rule_on_the_wire(
+    router_factory, agent, harness, reading, expected
+):
+    """The rule as the client sees it. `capabilities.pisugar` is what decides
+    whether the PWA shows a battery panel at all, so a reading with a charging
+    bit and no percentage must not hide the panel that would have shown the
+    charge icon - which is the only thing that reading has to say.
+    """
+    harness.pisugar_reply = reading
+    router = router_factory(agent)
+    stats = router.stats()
+
+    percent, charging = reading
+    assert stats["battery"] == {"percent": percent, "charging": charging}
+    assert router.capabilities()["pisugar"] is expected

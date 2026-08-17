@@ -768,17 +768,44 @@ def default_read_gpsd(host: str, port: int, timeout: float) -> dict | None:
 
 
 def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
-    """Reads the battery percentage directly over I2C. Charging is always None.
+    """Reads the battery percentage and the charging flag directly over I2C.
 
-    PiSugar 3 answers on bus 1 at address 0x57, percentage in register 0x2A, read
-    as a byte. Last resort, only when no PiSugar plugin is loaded. Returns
-    (None, None) on any failure - a missing battery reading is not an error worth
-    propagating.
+    PiSugar 3 answers on bus 1 at address 0x57. Register 0x2A carries the
+    percentage and bit 7 of register 0x02 carries charging; both are read as a
+    byte, never as a word. Last resort, only when no PiSugar plugin is loaded.
+    Never raises - a missing battery reading is not an error worth propagating.
 
-    Charging is not read, and the second element is None by design rather than by
-    omission: SPEC 2.11 records that no register or bit is known to carry it, so
-    there is nothing to read. None of the three constants above carries evidence
-    in this repository either; they are inherited from the plugin this forks.
+    Half an answer arrives in three ways and SPEC 2.11.2 answers them along the
+    line between transport and content:
+
+    - A read that raises discards both readings, whichever register it was on:
+      the result is (None, None). The fault is in the channel the two reads
+      share, so neither answer is worth reporting. (percent, None) would also
+      collide with tier 1's meaningful answer - a PiSugar plugin that exposes a
+      level and no charge state - and make two unrelated situations look alike
+      one layer up in battery_info.
+    - A percentage outside 0..100 discards only the percentage: the result is
+      (None, charging). A byte that cannot be a percentage is a successful read
+      of a bad value rather than a failed read, and the charging bit came off a
+      different register and is one bit wide, so a nonsensical gauge reading does
+      not make it suspect.
+    - A bus that will not close discards both readings even when both were in
+      range, because the close sits inside the guarded block. That placement is
+      deliberate: a handle that fails to close is evidence about the channel, so
+      it goes with transport rather than earning a fourth rule of its own.
+
+    What charging means here is decided by the upstream plugin, not by the dumps.
+    The dumps were taken at 89%, where a connected cable is also charging, so they
+    fit "external power present" and "current flowing into the battery" equally
+    well. pisugarx_ext reads this same register, names bit 7 power_plugged and
+    puts a separate allow_charging at bit 6, which is why this field is taken to
+    mean external power present. It follows - by inference, never yet observed -
+    that a full battery on a connected cable reports charging while nothing is
+    being charged. SPEC 2.11.1 has the evidence and why that is accepted.
+
+    All four constants - bus, address, 0x2A and bit 7 of 0x02 - were established
+    against the reference unit on PiSugar firmware v1.3.8; SPEC 2.11.1 records the
+    dumps and how each one was confirmed.
     """
     try:
         import smbus2  # type: ignore[import-not-found]
@@ -786,13 +813,16 @@ def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
         bus = smbus2.SMBus(1)
         try:
             percent = float(bus.read_byte_data(0x57, 0x2A))
+            charging = bool(bus.read_byte_data(0x57, 0x02) & 0x80)
         finally:
             bus.close()
     except Exception:
+        # Transport: the channel both reads share failed, so neither survives.
         return None, None
     if not 0 <= percent <= 100:
-        return None, None
-    return percent, None
+        # Content: this register returned nonsense and the other one did not.
+        return None, charging
+    return percent, charging
 
 
 def default_list_local_ipv4() -> list[str]:
@@ -1037,7 +1067,7 @@ class BatteryReader:
             percent, charging = self._deps.read_pisugar_i2c()
         except Exception:
             percent, charging = None, None
-        if percent is not None:
+        if percent is not None or charging is not None:
             self._seen_provider = True
         return {"percent": percent, "charging": charging}
 

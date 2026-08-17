@@ -1040,8 +1040,28 @@ class BatteryReader:
     and every miss is treated as "unavailable". Never imports them, never raises.
     """
 
-    PERCENT_ATTRS: tuple[str, ...] = ("percentage", "percent", "battery", "level", "capacity")
-    CHARGING_ATTRS: tuple[str, ...] = ("charging", "is_charging", "power_plugged", "plugged")
+    # In both lists every plain attribute comes before every accessor, and only then is
+    # the order by how precisely a name answers the question, with ties going to what the
+    # reference unit exposes: `battery_level` and `percentage` name the quantity equally
+    # well, and the first is what that unit's PiSugar client carries (F29). The accessors
+    # sit last despite naming the question more precisely than `capacity` or `plugged` do,
+    # because reading an attribute cannot block or touch hardware while calling
+    # third-party code may do either, on the request path. That these two are one-line
+    # wrappers today is a fact about one plugin at one version, not about the shape being
+    # probed, and the probe cannot tell a wrapper from a bus transaction before calling.
+    PERCENT_ATTRS: tuple[str, ...] = (
+        "battery_level", "percentage", "percent", "battery", "level", "capacity",
+        "get_battery_level",
+    )
+    # A plugin exposing both `charging` and `power_plugged` means the two differently, and
+    # the first is the field this reports. `battery_charging` is deliberately absent: on
+    # the reference unit's client it is assigned 0 in the constructor and never again, and
+    # its accessor has a body of `pass` (F29). `bool(0)` is a value rather than a miss, so
+    # probing it would answer "not charging" forever and `power_plugged` would never be
+    # reached. A dead field that answers is worse than no field.
+    CHARGING_ATTRS: tuple[str, ...] = (
+        "charging", "is_charging", "power_plugged", "plugged", "get_battery_power_plugged",
+    )
 
     def __init__(self, options: Mapping[str, Any], deps: Deps) -> None:
         self._options = options
@@ -1049,24 +1069,46 @@ class BatteryReader:
         self._seen_provider = False
 
     def read(self) -> dict:
-        """Returns {"percent": float|None, "charging": bool|None}."""
+        """Returns {"percent": float|None, "charging": bool|None}.
+
+        Resolution is per field: a tier that supplies one field does not settle
+        the other, and descending continues for whatever is still missing. A
+        tier is never consulted for a field already in hand, so the I2C bus is
+        touched only when there is something left to gain by touching it.
+        """
         if not option(self._options, "pisugar"):
             return {"percent": None, "charging": None}
 
+        percent: float | None = None
+        charging: bool | None = None
+
         for name in ("pisugarx_ext", "pisugarx"):
+            if percent is not None and charging is not None:
+                break
             plugin = self._loaded(name)
             if plugin is None:
                 continue
-            percent = self._probe(plugin, self.PERCENT_ATTRS, float)
-            charging = self._probe(plugin, self.CHARGING_ATTRS, bool)
-            if percent is not None or charging is not None:
-                self._seen_provider = True
-                return {"percent": percent, "charging": charging}
+            # Resolved once per plugin per read: `ps` is third-party and may be a
+            # property, so the traversal is not repeated for the second field.
+            client = self._client(plugin)
+            if percent is None:
+                percent = self._probe(plugin, client, self.PERCENT_ATTRS, self._as_percent)
+            if charging is None:
+                charging = self._probe(plugin, client, self.CHARGING_ATTRS, self._as_charging)
 
-        try:
-            percent, charging = self._deps.read_pisugar_i2c()
-        except Exception:
-            percent, charging = None, None
+        if percent is None or charging is None:
+            # One bus transaction returns both fields, so reaching it for one
+            # missing field also yields the other. A value already in hand wins:
+            # the one that came along for the ride is discarded here explicitly.
+            try:
+                i2c_percent, i2c_charging = self._deps.read_pisugar_i2c()
+            except Exception:
+                i2c_percent, i2c_charging = None, None
+            if percent is None:
+                percent = i2c_percent
+            if charging is None:
+                charging = i2c_charging
+
         if percent is not None or charging is not None:
             self._seen_provider = True
         return {"percent": percent, "charging": charging}
@@ -1078,33 +1120,137 @@ class BatteryReader:
 
     @staticmethod
     def _loaded(name: str) -> Any:
-        """Looks a plugin up by name without importing it."""
-        try:
-            return plugins.loaded.get(name)
-        except Exception:
-            return None
+        """Looks a plugin up by name without importing it.
+
+        `plugins.loaded` is the registry plugins register themselves into (F12),
+        and a `.get` on a string key cannot raise, so no guard is needed here.
+        """
+        return plugins.loaded.get(name)
 
     @staticmethod
-    def _probe(plugin: Any, names: Sequence[str], cast: Callable[[Any], Any]) -> Any:
+    def _as_percent(value: Any) -> float:
+        """Converts a candidate value to a percentage, refusing what cannot be one.
+
+        A percentage is a finite number in 0-100 whichever tier produced it, so
+        anything else is refused like a failed cast and the caller treats it as
+        a miss: the next candidate, and then the tier below, still get their
+        turn. A bool is refused before it can convert, since `True` is an `int`
+        that lands on 1.0 and would report a charge flag as a 1% battery. The
+        bound is written as a range the value must fall inside so that NaN and
+        the infinities are refused too: NaN fails every comparison, and one that
+        survived would reach `json.dumps` and serialise as the literal `NaN`,
+        which is not JSON.
+        """
+        if isinstance(value, bool):
+            raise TypeError("a boolean is not a percentage")
+        percent = float(value)
+        if not 0.0 <= percent <= 100.0:
+            raise ValueError("a percentage is a finite number in 0-100")
+        return percent
+
+    @staticmethod
+    def _as_charging(value: Any) -> bool:
+        """Converts a candidate value to a charging flag, refusing what cannot be one.
+
+        Charging is a two-valued fact, so a value is accepted only when it is
+        unambiguously one of the two: a `bool` as itself; an `int` when it is
+        exactly `0` or `1`, nothing else; a `str` from a fixed set of spellings
+        after `strip().lower()` (`"true"`/`"false"`, `"1"`/`"0"`, `"yes"`/`"no"`,
+        `"on"`/`"off"`). Everything else is refused like a failed cast, including
+        floats and unrecognised strings, and the caller treats a refusal as a
+        miss: the next candidate, and then the tier below, still get their
+        turn. `bool` is checked first because it is a subclass of `int` and
+        `True == 1`; without that order the `int` branch would swallow it. This
+        is the mirror image of `_as_percent`, which refuses a `bool` for the
+        opposite reason: there a bare 0/1 must not be misread as a percentage,
+        here a bare 0/1 is exactly what a charging flag is allowed to be.
+        """
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            if value in (0, 1):
+                return bool(value)
+            raise ValueError("an int charging flag must be 0 or 1")
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in ("true", "1", "yes", "on"):
+                return True
+            if normalised in ("false", "0", "no", "off"):
+                return False
+            raise ValueError("unrecognised charging string")
+        raise TypeError("not a charging flag")
+
+    @staticmethod
+    def _client(plugin: Any) -> Any:
+        """Returns the plugin's PiSugar hardware client if it is ready, else None.
+
+        The battery state is not on the plugin object: `pisugarx_ext` loads a
+        `PiSugar(plugins.Plugin)` that holds its client at `self.ps`, and both
+        the values and their accessors live there (F29). Reaching for `ps` is
+        third-party attribute access like any other, so a plugin without one is
+        a miss and never an error.
+
+        A client that does not report itself ready counts as absent. Its
+        `battery_level` and `power_plugged` are `0` and `False` from the
+        constructor until a device is actually found, and the refresh thread
+        that would replace them never starts while none is (F29). Reading those
+        would mean a confident empty battery, a latched `capabilities.pisugar`
+        and the tier below pre-empted for good, so instead both fields fall
+        through as if the plugin held no client at all. `ready` is probed as
+        defensively as `ps`: absent, `None`, or a property that raises all mean
+        not ready.
+        """
+        try:
+            client = getattr(plugin, "ps", None)
+        except Exception:
+            return None
+        if client is None:
+            return None
+        try:
+            ready = getattr(client, "ready", None)
+        except Exception:
+            return None
+        return client if ready else None
+
+    @staticmethod
+    def _probe(
+        plugin: Any, client: Any, names: Sequence[str], cast: Callable[[Any], Any]
+    ) -> Any:
         """Tries a list of candidate attribute names, returning the first usable value.
 
-        These belong to third-party plugins and are deliberately not pinned in
-        SPEC section 11, so they are probed rather than assumed. Every miss is
-        "unavailable", never an error.
+        Each candidate is looked for on the plugin and then on its hardware
+        client, since that is where the reference unit keeps the reading. The
+        client is resolved by the caller, once per plugin per read, and is None
+        when there is none or it is not ready. The plugin object itself is
+        probed either way: another plugin may hold its reading there and have no
+        client at all. These names belong to third-party plugins and are
+        deliberately not pinned in SPEC section 11, so they are probed rather
+        than assumed. Every miss is "unavailable", never an error.
         """
+        targets = [plugin]
+        if client is not None:
+            targets.append(client)
         for name in names:
-            try:
-                value = getattr(plugin, name, None)
-                if callable(value):
-                    value = value()
-            except Exception:
-                continue
-            if value is None:
-                continue
-            try:
-                return cast(value)
-            except (TypeError, ValueError):
-                continue
+            for target in targets:
+                try:
+                    value = getattr(target, name, None)
+                    if callable(value):
+                        value = value()
+                except Exception:
+                    continue
+                if value is None:
+                    continue
+                try:
+                    return cast(value)
+                except Exception as err:
+                    # Anything the conversion refuses is a miss, never an error.
+                    # `float()` raises OverflowError on a huge int, and a custom
+                    # `__float__` may raise anything at all; neither is a
+                    # TypeError or a ValueError, and both used to escape. The
+                    # catch is broad enough to hide a defect in the cast itself,
+                    # so the refusal is logged rather than silently dropped.
+                    log.debug("[companion] battery value from %s refused: %s", name, err)
+                    continue
         return None
 
 

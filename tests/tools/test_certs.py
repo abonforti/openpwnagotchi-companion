@@ -636,7 +636,7 @@ def test_anything_that_is_not_an_ipv4_address_is_a_usage_error(ca_dir, argument)
 
 @pytest.mark.parametrize(
     "argument",
-    ["0.1.2.3", "255.255.255.255", "10.0.0.2", "172.20.10.7"],
+    ["0.1.2.3", "255.255.255.255", "10.0.0.2", "172.20.10.2"],
     ids=["zero-first-octet", "broadcast", "usb-gadget", "bt-pan"],
 )
 def test_a_canonical_dotted_quad_is_accepted(ca_dir, argument):

@@ -16,14 +16,22 @@ in.
 
 from __future__ import annotations
 
+import contextlib
+import importlib
 import ipaddress
 import json
+import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import types
+from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from plugin import companion
 
@@ -130,24 +138,32 @@ def test_a_host_running_the_suite_has_at_least_the_loopback(real_deps):
 
 
 @pytest.fixture
-def no_smbus(monkeypatch):
-    """Makes `import smbus2` (and `smbus`) fail, whatever the host has.
+def no_smbus2(monkeypatch):
+    """Makes `import smbus2` fail, whatever the host has.
 
     `None` in `sys.modules` is the documented way to make an import raise
-    `ImportError` without touching the filesystem. Both spellings are blocked so
-    that the precondition holds regardless of which the plugin reaches for.
+    `ImportError` without touching the filesystem.
+
+    `smbus2` alone, because SPEC 2.11 names it and says there is no `smbus`
+    fallback. Blocking the older spelling as well would be the friendlier
+    fixture and the useless one: it would make the tests below pass against a
+    plugin that imported `smbus`, which is the dependency the section removed.
     """
-    for name in ("smbus", "smbus2"):
-        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "smbus2", None)
 
 
 @pytest.fixture
-def broken_smbus(monkeypatch):
-    """A bus library that is importable and whose bus refuses to open.
+def broken_smbus2(monkeypatch):
+    """A `smbus2` that is importable and whose bus refuses to open.
 
     An I2C bus that is present but answers with `Remote I/O error` is the state
     of a Pi with the bus enabled and nothing at 0x57 on it, and it is the case
     that reaches the plugin's `except` rather than skipping past it.
+
+    Only `smbus2` is faked (SPEC 2.11: no `smbus` fallback), so a plugin that
+    reached for the older name would find nothing importable on a build host,
+    open no bus at all, and fail the assertion on which bus was opened rather
+    than quietly passing.
     """
     opened: list[tuple] = []
 
@@ -156,10 +172,9 @@ def broken_smbus(monkeypatch):
             opened.append(args)
             raise OSError(121, "Remote I/O error")
 
-    for name in ("smbus", "smbus2"):
-        module = types.ModuleType(name)
-        module.SMBus = RefusingBus
-        monkeypatch.setitem(sys.modules, name, module)
+    module = types.ModuleType("smbus2")
+    module.SMBus = RefusingBus
+    monkeypatch.setitem(sys.modules, "smbus2", module)
 
     return opened
 
@@ -185,7 +200,7 @@ def test_the_battery_read_answers_in_two_parts_and_never_raises(real_deps):
 
 
 def test_the_battery_read_is_nulls_when_no_bus_library_can_be_imported(
-    real_deps, no_smbus
+    real_deps, no_smbus2
 ):
     """The precondition is established here rather than assumed of the host: a
     unit with no `smbus2` installed reports null, it does not fail the poll."""
@@ -193,14 +208,14 @@ def test_the_battery_read_is_nulls_when_no_bus_library_can_be_imported(
 
 
 def test_the_battery_read_is_nulls_when_the_bus_refuses_to_open(
-    real_deps, broken_smbus
+    real_deps, broken_smbus2
 ):
     """SPEC 2.11 wraps the direct read in try/except, and SPEC 2.14 forbids an
     exception escaping. `OSError` from the bus is the common failure and the one
     that would otherwise surface several times a minute."""
     assert real_deps.read_pisugar_i2c() == (None, None)
-    assert broken_smbus == [(1,)], (
-        f"SPEC 2.11 pins the PiSugar to I2C bus 1; the bus opened was {broken_smbus}"
+    assert broken_smbus2 == [(1,)], (
+        f"SPEC 2.11 pins the PiSugar to I2C bus 1; the bus opened was {broken_smbus2}"
     )
 
 
@@ -358,3 +373,810 @@ def test_a_line_that_is_not_json_does_not_stop_the_poll(real_deps, gpsd):
 
     assert reading is not None
     assert reading["lat"] == pytest.approx(-33.512345)
+
+
+# ---------------------------------------------------------------------------
+# The libraries that are only there on a unit
+# ---------------------------------------------------------------------------
+#
+# Everything above runs the default seams as this host finds them, which means
+# the halves of `read_pisugar_i2c` and `list_local_ipv4` that need `smbus2` or
+# `netifaces` never run: neither is a test dependency, `smbus2` because it wants
+# an I2C device node no build host has and `netifaces` because SPEC 2.3 forbids
+# a hard dependency on it outright. Injection cannot reach them either - the
+# whole point of an injectable seam is to run something else instead.
+#
+# So the libraries are supplied, as importable packages under `tests/fakes/`,
+# installed on `sys.path` for the duration of a test and removed afterwards.
+# `tests/fakes/README.md` explains why a package on disk rather than an object
+# in `sys.modules`, and why these two stubs are permissive where the pwnagotchi
+# stub is exact.
+
+
+FAKES_DIR = Path(__file__).resolve().parent / "fakes"
+
+
+@contextlib.contextmanager
+def installed_stub(directory: str, *names: str):
+    """Imports `names` out of `tests/fakes/<directory>`, then puts it all back.
+
+    Scoped to a `with` block rather than to the session because the *absent*
+    library is the state the suite runs in and the *present* one is the
+    exception. A stub left on `sys.path` would also shadow the real library on a
+    machine that has one, which is the failure a stub must never cause.
+    """
+    path = str(FAKES_DIR / directory)
+    missing = object()
+    displaced = {name: sys.modules.pop(name, missing) for name in names}
+    sys.path.insert(0, path)
+    try:
+        modules = [importlib.import_module(name) for name in names]
+        for module in modules:
+            assert Path(module.__file__).is_relative_to(FAKES_DIR), (
+                f"{module.__name__} resolved to {module.__file__}, not to the stub; "
+                "a real installation is shadowing it and the test proves nothing"
+            )
+        yield tuple(modules)
+    finally:
+        for name in names:
+            sys.modules.pop(name, None)
+        if path in sys.path:
+            sys.path.remove(path)
+        for name, module in displaced.items():
+            if module is not missing:
+                sys.modules[name] = module
+
+
+@contextlib.contextmanager
+def i2c_stub():
+    """A working I2C bus, and the device on it.
+
+    Under one name, `smbus2`, because that is the one SPEC names (section 2.11),
+    which says outright that there is no `smbus` fallback. A second package
+    answering to that name would be unreachable from the code under test, and
+    it would advertise `i2c_msg` and a `force` keyword that the real library of
+    that name does not have.
+    """
+    with installed_stub("i2c_stub", "_fake_i2c_device", "smbus2") as modules:
+        yield modules[0].device
+
+
+@contextlib.contextmanager
+def netifaces_stub(table=None):
+    """An importable `netifaces` reporting `table`, or the reference unit's."""
+    with installed_stub("netifaces_stub", "netifaces") as (netifaces,):
+        netifaces._reset()
+        netifaces._set_table(reference_interfaces(netifaces) if table is None else table)
+        yield netifaces
+
+
+# ---------------------------------------------------------------------------
+# read_pisugar_i2c, on a unit that has the bus
+# ---------------------------------------------------------------------------
+
+
+#: SPEC 2.11, tier 2: bus 1, address 0x57, register 0x2A for the percentage.
+PISUGAR_BUS = 1
+PISUGAR_ADDRESS = 0x57
+PERCENT_REGISTER = 0x2A
+
+
+def test_the_percentage_is_read_from_the_pinned_bus_address_and_register():
+    """SPEC 2.11 names all three, and each of them can be wrong on its own.
+
+    A test that stubbed the bus and only checked the number that came back would
+    pass against a plugin reading register `0x2A` of whatever device answers at
+    `0x2B`, or bus 0 on a Pi where bus 0 is the camera connector. The stub
+    records the bus it was opened with and every `(address, register)` pair read,
+    so all three are assertions rather than assumptions.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 77
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert percent == 77
+    assert charging is None or isinstance(charging, bool), charging
+    assert device.opened == [PISUGAR_BUS], (
+        f"SPEC 2.11 pins I2C bus 1; the buses opened were {device.opened}"
+    )
+    assert device.read_addresses() == {PISUGAR_ADDRESS}, (
+        f"SPEC 2.11 pins address 0x57; the addresses read were "
+        f"{[hex(address) for address in sorted(device.read_addresses())]}"
+    )
+    assert PERCENT_REGISTER in device.read_registers(PISUGAR_ADDRESS), (
+        f"SPEC 2.11 pins register 0x2A for the percentage; the registers read at "
+        f"0x57 were {[hex(register) for register in device.read_registers(PISUGAR_ADDRESS)]}"
+    )
+
+
+def test_a_flat_battery_is_a_reading_and_not_an_absent_one():
+    """Zero percent is falsy and is also the reading that matters most.
+
+    Reported as null it looks like a unit without a PiSugar, so the app hides
+    the battery instead of showing the one number that would have explained why
+    the unit is about to stop.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 0
+        percent, _ = companion.Deps().read_pisugar_i2c()
+
+    assert percent == 0
+
+
+@given(level=st.integers(min_value=0, max_value=100))
+@settings(max_examples=60, deadline=None)
+def test_every_in_range_level_survives_the_read_unchanged(level):
+    """The register holds the percentage, so the read is a passthrough.
+
+    Property rather than a handful of cases because the plausible bugs are at
+    the edges and in the middle in different ways: a byte masked to 7 bits, a
+    value halved from a 0-200 scale, an off-by-one at 100.
+    """
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = level
+        percent, _ = companion.Deps().read_pisugar_i2c()
+
+    assert percent == level
+
+
+@given(level=st.integers(min_value=101, max_value=255))
+@settings(max_examples=60, deadline=None)
+def test_a_byte_outside_the_percentage_range_is_not_a_reading(level):
+    """`0xFF` is what an unpowered or mid-firmware-update PiSugar leaves on the
+    bus. Passed through it becomes "255% battery" on the client, and the schema
+    caps the field at 100, so a reading that is not a percentage must be absent
+    rather than clamped into a plausible-looking lie."""
+    with i2c_stub() as device:
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = level
+        percent, _ = companion.Deps().read_pisugar_i2c()
+
+    assert percent is None, f"register value {level} was reported as {percent}%"
+
+
+@pytest.mark.parametrize("filler", [0x00, 0xFF])
+def test_the_percentage_comes_from_its_own_register_and_no_other(filler):
+    """SPEC 2.11 puts the percentage in `0x2A` alone.
+
+    Every other register is set to the same filler and the answer must not
+    move. This is what separates reading the pinned byte from reading a word or
+    a block that happens to start there: the neighbouring byte belongs to the
+    charging state, not to the percentage, and folding it in produces a number
+    that is right at 0x00 and nonsense at 0xFF.
+    """
+    with i2c_stub() as device:
+        device.default_byte = filler
+        device.registers[(PISUGAR_ADDRESS, PERCENT_REGISTER)] = 42
+        percent, charging = companion.Deps().read_pisugar_i2c()
+
+    assert percent == 42
+    assert charging is None or isinstance(charging, bool), charging
+
+
+def test_the_battery_read_is_nulls_when_the_bus_opens_and_will_not_answer():
+    """A bus that opens and then errors on the transfer is a PiSugar that is
+    absent, asleep or on the wrong address - the ordinary case on a unit with
+    I2C enabled and nothing attached. SPEC 2.11 and 2.14: nulls, never an
+    exception, because this runs on the session poll thread."""
+    with i2c_stub() as device:
+        device.read_error = OSError(121, "Remote I/O error")
+        result = companion.Deps().read_pisugar_i2c()
+
+    assert result == (None, None)
+    assert device.opened == [PISUGAR_BUS]
+    assert device.reads, "the bus was opened but never read"
+
+
+# ---------------------------------------------------------------------------
+# list_local_ipv4, on a unit that has netifaces
+# ---------------------------------------------------------------------------
+
+
+#: SPEC D7's two documented hosts, plus a loopback. Synthetic addresses on
+#: synthetic interfaces: nothing here describes a real machine.
+LOOPBACK_ADDRESS = "127.0.0.1"
+TETHER_ADDRESS = "172.20.10.3"
+GADGET_ADDRESS = "10.0.0.2"
+
+
+def reference_interfaces(netifaces) -> dict:
+    """What `netifaces` reports on a unit shaped like the reference hardware.
+
+    A loopback, a BT PAN tether, the USB gadget, and a monitor-mode interface
+    with a link address and no IPv4 at all - the last one because an
+    enumeration that returned one entry per interface rather than one per
+    address would otherwise look correct.
+    """
+    return {
+        "lo": {
+            netifaces.AF_LINK: [{"addr": "00:00:00:00:00:00"}],
+            netifaces.AF_INET: [
+                {"addr": LOOPBACK_ADDRESS, "netmask": "255.0.0.0", "peer": "127.0.0.1"}
+            ],
+        },
+        "bnep0": {
+            netifaces.AF_LINK: [{"addr": "aa:bb:cc:dd:ee:ff"}],
+            netifaces.AF_INET: [
+                {
+                    "addr": TETHER_ADDRESS,
+                    "netmask": "255.255.255.240",
+                    "broadcast": "172.20.10.15",
+                }
+            ],
+            netifaces.AF_INET6: [
+                {"addr": "fe80::1%bnep0", "netmask": "ffff:ffff:ffff:ffff::/64"}
+            ],
+        },
+        "usb0": {
+            netifaces.AF_INET: [{"addr": GADGET_ADDRESS, "netmask": "255.255.255.0"}]
+        },
+        "wlan0mon": {netifaces.AF_LINK: [{"addr": "11:22:33:44:55:66"}]},
+    }
+
+
+def test_netifaces_is_used_when_it_is_importable():
+    """SPEC 2.3: `netifaces` if importable, `ip -4 addr show` otherwise.
+
+    The tether and gadget addresses asserted here are on no interface of the
+    machine running the test, so they can only have come from the library. That
+    is the whole check: a plugin that ignored `netifaces` and shelled out
+    regardless would return this host's own addresses and fail here.
+    """
+    with netifaces_stub() as netifaces:
+        addresses = companion.Deps().list_local_ipv4()
+        assert netifaces._queried, "netifaces was importable and was never asked"
+
+    assert set(addresses) == {LOOPBACK_ADDRESS, TETHER_ADDRESS, GADGET_ADDRESS}
+
+
+def test_an_interface_without_an_ipv4_address_contributes_nothing():
+    """`wlan0mon` in the reference table has a link address and no IPv4. An
+    enumeration that reported it - as a name, as an empty string, or as its MAC -
+    would put something into the bind decision that is not an address."""
+    with netifaces_stub():
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert "wlan0mon" not in addresses
+    for entry in addresses:
+        ipaddress.IPv4Address(entry)
+
+
+def test_the_interface_name_never_reaches_the_result_from_netifaces():
+    """D5.1: the enumeration returns addresses, and which interface carries one
+    is not consulted and must not reach a bind decision. The names are known
+    here, so their absence is checkable rather than merely plausible."""
+    with netifaces_stub() as netifaces:
+        names = set(reference_interfaces(netifaces))
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert not names & set(addresses)
+
+
+def test_the_wildcard_is_dropped_even_when_netifaces_reports_it():
+    """SPEC 2.3.1: the refusal of `0.0.0.0` applies to a wildcard arriving from
+    the address enumeration, not only to a configured entry. An unconfigured
+    point-to-point interface really does report it, and D5 and section 11.1
+    forbid it reaching any bind call unconditionally."""
+    with netifaces_stub() as netifaces:
+        table = reference_interfaces(netifaces)
+        table["ppp0"] = {netifaces.AF_INET: [{"addr": "0.0.0.0", "netmask": "0.0.0.0"}]}
+        netifaces._set_table(table)
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert "0.0.0.0" not in addresses
+    assert TETHER_ADDRESS in addresses, "the rest of the enumeration was lost with it"
+
+
+def test_a_host_with_no_addresses_at_all_enumerates_to_nothing():
+    """Not the same case as a failed enumeration below: here the library
+    answered, and the answer is that there is nothing to bind. SPEC 2.3.1 has
+    the reconciler skip silently, which it can only do if it is told."""
+    with netifaces_stub({}):
+        assert companion.Deps().list_local_ipv4() == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "interfaces",
+        "ifaddresses",
+    ],
+    ids=["interfaces() raises", "every interface raises"],
+)
+def test_a_netifaces_that_raises_is_a_failure_and_not_an_empty_host(failure):
+    """SPEC 2.3.1: "A failure raises rather than returning an empty list."
+
+    `[]` means "this host holds no addresses", which makes the reconciler close
+    every listener and drop every client; a failure means "nothing was
+    observed", which must leave the bound set alone. A `list[str]` signature has
+    no other honest channel, so raising is the signal - and the section has the
+    seam let the backend's own exception out rather than wrap it, which is what
+    the identity check below pins.
+
+    The exception *type* is deliberately unpinned by that same section, so
+    nothing here asserts on `OSError` as such; `test_binding.py` covers what
+    `reconcile` does with whatever arrives.
+    """
+    error = OSError(19, "No such device")
+    with netifaces_stub() as netifaces:
+        if failure == "interfaces":
+            netifaces._fail_interfaces(error)
+        else:
+            netifaces._fail_ifaddresses(error)
+
+        with pytest.raises(Exception) as raised:
+            companion.Deps().list_local_ipv4()
+
+    assert raised.value is error, (
+        "SPEC 2.3.1 has the seam let the backend's own exception out; what escaped "
+        f"was {raised.value!r}"
+    )
+
+
+def test_one_interface_that_fails_to_enumerate_is_skipped_and_the_rest_stand():
+    """SPEC 2.3.1: "One interface failing is not a failure."
+
+    `netifaces` raises for an interface that disappeared between `interfaces()`
+    and `ifaddresses()`, and on a pwnagotchi that is routine rather than exotic:
+    `wlan0mon` is created and torn down as a matter of course. Collapsing it into
+    a failed enumeration costs the whole pass - every address on every other
+    interface with it - each time monitor mode is cycled, so the reconciler
+    learns nothing precisely while the unit is doing what it exists to do.
+
+    The interface armed to fail carries an address of its own, which is what
+    separates a skip from a pass that never reached it: everything except that
+    address must come back.
+    """
+    error = OSError(19, "No such device")
+
+    with netifaces_stub() as netifaces:
+        netifaces._fail_ifaddresses(error, ["usb0"])
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert set(addresses) == {LOOPBACK_ADDRESS, TETHER_ADDRESS}, (
+        "one interface that raised must cost that interface and no more"
+    )
+    assert GADGET_ADDRESS not in addresses, (
+        "the failing interface was never observed, so nothing of it can be reported"
+    )
+
+
+def test_an_enumeration_whose_only_interface_fails_is_a_failure():
+    """SPEC 2.3.1: the exception to the rule above is when *every* interface
+    enumerated failed, because the pass then observed nothing at all.
+
+    One interface, and it raises. Skipping it would leave the pass with an empty
+    list, which is the reconciler's "bound address no longer present locally"
+    row: both listeners closed and every client dropped, on a unit whose
+    addresses never changed. That is the same defect the whole-enumeration case
+    above guards against, arriving one level down where a per-interface `except`
+    hides it.
+    """
+    error = OSError(19, "No such device")
+
+    with netifaces_stub() as netifaces:
+        netifaces._set_table(
+            {"bnep0": {netifaces.AF_INET: [{"addr": TETHER_ADDRESS}]}}
+        )
+        netifaces._fail_ifaddresses(error, ["bnep0"])
+
+        with pytest.raises(Exception) as raised:
+            companion.Deps().list_local_ipv4()
+
+    assert raised.value is error, (
+        "SPEC 2.3.1 has the seam let the backend's own exception out; what escaped "
+        f"was {raised.value!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# list_local_ipv4, on a unit without netifaces
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_ip(tmp_path, monkeypatch):
+    """Puts an `ip` on `PATH` that prints canned output.
+
+    Not a monkeypatch of the plugin: SPEC 10.7 forbids reaching into module
+    internals from a test, and nothing is reached into here. `PATH` is the
+    process environment and the fallback genuinely runs whichever `ip` it finds
+    there, so this is the same kind of substitution as the stub packages above -
+    the environment the code runs in, not the code.
+
+    It buys the cases this host cannot produce on demand: a secondary address, a
+    point-to-point peer, an interface with no IPv4 at all, and a command that
+    fails.
+    """
+    directory = tmp_path / "bin"
+    directory.mkdir()
+
+    def _install(output: str | None, *, status: int = 0):
+        if output is None:
+            # An empty PATH is how "there is no ip on this system" is arranged;
+            # every other case prepends, so that the script itself still has a
+            # shell to run in.
+            monkeypatch.setenv("PATH", str(directory))
+            return None
+        monkeypatch.setenv("PATH", str(directory) + os.pathsep + os.environ["PATH"])
+        script = directory / "ip"
+        script.write_text(
+            "#!/bin/sh\ncat <<'IP_OUTPUT'\n" + output + "\nIP_OUTPUT\nexit " + str(status) + "\n"
+        )
+        script.chmod(0o755)
+        return script
+
+    return _install
+
+
+#: Output in the shape `ip -4 addr show` produces on a unit, with the parts that
+#: separate a parser from a regular expression over the whole file: a secondary
+#: address on an interface that already has one, a point-to-point interface
+#: whose peer address is *not* an address this host holds, an IPv6 line, and an
+#: interface carrying only a link-layer address.
+IP_ADDR_OUTPUT = """\
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: bnep0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+    inet 172.20.10.3/28 brd 172.20.10.15 scope global dynamic noprefixroute bnep0
+       valid_lft 3595sec preferred_lft 3595sec
+    inet 172.20.10.9/28 brd 172.20.10.15 scope global secondary bnep0:1
+       valid_lft forever preferred_lft forever
+    inet6 fe80::1/64 scope link
+       valid_lft forever preferred_lft forever
+3: usb0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    inet 10.0.0.2 peer 192.0.2.1/32 scope global usb0
+       valid_lft forever preferred_lft forever
+4: wlan0mon: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    link/ieee802.11/radiotap aa:bb:cc:dd:ee:ff brd ff:ff:ff:ff:ff:ff\
+"""
+
+
+def test_the_fallback_reads_every_address_and_only_addresses(fake_ip):
+    """The `ip -4 addr show` parse, against output chosen to be hostile.
+
+    Each of the four expected entries fails differently under a lazy parse: the
+    secondary is lost by a parser that keeps one address per interface, the peer
+    line yields `192.0.2.1` - an address this host does *not* hold, and binding it
+    fails - to a parser that takes the last literal on the line, and `bnep0:1`
+    and `fe80::1` are what a parser that scans for anything address-shaped picks
+    up.
+    """
+    fake_ip(IP_ADDR_OUTPUT)
+
+    addresses = companion.Deps().list_local_ipv4()
+
+    assert set(addresses) == {"127.0.0.1", "172.20.10.3", "172.20.10.9", "10.0.0.2"}
+
+
+def test_the_wildcard_is_dropped_by_the_fallback_too(fake_ip):
+    """The same rule the `netifaces` path is held to, on the other path.
+
+    An unconfigured point-to-point interface reports `0.0.0.0`, and SPEC 2.3.1
+    refuses a wildcard arriving from the address enumeration and not only from
+    the configuration. Two implementations of one question must not differ about
+    it, and this is the case where the difference would be invisible on a build
+    host: no machine running the suite happens to have a `0.0.0.0` to report.
+    """
+    fake_ip(
+        IP_ADDR_OUTPUT
+        + "\n5: ppp0: <POINTOPOINT,MULTICAST,NOARP,UP> mtu 1500 qdisc pfifo_fast state UNKNOWN"
+        + "\n    inet 0.0.0.0 peer 0.0.0.0/32 scope global ppp0"
+    )
+
+    addresses = companion.Deps().list_local_ipv4()
+
+    assert "0.0.0.0" not in addresses
+    assert "172.20.10.3" in addresses, "the rest of the enumeration was lost with it"
+
+
+def test_an_ip_command_that_says_nothing_is_a_host_with_no_addresses(fake_ip):
+    """Distinct from the command *failing*, below: `ip` ran, exited zero and
+    reported nothing. SPEC 2.3.1's reconciler is entitled to act on that."""
+    fake_ip("")
+
+    assert companion.Deps().list_local_ipv4() == []
+
+
+@pytest.mark.parametrize(
+    ("output", "status"),
+    [
+        (None, 0),
+        ("Cannot open netlink socket: Operation not permitted", 1),
+    ],
+    ids=["no ip binary on PATH at all", "ip exits non-zero"],
+)
+def test_a_failing_ip_command_is_a_failure_and_not_a_host_with_no_addresses(
+    fake_ip, output, status
+):
+    """SPEC 2.3.1: "A failure raises rather than returning an empty list."
+
+    The same contract as the `netifaces` case, on the other backend, and the
+    distinction is the whole point of the reconciliation table's last row. `[]`
+    means "this host holds no addresses", which makes the reconciler close every
+    listener and drop every client; a failure means "nothing was observed",
+    which must leave the bound set alone.
+
+    The type is not pinned - the section says so outright, because nothing
+    downstream distinguishes one backend failure from another - so this asserts
+    that something escapes and not what. Returning anything at all fails the
+    test, `[]` being the return that would do the damage. `test_binding.py` pins
+    what `reconcile` then does with what escaped.
+    """
+    fake_ip(output, status=status)
+
+    with pytest.raises(Exception):
+        companion.Deps().list_local_ipv4()
+
+
+def test_the_fallback_is_not_consulted_when_netifaces_answers(fake_ip):
+    """SPEC 2.3 orders the two: `netifaces` if importable, the command
+    otherwise. Both are available here and the command's addresses are not in the
+    answer, so the order is observed rather than inferred from a call count."""
+    fake_ip(IP_ADDR_OUTPUT)
+
+    with netifaces_stub() as netifaces:
+        netifaces._set_table({"eth0": {netifaces.AF_INET: [{"addr": "198.51.100.4"}]}})
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert addresses == ["198.51.100.4"]
+
+
+# ---------------------------------------------------------------------------
+# The two paths have to agree
+# ---------------------------------------------------------------------------
+
+
+def host_ip_addr_output() -> str:
+    """This host's own `ip -4 addr show`, read once.
+
+    Read once and then replayed through `fake_ip`, so that the plugin parses the
+    exact bytes the expectation is derived from. Comparing against a *second*
+    live invocation is the obvious shape and the wrong one: on a machine with
+    container or veth churn the two readings disagree for reasons that have
+    nothing to do with the parser, and the test goes red irreproducibly. It also
+    wanted `ip -4 -json`, which an older iproute2 does not have.
+
+    The call is live, which is the point - the sample is the one nobody here
+    chose - so the two ways it can be unavailable are skips rather than errors.
+    A host without `iproute2`, or one where netlink is not permitted, has
+    nothing to say about the parser, and a red test there is noise that teaches
+    the reader to ignore this file.
+    """
+    binary = shutil.which("ip")
+    if binary is None:
+        pytest.skip("this host has no `ip`, so it cannot describe itself")
+    result = subprocess.run(
+        [binary, "-4", "addr", "show"], capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        pytest.skip(f"`ip -4 addr show` failed here: {result.stderr.strip()!r}")
+    return result.stdout
+
+
+def addresses_in(output: str) -> set[str]:
+    """The IPv4 addresses in `ip -4 addr show` output, parsed here.
+
+    Not circular: a second implementation of the same read, written from SPEC
+    2.3.1's description of the format rather than from the plugin, so that the
+    comparisons below are against something other than the code under test.
+
+    The `peer` guard is the detail SPEC 2.3.1 singles out and the one this gets
+    right by construction: `inet 10.0.0.2 peer 192.0.2.1/32` carries one local
+    address and one belonging to the far end of the link, and only the token
+    immediately after `inet` is ours. The wildcard is dropped because the same
+    section drops it from the enumeration.
+    """
+    found: set[str] = set()
+    for line in output.splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0] != "inet":
+            continue
+        candidate = tokens[1].split("/")[0]
+        if candidate == "0.0.0.0":
+            continue
+        try:
+            found.add(str(ipaddress.IPv4Address(candidate)))
+        except ValueError:
+            continue
+    return found
+
+
+def test_the_fallback_finds_exactly_the_addresses_this_host_reports(fake_ip):
+    """The `ip -4 addr show` parse, against this host's own output.
+
+    The canned cases above cover the shapes no build machine can produce on
+    demand; this one covers whatever the machine running the suite happens to
+    look like, which is the only sample nobody here chose. It is what a parser
+    that drops a secondary address or mangles a `/32` gets wrong while still
+    returning perfectly well-formed literals.
+
+    Live and still deterministic: the output is captured once and replayed, so
+    the plugin and the expectation see identical bytes and there is nothing for
+    a passing veth to race with.
+    """
+    output = host_ip_addr_output()
+    fake_ip(output)
+
+    assert set(companion.Deps().list_local_ipv4()) == addresses_in(output)
+
+
+def ip_addr_output_as_netifaces(netifaces) -> dict:
+    """`IP_ADDR_OUTPUT` restated as the table `netifaces` reports for that host.
+
+    Written from the *interface structure* of that output, interface by
+    interface, and deliberately not from `addresses_in()`: a table built out of
+    the reference parser's answer hands the second path the first path's result,
+    and the comparison below collapses into "the stub returns what it was
+    given". The disagreement this exists to catch would survive that untouched.
+
+    Each of the awkward parts keeps the shape the library reports it in, because
+    each is where the two backends can differ: the secondary on `bnep0` is a
+    second `AF_INET` entry on the same interface rather than an interface of its
+    own, `usb0` carries the far end of the link in `peer` under a `/32` netmask,
+    the link-local is `AF_INET6`, and `wlan0mon` has a link address and no IPv4
+    at all.
+    """
+    return {
+        "lo": {
+            netifaces.AF_INET: [
+                {"addr": "127.0.0.1", "netmask": "255.0.0.0", "peer": "127.0.0.1"}
+            ]
+        },
+        "bnep0": {
+            netifaces.AF_INET: [
+                {
+                    "addr": "172.20.10.3",
+                    "netmask": "255.255.255.240",
+                    "broadcast": "172.20.10.15",
+                },
+                {
+                    "addr": "172.20.10.9",
+                    "netmask": "255.255.255.240",
+                    "broadcast": "172.20.10.15",
+                },
+            ],
+            netifaces.AF_INET6: [
+                {"addr": "fe80::1%bnep0", "netmask": "ffff:ffff:ffff:ffff::/64"}
+            ],
+        },
+        "usb0": {
+            netifaces.AF_INET: [
+                {
+                    "addr": "10.0.0.2",
+                    "netmask": "255.255.255.255",
+                    "peer": "192.0.2.1",
+                }
+            ]
+        },
+        "wlan0mon": {netifaces.AF_LINK: [{"addr": "aa:bb:cc:dd:ee:ff"}]},
+    }
+
+
+def test_both_enumeration_paths_answer_the_same_for_the_same_host(fake_ip):
+    """SPEC 2.3 offers two implementations of one question, and a unit runs
+    whichever its image happens to have. A disagreement between them is a bug
+    that appears only on the machines without the library - or only on the
+    machines with it - and is invisible to any test that exercises one path.
+
+    So one host goes through both: the canned `ip` output above, and the same
+    host restated as the table `netifaces` would report for it. Compared as
+    sets, because SPEC 2.3.1 leaves de-duplication to selection, so an address
+    reported twice is not a difference worth failing on while an address present
+    in one answer and missing from the other is.
+
+    The two descriptions are written independently of each other and of the
+    plugin, so each of the three answers here - the reference parse, the
+    fallback, the library path - can move without the others.
+    """
+    expected = addresses_in(IP_ADDR_OUTPUT)
+
+    fake_ip(IP_ADDR_OUTPUT)
+    fallback = set(companion.Deps().list_local_ipv4())
+
+    with netifaces_stub() as netifaces:
+        netifaces._set_table(ip_addr_output_as_netifaces(netifaces))
+        through_netifaces = set(companion.Deps().list_local_ipv4())
+
+    assert fallback == expected, "the canned host was not read back as written"
+    assert through_netifaces == fallback, (
+        "one backend sees an address the other does not, for the same host: "
+        f"only in the command parse {sorted(fallback - through_netifaces)}, "
+        f"only through the library {sorted(through_netifaces - fallback)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# What an enumeration is allowed to hand on
+# ---------------------------------------------------------------------------
+#
+# D5.1 is one sentence long and both paths have to satisfy it: the enumeration
+# returns addresses. The tests above establish that it finds the right ones on a
+# well-behaved host; these establish that a badly-behaved one cannot push
+# anything else through, which is the half no build machine can demonstrate
+# because no build machine has an interface in a strange state.
+
+
+def test_an_entry_without_a_usable_address_is_skipped_and_the_rest_survive():
+    """SPEC 2.3.1 requires the enumeration to validate what the backend hands
+    it, so this hands it entries a healthy host would not produce: an `AF_INET`
+    entry with a `peer` and no `addr`, and one whose `addr` is empty.
+
+    **UNVERIFIED:** whether real `netifaces` ever reports an `AF_INET` entry
+    lacking `addr` could not be established - an unnumbered point-to-point
+    interface is the plausible source, and nobody has confirmed it. That is why
+    the entries are injected by this test rather than volunteered by the stub
+    (see the closing rule of `tests/fakes/README.md`): the assertion is about
+    what the boundary refuses, and it holds whether or not the backend can
+    actually produce this.
+
+    Two ways to get it wrong, failing in opposite directions - raising
+    `KeyError` turns one odd interface into a failed enumeration, and appending
+    whatever `get('addr')` returned puts `None` or an empty string into the bind
+    decision. The address that *is* there must come back, alone.
+    """
+    with netifaces_stub() as netifaces:
+        netifaces._set_table(
+            {
+                "ppp0": {
+                    netifaces.AF_INET: [
+                        {"peer": "192.0.2.1", "netmask": "255.255.255.255"},
+                        {"addr": ""},
+                        {"addr": TETHER_ADDRESS},
+                    ]
+                }
+            }
+        )
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert addresses == [TETHER_ADDRESS]
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        "192.0.2.6/24",
+        "fe80::1%bnep0",
+        "not-an-address",
+        "192.0.2",
+    ],
+    ids=["with a prefix", "an IPv6 literal", "a name", "a truncated literal"],
+)
+def test_netifaces_cannot_push_a_non_address_through_the_enumeration(reported):
+    """D5.1: what comes out is addresses, and an interface name must not reach a
+    bind decision. `netifaces` is a C extension reading netlink, so what it
+    reports is not the plugin's choice - the enumeration is where a value that
+    is not an IPv4 literal has to stop.
+
+    Each of these is something a bind call must never see (SPEC 11.1 forbids a
+    hostname outright), and each of them survives a check for "non-empty
+    string" or for "contains a dot".
+    """
+    with netifaces_stub() as netifaces:
+        netifaces._set_table(
+            {
+                "eth0": {
+                    netifaces.AF_INET: [{"addr": reported}, {"addr": TETHER_ADDRESS}]
+                }
+            }
+        )
+        addresses = companion.Deps().list_local_ipv4()
+
+    assert reported not in addresses
+    assert addresses == [TETHER_ADDRESS], "the well-formed address went with it"
+
+
+def test_the_fallback_cannot_push_a_non_address_through_the_enumeration(fake_ip):
+    """The same rule on the other path, against an `inet` line that is shaped
+    like an address and is not one. `999.1.1.1` passes any check made of digits
+    and dots and fails the only one that matters, which is whether it parses."""
+    fake_ip(
+        "2: eth0: <BROADCAST,UP> mtu 1500\n"
+        "    inet 999.1.1.1/24 scope global eth0\n"
+        "3: bnep0: <BROADCAST,UP> mtu 1500\n"
+        "    inet 172.20.10.3/28 scope global bnep0"
+    )
+
+    addresses = companion.Deps().list_local_ipv4()
+
+    assert addresses == [TETHER_ADDRESS]

@@ -252,10 +252,72 @@ A `rebind_interval` timer (default 30 s) re-enumerates the host's addresses and 
 | a different address in the same block appears | it is a new selection: bind it, and unbind the old one under the rule above |
 | no address matches any entry | skip silently after the first log; do not spam |
 | bind raises `OSError` (`EADDRINUSE`/`EADDRNOTAVAIL`) | log at warning, leave unbound, retry next pass. Never crash the loop. |
-| the **enumeration itself** raises, whatever the exception type | log at warning, make no change to the bound set, retry next pass. A failed enumeration observed nothing, and the rows above are about what was observed: treating it as an empty address list would tear down a healthy tether every time `ip -4 addr show` hiccups. "Never crash the loop" is about staying available, not merely about not propagating. |
+| one interface fails to enumerate | skip it; the rest of the pass stands, logged at debug. Routine on a unit that brings `wlan0mon` up and down |
+| the **enumeration itself** raises, whatever the exception type | log at warning, make no change to the bound set, retry next pass. A failed enumeration observed nothing, and the rows above are about what was observed: treating it as an empty address list would tear down a healthy tether every time `ip -4 addr show` hiccups. "Never crash the loop" is about staying available, not merely about not propagating. **At `error` rather than `warning` when no enumeration has ever succeeded since load**, saying the companion is unreachable: a unit with no `ip` binary and no `netifaces` fails every pass forever, and at warning it reads exactly like a netlink hiccup on a working unit, so nobody looks. The condition is *never enumerated*, not *never bound* — those differ on the unit described in the row below, where the enumeration succeeds every pass and matches nothing, and where a transient failure must not be announced as a permanent fault. |
 
 State is a dict `{ip: (ws_server, http_server)}`, keyed on the address itself, so a flapping
 tether or a new DHCP lease converges without a plugin reload.
+
+##### What the enumeration itself guarantees
+
+The rows above describe what `Listeners` does with the addresses it is given. This says what the
+enumeration is allowed to hand over, and it is stated because leaving it implicit produced three
+defects that no test on a build host could see (issue #68).
+
+- **The wildcard never leaves the enumeration**, and it is also refused at selection. **One
+  rule, enforced on both sides of the seam** — not two gates, which would be a stronger claim
+  than what is there: both sides call the same `is_bindable_address`, so loosening that one
+  predicate opens both at once. That is deliberate. The threat this guards against is a *bypassed
+  call site*, since the enumeration is injectable: a rule enforced only in the seam is walked past
+  by a test double, and a rule enforced only at selection is walked past by a replacement seam.
+  A second, independently written wildcard check would guard against nothing extra and would be
+  the thing that drifts. Selection remains the load-bearing side; the seam's check is there so
+  that a caller which forgets is not the only thing in the way.
+- **Every value that leaves is an IPv4 literal**, checked with the same predicate selection uses,
+  so the two cannot drift. Not a regular expression: `999.1.1.1` matches one and is not an
+  address, and `192.0.2.6/24`, `fe80::1%bnep0` and `192.0.2` all have to be refused too.
+- **One interface failing is not a failure.** `netifaces` raises for an interface that
+  disappeared between `interfaces()` and `ifaddresses()`, which on a pwnagotchi is routine rather
+  than exotic — `wlan0mon` is created and torn down as a matter of course. So a failing interface
+  is skipped and the pass stands, logged at **debug**, because a warning several times a minute
+  for normal operation is how a log stops being read.
+
+  The exception is when **every** interface enumerated failed: then the pass observed nothing at
+  all, which is the case below rather than this one, and it raises. The distinction is between
+  "we learned everything except that one" and "we learned nothing", and collapsing them in either
+  direction produces a defect: skip-always turns a total failure into an empty list that tears the
+  tether down, and raise-always turns a routine interface teardown into a lost pass.
+
+  Note that a host with genuinely no interfaces is not this case. It observed, and the answer was
+  empty.
+
+  **An interface is all or nothing.** The guard covers reading its address list *and* walking it,
+  so an interface that fails halfway contributes none of the addresses already collected from it.
+  A library returning a shape it does not document is the same kind of event as a name that
+  vanished — one interface did not work out — and splitting the two would mean a partial result
+  from one of them, which is the least useful of the three possible answers.
+
+- **A failure raises rather than returning an empty list.** This is the contract the reconcile
+  table's last row already depended on, and it did not hold: both halves of the default seam
+  caught everything and returned `[]`, which is exactly the "observed nothing" that the row
+  forbids being confused with "observed nothing there". A `list[str]` signature has no other
+  honest channel — a sentinel would need every replacement seam to speak it, while an exception
+  is understood by the `except` that is already there.
+
+The exception type is deliberately not pinned: the seam lets the backend's own exception out, and
+`reconcile` catches `Exception`. Naming a type would mean wrapping every backend failure for no
+gain, since nothing downstream distinguishes them.
+
+**On the parsing of `ip -4 addr show`**, which is the fallback when `netifaces` is not importable:
+take the first token after `inet`, line-anchored, and split the prefix off it. Then validate it
+like everything else.
+
+The validation is the point, and it is worth being precise about why, because the obvious story
+is wrong. A pattern matching four dot-separated numbers does **not** return the peer from
+`inet 10.0.0.2 peer 192.0.2.1/32` — it is already anchored on `inet` and stops at the local
+address. What it does do is accept `999.1.1.1`, which is four dot-separated numbers and is not an
+address. A regular expression describes a shape; `ipaddress.IPv4Address` decides membership. Only
+the second one is what this needs.
 
 #### 2.3.2 `websockets` API compatibility (mandatory)
 
@@ -667,10 +729,28 @@ Auto-detect in order, each step guarded:
    over a small candidate list and treat every miss as "unavailable"; do not import them and do
    not assume a name.
 2. Direct PiSugar I2C read (bus 1, address `0x57`, register `0x2A` for percentage), wrapped in
-   try/except, only if `pisugar = true`.
+   try/except, only if `pisugar = true`. The library is **`smbus2`, and there is no `smbus`
+   fallback** — stated here because until now it was not stated anywhere. The dependency lived
+   only in the implementation, which is how a test stub came to offer a fallback that does not
+   exist: nothing in this document forbade one. The percentage is read as a **byte**, which is
+   what the implementation does and what "percentage in one register" implies, though see the
+   caveat below.
 3. `{percent: null, charging: null}`.
 
 Never hard-fail, never raise into the asyncio loop.
+
+**None of the three I2C constants carries evidence in this repository.** Bus 1, address `0x57`
+and register `0x2A` match the PiSugar 3 documentation as far as anyone here has checked, but §11's
+evidence tables cover pwnagotchi symbols only and nothing cites a source for these. They are
+inherited from the upstream plugin this forks. Treat them as unverified until the first read on
+real hardware, which is also the moment the byte-versus-word question above settles: a word read
+at `0x2A` is not obviously wrong.
+
+**The source of `charging` is unknown outright**, which is worse than unverified. Nothing says
+which register or bit carries it, so no test can assert its value — only that it is a `bool` or
+`null` — and a wrong register there passes the entire suite. The tier-1 plugin attribute names are
+deliberately unpinned too, as the paragraph above says, which is why they are probed rather than
+imported.
 
 ### 2.12 GPS abstraction — Pi-source-first, browser fallback
 
@@ -1624,7 +1704,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
-| `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host — a two-tuple, never raising — plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout |
+| `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host — a two-tuple, never raising — plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
 
 A rule the `read_pisugar_i2c` row exists to state: **a test may not assert a property of the
 machine it happens to run on.** The first version of that test asserted the read returns nulls
@@ -1763,6 +1843,23 @@ enumeration (`Deps.list_local_ipv4() -> list[str]`, §2.3.1), thread spawning, a
 full branch coverage of the I2C and gpsd paths is unreachable and the gate would have to be
 weakened. Constructor injection with real defaults; no monkeypatching of module internals from
 the tests.
+
+**The seams do not cover themselves, and that gap is closed separately.** Injection reaches every
+*caller* of a seam and, by construction, never the default behind it: injecting is precisely how
+you avoid running it. So the branches that execute on a unit with `smbus2` or `netifaces`
+installed were unreachable from the suite, which is a poor place for a blind spot — that is the
+code that only ever runs on the device. `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/`
+put those libraries on `sys.path`, in the manner `tests/fakes/pwnagotchi_stub/` already
+established, rather than adding hardware libraries to `tests/requirements.txt`.
+
+Unlike the pwnagotchi stub, these two are deliberately **permissive**. That stub is exact because
+§11 pins every pwnagotchi symbol, so a missing attribute there is the guard against an invented
+API. `netifaces` and `smbus2` are third-party libraries with published interfaces this
+specification does not enumerate, so a stub trimmed to what the plugin happens to call today
+would fail correct code tomorrow.
+
+Covering those branches immediately found three defects the injected path could never have shown
+(issue #68), which is the argument for doing it rather than a bonus from having done it.
 
 Two things are deliberately **not** seams on `Deps`. The filesystem is reached through
 configured paths, so a test points them at a `tmp_path` and needs no indirection. The

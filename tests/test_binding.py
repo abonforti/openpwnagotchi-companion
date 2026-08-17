@@ -814,6 +814,137 @@ def test_an_enumeration_that_raises_does_not_tear_down_bound_listeners(
     bind_recorder.assert_no_wildcard()
 
 
+# ---------------------------------------------------------------------------
+# What a failed enumeration is logged at
+# ---------------------------------------------------------------------------
+#
+# SPEC 2.3.1 gives the last row of the reconciliation table two levels: warning
+# normally, and "at `error` rather than `warning` when nothing has ever been
+# bound since load", because a unit with no `ip` binary and no `netifaces` fails
+# every pass forever and at warning that reads exactly like a netlink hiccup on
+# a working unit, so nobody looks.
+#
+# The two tests above execute both arcs of that branch without asserting on
+# either level, which is the case SPEC 10.7 warns about: a branch that runs with
+# nothing behind it reports as covered and pins nothing. These say which level.
+
+#: One plausible backend failure. The *type* is unpinned by SPEC 2.3.1 and the
+#: tests above already drive both an `OSError` and a `RuntimeError`; what is at
+#: stake here is the level, which the type has nothing to do with.
+ENUMERATION_ERROR = OSError("ip: command not found")
+
+
+def levels_of(caplog) -> set[str]:
+    return {record.levelname for record in caplog.records}
+
+
+def test_a_failed_enumeration_is_an_error_while_nothing_has_ever_bound(
+    make_listeners, deps, harness, caplog
+):
+    """SPEC 2.3.1: `error` when no enumeration has ever succeeded since load.
+
+    Never *enumerated*, not never *bound*: the two differ on a unit whose
+    enumeration works every pass and matches no configured entry, where a
+    transient failure must not be announced as a permanent fault.
+
+    This is the unreachable unit. Every pass fails, no listener has ever
+    existed, and the only thing the owner can see is that the app does not
+    connect. Logged at warning it is indistinguishable from the routine case
+    below - which happens on a perfectly healthy unit whenever netlink stutters -
+    and the message that says the companion is unreachable is filtered out along
+    with it.
+    """
+    harness.local_ipv4 = [LOOPBACK]
+    enumeration = FailingEnumeration(deps.list_local_ipv4, ENUMERATION_ERROR)
+    listeners = make_listeners([LOOPBACK], over_deps=deps_with_enumeration(deps, enumeration))
+
+    with caplog.at_level("DEBUG"):
+        caplog.clear()
+        listeners.reconcile()
+
+    assert enumeration.raised == 1, "the pass must actually have hit the failure"
+    assert "ERROR" in levels_of(caplog), (
+        "a unit that has never bound anything and cannot enumerate is unreachable; "
+        f"the levels logged were {sorted(levels_of(caplog))}"
+    )
+    assert "WARNING" not in levels_of(caplog), (
+        "SPEC 2.3.1 says error *rather than* warning here, so a warning as well "
+        "leaves the two cases as hard to tell apart as before"
+    )
+
+
+def test_a_failed_enumeration_is_a_warning_once_something_has_bound(
+    make_listeners, deps, harness, ports, caplog
+):
+    """SPEC 2.3.1: warning is the normal level for a failed pass.
+
+    A unit whose tether is up and whose enumeration hiccups once has lost one
+    pass and nothing else - the bound set is untouched and the next pass
+    reconciles. Reporting that at error trains the owner to ignore the level
+    that the case above depends on being read.
+    """
+    harness.local_ipv4 = [LOOPBACK]
+    enumeration = FailingEnumeration(deps.list_local_ipv4, ENUMERATION_ERROR, failures=0)
+    listeners = make_listeners([LOOPBACK], over_deps=deps_with_enumeration(deps, enumeration))
+    listeners.reconcile()
+    assert is_listening(LOOPBACK, ports[1]), "the fixture must start from a bound unit"
+
+    enumeration.fail_next(ENUMERATION_ERROR)
+    with caplog.at_level("DEBUG"):
+        caplog.clear()
+        listeners.reconcile()
+
+    assert enumeration.raised == 1, "the pass must actually have hit the failure"
+    assert "WARNING" in levels_of(caplog), (
+        f"a lost pass on a bound unit is a warning; the levels logged were "
+        f"{sorted(levels_of(caplog))}"
+    )
+    assert "ERROR" not in levels_of(caplog), (
+        "the unit is reachable: something is bound and nothing was torn down"
+    )
+
+
+def test_a_failed_enumeration_is_still_a_warning_after_the_address_went_away(
+    make_listeners, deps, harness, ports, caplog
+):
+    """SPEC 2.3.1 measures it "since load", not "right now".
+
+    A tether that drops closes its listeners, and the next enumeration failure
+    then finds nothing bound. That unit is not the one the error level exists
+    for: it bound once, so its configuration and its `ip` binary both work, and
+    what it is doing is flapping. Gated on the current bound set instead of on
+    the whole life of the plugin, every unit that loses its tether starts
+    reporting the unreachable-unit error, which is how the level stops carrying
+    the meaning the row gives it.
+    """
+    harness.local_ipv4 = [LOOPBACK]
+    enumeration = FailingEnumeration(deps.list_local_ipv4, ENUMERATION_ERROR, failures=0)
+    listeners = make_listeners([LOOPBACK], over_deps=deps_with_enumeration(deps, enumeration))
+    listeners.reconcile()
+    assert is_listening(LOOPBACK, ports[1]), "the fixture must start from a bound unit"
+
+    harness.local_ipv4 = []
+    listeners.reconcile()
+    assert not is_listening(LOOPBACK, ports[1]), (
+        "the address is gone, so its listeners must be closed before the failure"
+    )
+
+    enumeration.fail_next(ENUMERATION_ERROR)
+    with caplog.at_level("DEBUG"):
+        caplog.clear()
+        listeners.reconcile()
+
+    assert enumeration.raised == 1, "the pass must actually have hit the failure"
+    assert "WARNING" in levels_of(caplog), (
+        f"something has been bound since load, so this is the ordinary lost pass; "
+        f"the levels logged were {sorted(levels_of(caplog))}"
+    )
+    assert "ERROR" not in levels_of(caplog), (
+        "SPEC 2.3.1 gates the error on nothing having been bound *since load*; "
+        "this unit bound a listener and then lost the address under it"
+    )
+
+
 def test_stop_closes_everything_and_is_idempotent(make_listeners, harness, ports):
     harness.local_ipv4 = [LOOPBACK]
     listeners = make_listeners([LOOPBACK])

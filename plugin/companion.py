@@ -257,8 +257,13 @@ def select_bind_addresses(
 
     The interface carrying an address is not consulted and never reaches this
     function (D5.1). Anything the host reports that is not a bindable literal
-    IPv4 is dropped here, which is the single gate keeping 0.0.0.0 out of a
-    bind call even if a block were to contain it.
+    IPv4 is dropped here, so 0.0.0.0 stays out of a bind call even if a block
+    were to contain it. The enumeration refuses the wildcard as well, and the
+    duplication is deliberate (SPEC 2.3.1): the enumeration is an injectable
+    seam, so a rule kept only there is one a test double walks past, and a rule
+    kept only here is one a replacement seam walks past. This is the
+    load-bearing side of the two, because every address reaches it; both call
+    `is_bindable_address`, so neither can drift from the other.
     """
     selected: list[str] = []
     for raw in local:
@@ -763,11 +768,17 @@ def default_read_gpsd(host: str, port: int, timeout: float) -> dict | None:
 
 
 def default_read_pisugar_i2c() -> tuple[float | None, bool | None]:
-    """Reads battery percentage and charging state directly over I2C.
+    """Reads the battery percentage directly over I2C. Charging is always None.
 
-    PiSugar 3 answers on bus 1 at address 0x57, percentage in register 0x2A.
-    Last resort, only when no PiSugar plugin is loaded. Returns (None, None) on
-    any failure - a missing battery reading is not an error worth propagating.
+    PiSugar 3 answers on bus 1 at address 0x57, percentage in register 0x2A, read
+    as a byte. Last resort, only when no PiSugar plugin is loaded. Returns
+    (None, None) on any failure - a missing battery reading is not an error worth
+    propagating.
+
+    Charging is not read, and the second element is None by design rather than by
+    omission: SPEC 2.11 records that no register or bit is known to carry it, so
+    there is nothing to read. None of the three constants above carries evidence
+    in this repository either; they are inherited from the plugin this forks.
     """
     try:
         import smbus2  # type: ignore[import-not-found]
@@ -791,35 +802,77 @@ def default_list_local_ipv4() -> list[str]:
     so the plugin does not add a hard dependency for something this small. An
     interface name is walked over on the way to the addresses and dropped here:
     it is a device identifier, not a network, and it must not reach a bind
-    decision (D5.1).
+    decision (D5.1). Everything that survives is a literal IPv4 address the
+    plugin is willing to bind, so a value that is not one - a CIDR suffix, an
+    IPv6 literal, a name, or the wildcard an unconfigured point-to-point
+    interface reports - stops here rather than one layer up (SPEC 2.3.1).
+
+    A failure of the enumeration itself is raised, never folded into an empty
+    list: the two are indistinguishable to the caller and only one of them says
+    the host holds no addresses. The rebinding loop catches it and leaves the
+    bound set alone, so a hiccup of `ip -4 addr show` cannot tear down a healthy
+    tether (SPEC 2.3.1, last row). One interface failing is not that case and is
+    not raised: the pass learned everything except that interface, and on a
+    pwnagotchi it is routine rather than exotic, because `wlan0mon` is created
+    and torn down as a matter of course and `netifaces` raises for a name that
+    disappeared between `interfaces()` and `ifaddresses()`. It is one case
+    however it fails, so reading the interface and reading its entries are
+    guarded together: a shape the library does not document is that interface
+    not working out, not the enumeration failing. Losing every interface is
+    that case again, and is raised.
     """
     try:
         import netifaces  # type: ignore[import-not-found]
-
-        found: list[str] = []
-        for iface in netifaces.interfaces():
-            for entry in netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []:
-                address = entry.get("addr")
-                if address:
-                    found.append(address)
-        return found
     except ImportError:
         pass
-    except Exception:
-        return []
+    else:
+        found: list[str] = []
+        names = list(netifaces.interfaces())
+        failure: Exception | None = None
+        observed = 0
+        for iface in names:
+            try:
+                entries = netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []
+                here = [entry.get("addr") for entry in entries]
+            except Exception as err:
+                # Debug, not warning: an interface going away mid-pass is what
+                # a working unit does routinely, and a warning per pass for
+                # normal behaviour is how a log stops being read.
+                log.debug("[companion] skipping interface %s: %s", iface, err)
+                failure = err
+                continue
+            # Only now, because an interface counts as observed once it has
+            # been read whole. Appending after the guard keeps a half-read
+            # interface out of the result instead of leaving part of it in.
+            observed += 1
+            found.extend(address for address in here if is_bindable_address(address))
+        if failure is not None and observed == 0:
+            # Every interface there was failed, so the pass observed nothing at
+            # all, which is the case the docstring above raises for. A host with
+            # no interfaces is not this: it observed, and the answer was empty.
+            raise failure
+        return found
 
     # netifaces is not a hard dependency for something this small.
-    try:
-        output = subprocess.run(
-            ["ip", "-4", "addr", "show"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        ).stdout
-    except Exception:
-        return []
-    return re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", output)
+    output = subprocess.run(
+        ["ip", "-4", "addr", "show"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    ).stdout
+    addresses: list[str] = []
+    # The first token after `inet` is the local address; what follows it is a
+    # peer, a broadcast or a label, and none of those is an address this host
+    # holds. `inet6` does not match, and the prefix length is not part of the
+    # address. The token is taken whole rather than matched as four dot-
+    # separated digit runs, because that shape accepts `999.1.1.1`; deciding
+    # what is an address is `is_bindable_address`'s job, not the pattern's.
+    for token in re.findall(r"^\s*inet\s+(\S+)", output, re.MULTILINE):
+        candidate = token.split("/", 1)[0]
+        if is_bindable_address(candidate):
+            addresses.append(candidate)
+    return addresses
 
 
 def default_spawn(target: Callable[[], None]) -> None:
@@ -1806,6 +1859,7 @@ class Listeners:
         another address in the same block  a new selection: bind it, drop the old
         nothing matches                    skip quietly after the first log
         bind raises OSError                log, leave unbound, retry next pass
+        one interface fails to enumerate   skip it, the rest of the pass stands
         enumeration itself raises          log, change nothing, retry next pass
 
     Never binds 0.0.0.0, :: or a hostname, and never decides a bind from an
@@ -1833,20 +1887,38 @@ class Listeners:
         # ip -> (ws_server, http_server)
         self._bound: dict[str, tuple[Any, Any]] = {}
         self._nothing_logged = False
+        self._ever_enumerated = False
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
 
     def reconcile(self) -> list[str]:
         """Runs one reconciliation pass. Returns the addresses bound after it."""
         try:
-            local = list(self._deps.list_local_ipv4() or [])
+            local = list(self._deps.list_local_ipv4())
         except Exception as err:
             # A failed enumeration observed nothing, so it cannot be read as
             # "no address is local": tearing the bound set down on a hiccup of
             # `ip -4 addr show` would drop a healthy tether. Leave it as it is
             # and let the next pass decide.
-            log.warning("[companion] could not enumerate local addresses: %s", err)
+            #
+            # A blip and a unit that will never work read identically here, so
+            # they are logged at different levels: if no enumeration has ever
+            # succeeded since load, this is a permanent failure - no `ip`
+            # binary and no `netifaces` - that nobody would otherwise notice.
+            # Having bound nothing is not that: a unit whose tether has not
+            # come up, or a `bind_addresses` matching nothing, enumerates fine
+            # on every pass, and that is a configuration problem with its own
+            # message below.
+            if self._ever_enumerated:
+                log.warning("[companion] could not enumerate local addresses: %s", err)
+            else:
+                log.error(
+                    "[companion] could not enumerate local addresses and no enumeration has "
+                    "ever succeeded, the companion is unreachable: %s",
+                    err,
+                )
             return sorted(self._bound)
+        self._ever_enumerated = True
         selected = select_bind_addresses(local, self._selectors)
 
         for ip in [bound for bound in self._bound if bound not in selected]:
@@ -1871,9 +1943,11 @@ class Listeners:
         Precondition: `ip` came out of `select_bind_addresses`, which is where
         D5.1 is enforced - it drops anything that is not a literal, bindable
         IPv4, so 0.0.0.0, :: and hostnames cannot reach here. The check is not
-        repeated in this method so that there is exactly one gate rather than
-        two that could drift apart; any new caller must go through that
-        selection, not call `_open` with an address from elsewhere.
+        repeated in this method: D5.1 is already gated on both sides of the
+        address seam (SPEC 2.3.1), and a third copy this far down would say
+        nothing the other two do not while being free to drift from them. Any
+        new caller must go through that selection, not call `_open` with an
+        address from elsewhere.
         """
         http_server = ws_server = None
         try:

@@ -724,19 +724,142 @@ frame on UI updates — it is far too heavy for the BT link. Missing frame file 
 Auto-detect in order, each step guarded:
 
 1. `plugins.loaded.get('pisugarx_ext')`, then `plugins.loaded.get('pisugarx')` — read whatever
-   battery level / charging attributes they expose, via `getattr` with defaults. **UNVERIFIED:**
-   these are third-party plugins and their attribute names are not pinned. Probe with `getattr`
-   over a small candidate list and treat every miss as "unavailable"; do not import them and do
-   not assume a name.
-2. Direct PiSugar I2C read (bus 1, address `0x57`), wrapped in try/except, only if
-   `pisugar = true`. Register `0x2A` carries the percentage and **bit 7 of register `0x02`**
-   carries charging. Both are read as a **byte**. The library is **`smbus2`, and there is no
-   `smbus` fallback** — stated here because until now it was not stated anywhere. The dependency
+   battery level and charging attributes they expose, via `getattr`. **UNVERIFIED:** these are
+   third-party plugins and their attribute names are not pinned. Probe with `getattr` over a
+   candidate list and treat every miss as "unavailable"; do not import them and do not assume a
+   name. **The values are not on the plugin object.** `plugins.loaded['pisugarx_ext']` is a
+   `PiSugar(plugins.Plugin)` that holds its hardware client at `self.ps`, and the battery state
+   lives on that client (F29). So each candidate is looked for on the plugin and then on
+   `plugin.ps`, and on the reference unit it is found in the second place, as the plain
+   attributes `battery_level` and `power_plugged`. Those are current rather than stale: the
+   client runs `update_value()` on a daemon thread that refreshes them every three seconds, and
+   the accessors `get_battery_level()` and `get_battery_power_plugged()` are one-line wrappers
+   that return the same attributes and read no hardware of their own (F29). Probing the
+   attributes and probing the accessors are therefore the same reading, and the attributes come
+   first because they are earlier in the lists.
+
+   **The client is traversed only when it reports itself ready.** `PiSugarServer.__init__` sets
+   `battery_level` to `0` and `power_plugged` to `False`, and `update_value()` is started only
+   once a device has actually been found (F29). With the plugin loaded and no PiSugar attached
+   the search loops forever, the refresh never starts, and those constructor values stand for the
+   lifetime of the process. Probing them would report a confident `{"percent": 0.0, "charging":
+   false}`, latch `capabilities.pisugar` true and pre-empt the direct read for good. The client
+   carries the fact needed to tell the two apart: `ready` is `False` from the constructor and is
+   set `True` only after the device is connected and its registers have been read, and nothing
+   sets it back (F29). So a client whose `ready` is not true is treated as absent, exactly as if
+   the plugin held no client at all, and both fields fall through to the tier below.
+
+   **The gate is on the client, not on the plugin.** The plugin object itself is still probed for
+   every candidate whether or not the client is ready: another plugin may keep its reading on
+   itself and hold no client at all, and that shape is why the plugin is a probe target in the
+   first place. `pisugarx_ext` mirrors the flag as `self.ready = self.ps.ready` (F29), so on that
+   plugin the two are the same fact and gating on the client loses nothing. Reading `ready` is
+   third-party attribute access like every other: absent, `None`, or a property that raises all
+   mean not ready, and none of them is an error.
+
+   **`battery_charging` must not be probed.** It is assigned `0` once in the client's constructor
+   and never again, and `get_battery_charging()` has a body of `pass` (F29). `0` converts to
+   `False` under the charging conversion below exactly as it did under a bare `bool()` cast, so a
+   `False` is a value rather than a miss either way, and probing it would report "not charging"
+   confidently and forever while `power_plugged`, the only charge-related field the plugin
+   maintains, was never consulted. A dead field that answers is worse than no field at all. The
+   guarded conversion below narrows what counts as a value; it does not rescue this field, because
+   `0` is exactly the shape it is built to accept.
+
+   **Every plain attribute is preferred to every accessor, and only then is the order by how
+   precisely a name answers the question, with ties going to what was observed.** Precision
+   settles `charging` above `power_plugged`, since a plugin exposing both means the two
+   differently and the first is the field this reports, and settles `battery_level` above
+   `battery`, `level` and `capacity`. It does not settle `battery_level` against `percentage`,
+   where both name the quantity exactly; there the tie-break is that `battery_level` is what the
+   reference unit's client exposes.
+
+   The attribute rule comes first because it is about cost rather than meaning, and it is why
+   `get_battery_level` and `get_battery_power_plugged` sit last in their lists even though they
+   name the question more precisely than `capacity` or `plugged` do. Reading an attribute cannot
+   block and cannot touch hardware; calling an accessor is third-party code that may do either,
+   on the request path. That these two accessors are one-line wrappers today (F29) is a fact
+   about one plugin at one version, not a property of the shape being probed, and the probe has
+   no way to tell a wrapper from a bus transaction before calling it.
+2. Direct PiSugar I2C read (bus 1, address `0x57`), wrapped in try/except. Register `0x2A`
+   carries the percentage and **bit 7 of register `0x02`** carries charging. Both are read as a
+   **byte**. The library is **`smbus2`, and there is no `smbus` fallback** — stated here because
+   until now it was not stated anywhere. The dependency
    lived only in the implementation, which is how a test stub came to offer a fallback that does
    not exist: nothing in this document forbade one.
 3. `{percent: null, charging: null}`.
 
 Never hard-fail, never raise into the asyncio loop.
+
+**Resolution is per field, and descending is only ever for what is still missing.** A tier that
+supplies one field does not settle the other. The reason is the defect this rule replaces: a
+plugin exposing a charge state and no level made the level unreachable for good, in silence, even
+though the I2C tier below could read it off a register this document now pins. A field that no
+tier supplies is `null`, which is the same answer it was before.
+
+The constraint matters as much as the rule. **A tier is never consulted for a field already in
+hand**, so the I2C bus is touched only when there is something to gain by touching it, and on a
+unit whose tier-1 plugin answers both fields it is not touched at all. Without that constraint
+per-field resolution would mean an I2C transaction on every read for a device that had already
+answered, which is a cost paid for nothing.
+
+The order of tiers is unchanged and so is the meaning of each. What changes is that reaching tier
+2 is decided per field rather than for the reading as a whole.
+
+**`pisugar: false` disables every tier.** It is the switch for reading a battery at all: with it
+off no plugin is looked up, no probe runs, and the answer is two nulls. The narrower reading, where
+it gates only the direct read, is distinguishable from this one and would leave the option
+half-honouring its name.
+
+**What counts as a value, at any tier.** An attribute that is absent, or present and `None`, or
+whose value will not convert to the field's type, is a miss and never an error. A candidate that
+is callable is called, because some PiSugar plugins expose `get_battery_level()` rather than a
+plain attribute; a call that raises is a miss like any other. And **a percentage is a finite number
+in 0-100, regardless of which tier produced it**: §2.11.2 states the rule for the direct read, but
+it is a statement about what the quantity can be and not about how it arrived. A tier-1 plugin
+reporting 255 must report nothing rather than have the client render a plausible-looking lie. That
+is the same answer the direct read already gives for the same byte. Note that the schema does
+**not** enforce this: `Battery.percent` is typed `number|null` with no bounds, so this rule is the
+only thing standing between a bad gauge and the display.
+
+Three edges of that rule, because each of them passes a careless form of it. **Finite** is load
+bearing: `NaN` and the infinities are not caught by asking whether a value is below zero or above
+one hundred, since every comparison against `NaN` is false, and a `NaN` that survives reaches
+`json.dumps` and is serialised as the literal `NaN`, which is not JSON and which a conformant
+client rejects. Write the bound as a range the value must fall *inside*, not as two ways of being
+outside it. **A boolean is not a percentage**, though `True` converts to `1.0` and sits happily in
+range: a charge flag read into the level field is exactly the plausible-looking lie this rule
+exists to stop. And **a value refused for any of these reasons is a miss**, so the next candidate
+and then the tier below still get their turn; it is not a reading that is later nulled, because
+that would make the level unreachable and reintroduce the defect §2.11's per-field rule removes.
+
+**A value that converts is accepted, including a numeric string.** `"87"` from a third-party
+plugin is 87, and the existing clause above already decides it: a miss is a value that *will not*
+convert. This tier exists to be forgiving about shapes nobody here controls, and a plugin that
+reports its level as text is careless rather than wrong. The refusals in this section are all
+values that convert and still cannot be a percentage; a numeric string is the opposite case. Note
+that the bool refusal is not an exception to this, since a bool converts to a number that is
+inside the range and therefore indistinguishable from a real reading once accepted.
+
+**A refusal is not an answer.** A tier-1 provider whose only usable output was refused has
+supplied nothing, so `capabilities.pisugar` stays false on its account. This does not contradict
+§2.11.2, where an out-of-range percentage alongside a charging bit is a PiSugar that answered:
+there the charging bit is the answer, and here there is none.
+
+**Charging is converted with the same rigor as percent, for the opposite reason.** Percent guards
+a range; charging guards a two-valued fact, and a value that is not unambiguously one of the two
+is a miss rather than a guess. A bare `bool()` cast has no content on this field: `""` is `False`,
+`"false"` is `True`, and `0.5` is `True`, so a plugin that returns any non-empty string or any
+non-zero number would be read as charging regardless of what it meant. The guarded conversion
+accepts a `bool` as itself; an `int` only when it is exactly `0` or `1`; a `str` only from a fixed
+set of spellings read after `strip().lower()` — `"true"`/`"false"`, `"1"`/`"0"`, `"yes"`/`"no"`,
+`"on"`/`"off"`. Everything else, including a float and an unrecognised string, is refused like a
+failed cast, and the refusal follows the same rule as every other one in this section: it is a
+miss, not an answer, so the next candidate and then the tier below still get their turn.
+
+This is why `battery_charging` staying off the candidate list, above, remains load-bearing rather
+than redundant: `0` still converts, to `False`, so the guard alone would not have kept a
+constructor's stale `0` from being read as a confident "not charging" had that field been probed.
 
 #### 2.11.1 Where the I2C constants come from
 
@@ -787,6 +910,15 @@ independent: that repository belongs to this project's owner, and nothing record
 bit assignment came from, so it may trace to the same upstream plugin or the same datasheet this
 project would otherwise be reading. Treat it as the strongest available prior, not as a second
 witness.
+
+**A later commit from the same author states the belief outright, and is weighed the same way.**
+Commit [`abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/commit/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be),
+in the same repository, describes bit 7 in prose rather than through a variable name: "The MCU has
+no 'charge complete' bit, only 'external power present'." That is a stronger *form* of the same
+evidence, a belief stated rather than inferred, but it is not a second witness for the same reason
+as the variable name above: same author, same repository, and the commit message does not say
+where the belief comes from, so it may rest on nothing more than that variable name already
+weighed. It raises confidence in the reading without raising its independence.
 
 **And the dumps qualify it further.** Bit 6 is set in both recorded bytes, `0xEC` and `0x6C`
 alike, so `allow_charging` is true with the cable out. It is a permission flag rather than a
@@ -1787,7 +1919,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_peers.py` | every field in the §2.8 table; the `datetime` vs float `last_seen` asymmetry; a `Peer` whose timestamp parsing fell back to `str`; missing `adv` keys |
 | `test_gps.py` | source priority order; `gps_source` config overrides; `0.0/0.0` is not a fix; browser staleness expiry; sidecar written in bettercap shape (D13); no sidecar without a fix; existing sidecar not overwritten; `.pcap` gets the right sidecar name |
 | `test_log_tail.py` | bounded tail returns the last N; default and cap; file smaller than one chunk; undecodable bytes; missing file yields `log_unavailable` |
-| `test_battery.py` | each detection tier; every tier failing yields nulls and raises nothing |
+| `test_battery.py` | the tier order of §2.11 — `pisugarx_ext`, then `pisugarx`, then the I2C bus as a last resort that a loaded provider and a disabled `pisugar` both suppress; every tier failing yields nulls and raises nothing. Then the rules that make the descent per-field rather than per-tier: a tier that supplies only the level takes the charge state from the tier below, a second plugin fills only what the first left missing, and a field no tier supplies is null. The candidate order within a tier (`battery_level` over the vaguer percentage names, `charging` over `power_plugged` and `plugged`), callables called and a raising one treated as a miss, an attribute present and `None` a miss. Percentages: bounded to 0-100, a numeric string accepted and settling the field, a refusal never reported and never stopping the tier or the candidate below, and never reaching the wire. `available` and `capabilities.pisugar` latch on the first answer from either field and do not un-latch on a later refusal. The nested `client` traversal: the reference unit and upstream `pisugarx` shapes, an attribute on the plugin outranking the same one on the client, a flat plugin with no client, a client whose `ready` is false not traversed while the plugin itself still is, and `battery_charging` probed on neither. `_as_charging` as a value grammar in its own right — `bool` as itself, `0` and `1` only among ints, the enumerated spellings after strip and lower, and a refusal for every other int, every float, the empty string, the string `false`, `None` and an unrelated type, each contrasted with what plain `bool()` would have said |
 | `test_controls.py` | `set_mode` calls `pwnagotchi.restart` with `"AUTO"`/`"MANU"` and **never assigns `agent.mode`**; broadcasts `restarting` before restarting; no-op when already in the mode; `set_pasv` errors outside auto and when `pasv_mode` is absent, emits the right event otherwise, and does not read `passive` back; reboot/shutdown call the module-level functions |
 | `test_tls_startup.py` | missing cert, missing key, unreadable key and malformed PEM each result in **zero listeners** and a logged error — the no-plaintext-fallback rule |
 | `test_auth.py` | token accepted, rejected, wrong type, missing; `compare_digest` used; unauthenticated connection closed after `auth_timeout`; auth skipped when no token configured |
@@ -2047,6 +2179,7 @@ two allowlists drifting apart is the failure the checker exists to prevent, one 
 | F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |
 | F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`, which is **not** the `defaults.toml` value. The two disagree, so the directory must be resolved from the running configuration and never hardcoded | `stage3/06-patches/files/profile` vs `pwnagotchi/defaults.toml:27` |
 | F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked in full**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `v2.9.5.6` or `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
+| F29 | `pisugarx_ext.py` defines **two** classes. `plugins.loaded['pisugarx_ext']` is the `PiSugar(plugins.Plugin)` at line 544, which holds its hardware client as `self.ps = PiSugarServer()`. The battery state lives on that client, not on the plugin: `PiSugarServer.__init__` sets `battery_level` and `power_plugged`, and the accessors are `get_battery_level()` and `get_battery_power_plugged()`. **The attributes are kept current, and the accessors touch no hardware**: `start_timer()` runs `update_value()` on a `daemon=True` thread, and that loop rewrites the attributes on a `time.sleep(3)` cycle; each accessor is a one-line `return` of the corresponding attribute. **`ready` says whether any of it is real**: it is `False` from the constructor and is set `True` only at the end of `_connect_device`, after a device has been found and its 256 registers have been read, and nothing anywhere in the file sets it back to `False`. `start_timer()` is likewise called only after a device is found, so a loaded plugin with no PiSugar attached loops on `time.sleep(5)` forever with `ready` `False`, no refresh running, and `battery_level` and `power_plugged` still at their constructor values `0` and `False`. The plugin mirrors the flag as `self.ready = self.ps.ready`. **`battery_charging` is dead**: it is assigned `0` in that same constructor and nowhere else in the file, and `get_battery_charging()` has a body of `pass`, so it returns `None`. Upstream `jayofelony` `pisugarx.py` has the identical shape, so the same traversal reaches both tiers; that file is on branch **`noai`** and does **not** exist on `master`, which 404s | [`abonforti/pwnagotchi-plugins` @ `abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/blob/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be/pisugarx_ext.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61 (`battery_level`, `battery_charging`), 63 (`power_plugged`), 75-96 (`_connect_device`, `time.sleep(5)` when no device is found), 99 (`self.start_timer()`, reached only after one is), 102 (`self.ready = True`), 105-109 (`start_timer`, `timer_thread.daemon = True` at 108), 111 (`def update_value`), 203 and 206 (`time.sleep(3)`), 330-336 (`get_battery_level`), 528-534 (`get_battery_charging`, body `pass`), 520-526 (`get_battery_power_plugged`), 544 (`class PiSugar(plugins.Plugin)`), 655 (`self.ps = None`), 658 (`self.ps = PiSugarServer()`), 664 (`self.ready = False`), 731 and 947 (`self.ready = self.ps.ready`), and commit [`abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/commit/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be) ("The MCU has no 'charge complete' bit, only 'external power present'", on bit 7 of register `0x02`, see 2.11.1). Upstream: [`jayofelony/pwnagotchi` branch `noai` @ `9fc1b6f0`, `pwnagotchi/plugins/default/pisugarx.py`](https://github.com/jayofelony/pwnagotchi/blob/9fc1b6f0cc4b7002ecbf5f3ab1e7623109fe5bf9/pwnagotchi/plugins/default/pisugarx.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61, 63, 102 (`self.ready = True`), 105-109 (`start_timer`, `daemon = True` at 108), 111 (`def update_value`), 202 and 205 (`time.sleep(3)`), 329-335 (`get_battery_level`), 519-525 (`get_battery_power_plugged`), 543 (`class PiSugar(plugins.Plugin)`), 566 (`self.ps = None`), 569 (`self.ps = PiSugarServer()`), 575 (`self.ready = False`), 619 and 811 (`self.ready = self.ps.ready`) |
 
 ### 11.1 Explicitly forbidden
 

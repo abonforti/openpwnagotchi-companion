@@ -160,7 +160,9 @@ def test_a_method_is_found_wherever_the_class_is_defined():
     reporting it missing would be a false drift report - which costs trust in
     every future report from this tool.
     """
-    nested = {"mod.py": "if True:\n    class Peer:\n        def full_name(self):\n            pass\n"}
+    nested = {
+        "mod.py": "if True:\n    class Peer:\n        def full_name(self):\n            pass\n"
+    }
     fact = {"id": "x", "file": "mod.py", "kind": "methods", "class": "Peer",
             "names": ["full_name"]}
 

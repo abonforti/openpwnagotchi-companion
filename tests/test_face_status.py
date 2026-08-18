@@ -177,7 +177,9 @@ def test_the_view_is_read_on_every_call_rather_than_at_startup(
     assert data["status"] == "ZzzZz"
 
 
-def test_the_burst_carries_the_face_the_view_holds(router_factory, agent_factory, face_status_validator):
+def test_the_burst_carries_the_face_the_view_holds(
+    router_factory, agent_factory, face_status_validator
+):
     """The initial burst exists so a fresh client has state without polling
     (SPEC 2.4). A burst carrying an empty face defeats its own purpose."""
     agent = agent_factory(face=FACE, status=STATUS)

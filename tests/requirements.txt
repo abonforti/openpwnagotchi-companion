@@ -16,3 +16,9 @@ jsonschema>=4.21
 # version (SPEC F21) and the server API changed incompatibly at 14, so the
 # plugin must work against whatever CI resolves - deliberately unpinned here too.
 websockets
+# The lint gate (ruff.toml). Pinned to a compatible release rather than left
+# open: a linter can fail every pull request in the repository, and a rule
+# tightened upstream would do it on a schedule nobody here chose. Bumping the
+# pin is how we decide to see the new rules, and that is a change with a diff
+# rather than a surprise on a Tuesday.
+ruff~=0.16.0

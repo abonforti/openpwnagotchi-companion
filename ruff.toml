@@ -1,0 +1,24 @@
+# Lint configuration for the plugin, the tooling and the tests.
+#
+# E and F only, which is pycodestyle's errors plus the whole of pyflakes. That
+# is the half that finds defects rather than opinions: an undefined name, an
+# unused import, a variable shadowing another, a comparison that cannot be what
+# it looks like. The formatting rulesets are deliberately not enabled - this
+# repository has a house style and a linter arguing with it produces churn, not
+# correctness.
+#
+# The plugin runs on a unit nobody can attach a debugger to, and its error paths
+# are the ones no test walks. A name that does not exist on one of those paths
+# is exactly the defect this catches and `compileall` does not: byte-compiling
+# proves the file parses, nothing more.
+
+line-length = 100
+
+[lint]
+select = ["E", "F"]
+
+[lint.per-file-ignores]
+# Holds a fixture in the shape `ip -4 addr show` produces. It is data, not code,
+# and rewrapping it would make the shape a fiction. Constructed, not captured:
+# nothing from a real unit belongs in this repository, exemption or not.
+"tests/test_deps.py" = ["E501"]

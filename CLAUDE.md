@@ -20,7 +20,8 @@ Decisions Ledger (§0) is not to be re-litigated.
 - `tools/` — CA/cert generation, protocol type generation, on-Pi install.
 - `tests/` — pytest suite for the plugin (no pwnagotchi install needed) and for the
   certificate scripts. Frontend tests live in `frontend/src/__tests__/` (vitest).
-- `.github/` — CI (plugin lint, tests, language check, schema sync, frontend build), release
+- `.github/` — CI (plugin lint and tests with a coverage floor, schema sync, frontend build
+  and end-to-end, repository hygiene), release
   (dist.tgz), project labels/templates.
 
 ## Reference hardware

@@ -98,7 +98,9 @@ def test_switching_to_auto_restarts_into_AUTO(router_factory, agent_factory, har
     assert harness.args_for("restart_pwnagotchi") == [("AUTO",)]
 
 
-def test_the_agent_mode_attribute_is_never_assigned(router_factory, harness, handshake_dir, log_file):
+def test_the_agent_mode_attribute_is_never_assigned(
+    router_factory, harness, handshake_dir, log_file
+):
     agent = ModeGuard(
         mode="auto",
         config={

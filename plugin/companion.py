@@ -297,7 +297,9 @@ def envelope(kind: str, data: Any, timestamp: float, message_id: str | None = No
     return message
 
 
-def error_envelope(code: str, message: str, timestamp: float, message_id: str | None = None) -> dict:
+def error_envelope(
+    code: str, message: str, timestamp: float, message_id: str | None = None
+) -> dict:
     """Builds an `error` message. `code` must be one of common.json ErrorCode."""
     return envelope("error", {"code": code, "message": message}, timestamp, message_id)
 
@@ -984,7 +986,9 @@ class GpsResolver:
         self._browser_at: float = 0.0
         self._gpsd: dict | None = None
 
-    def set_browser_position(self, latitude: float, longitude: float, accuracy: float | None) -> None:
+    def set_browser_position(
+        self, latitude: float, longitude: float, accuracy: float | None
+    ) -> None:
         """Stores a client-pushed position. Expires after BROWSER_GPS_TTL seconds."""
         now = self._deps.now()
         self._browser = gps_from_browser(latitude, longitude, accuracy, now)
@@ -1529,7 +1533,9 @@ class Router:
             out.append(error_envelope("internal_error", str(err), now, message_id))
         return out
 
-    def _dispatch(self, kind: str, message: Mapping[str, Any], message_id: str | None) -> list[dict]:
+    def _dispatch(
+        self, kind: str, message: Mapping[str, Any], message_id: str | None
+    ) -> list[dict]:
         """Routes one authenticated command. Raises ProtocolError for a refusal."""
         now = self._deps.now()
 
@@ -1875,7 +1881,11 @@ class Router:
                 # bettercap dicts on the other (SPEC F20).
                 "ap": mac_of(access_point),
                 "station": mac_of(station),
-                "gps": normalise_sidecar(sidecar_payload(gps, self._deps.now())) if gps.get("fix") else None,
+                "gps": (
+                    normalise_sidecar(sidecar_payload(gps, self._deps.now()))
+                    if gps.get("fix")
+                    else None
+                ),
             },
         )
 
@@ -1927,7 +1937,11 @@ def build_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext | None:
             log.error("[companion] no TLS %s configured; refusing to start any listener", label)
             return None
         if not os.path.isfile(path):
-            log.error("[companion] TLS %s %s does not exist; refusing to start any listener", label, path)
+            log.error(
+                "[companion] TLS %s %s does not exist; refusing to start any listener",
+                label,
+                path,
+            )
             return None
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -2605,7 +2619,9 @@ class Companion(plugins.Plugin):
 
     # -- pushes ------------------------------------------------------------
 
-    def on_handshake(self, agent: Any, filename: str, access_point: Any, client_station: Any) -> None:
+    def on_handshake(
+        self, agent: Any, filename: str, access_point: Any, client_station: Any
+    ) -> None:
         """Writes the GPS sidecar and pushes the `handshake` message.
 
         Both argument shapes are accepted: this hook is fired from two paths with
@@ -2640,7 +2656,11 @@ class Companion(plugins.Plugin):
         if self._router is None:
             return
         try:
-            mapped = [map_access_point(ap) for ap in (access_points or []) if isinstance(ap, Mapping)]
+            mapped = [
+                map_access_point(ap)
+                for ap in (access_points or [])
+                if isinstance(ap, Mapping)
+            ]
             self.broadcast(self._router.push("wifi_update", mapped))
         except Exception:
             log.exception("[companion] could not push wifi_update")

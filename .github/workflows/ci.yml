@@ -116,6 +116,13 @@ jobs:
       - name: Byte-compile the plugin
         run: python -m compileall -q plugin/
 
+      # And it must be free of the defects parsing cannot see. E and F only:
+      # pycodestyle errors and the whole of pyflakes, which is where the
+      # undefined name on an untaken error path lives. Configuration and the
+      # argument for that selection are in ruff.toml.
+      - name: Lint the plugin, the tooling, the tests and the gate scripts
+        run: python -m ruff check plugin/ tools/ tests/ .github/*.py
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

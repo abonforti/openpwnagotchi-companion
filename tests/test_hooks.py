@@ -462,6 +462,40 @@ def test_the_first_display_refresh_pushes_the_face(hooked, check_message):
     assert data["mode"] == "AUTO"
 
 
+def test_a_router_that_cannot_report_the_face_costs_no_push_and_no_crash(
+    hooked, caplog
+):
+    """The last seam upstream of face_status() itself: `on_ui_update` reaches
+    the router through `self._router`, and that call used to be wrapped in a
+    bare `except Exception: return` - a swallow with no trace at all. SPEC
+    2.14 still forbids the exception escaping and killing the display thread,
+    but a swallow that leaves nothing behind is indistinguishable from the
+    hook working correctly and choosing not to push, so something has to be
+    logged. The log *text* is not the contract here (only #86-style presence
+    is pinned) - only that a record exists.
+
+    `face_status()` itself is proven never to raise elsewhere in this file and
+    in test_face_status.py, so reaching this branch needs a double standing in
+    for the router rather than any input this suite can otherwise construct -
+    the branch is real (SPEC 2.14 demands it exists) even though nothing
+    upstream can currently trigger it.
+    """
+
+    class RaisingRouter:
+        def face_status(self):
+            raise RuntimeError("the router could not be read")
+
+    hooked.plugin._router = RaisingRouter()
+
+    with caplog.at_level("ERROR"):
+        hooked.plugin.on_ui_update(a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+
+    assert hooked.sent == [], "there is nothing to push when the router itself could not answer"
+    assert [r for r in caplog.records if r.levelname == "ERROR"], (
+        "a swallowed exception here must still leave a trace, not vanish silently"
+    )
+
+
 def test_an_unchanged_face_is_not_pushed_again(hooked):
     """The hook fires on every display refresh. Pushing each one would put a
     face on the wire several times a second over a Bluetooth PAN link that SPEC
@@ -518,11 +552,20 @@ def test_a_face_the_view_cannot_supply_is_empty_text_not_an_image(hooked, check_
     assert data["status"] == ""
 
 
-def test_a_face_that_cannot_be_read_at_all_pushes_nothing(hooked):
-    """The hook fires while the agent is being torn down as well as while it is
-    running. Reading a face off a half-dismantled agent must produce no message
-    rather than a message full of defaults, and must not raise: this one fires
-    on every display refresh, so a throw here is a throw several times a second.
+def test_a_face_that_cannot_be_read_at_all_still_pushes_a_degraded_face_status(
+    hooked, check_message
+):
+    """The regression this issue exists for (2026-08-18). Before the fix, an
+    unreadable view degraded to empty text and still went out, but an
+    unreadable *mode* made the whole payload-building call raise, and this
+    hook swallowed that exception and pushed nothing. Silence is exactly the
+    outcome that is not allowed here: a client cannot tell "nothing changed"
+    from "the plugin stopped talking", and this one fires on every display
+    refresh, so a throw here is a throw several times a second (SPEC 2.14).
+
+    This is the test to watch: reverting to the old "drop the push" behaviour
+    makes `hooked.only("face_status")` fail because nothing arrived at all,
+    not merely because an exception escaped.
     """
 
     class Collapsing:
@@ -536,7 +579,41 @@ def test_a_face_that_cannot_be_read_at_all_pushes_nothing(hooked):
     hooked.plugin.on_ready(Collapsing())
     hooked.plugin.on_ui_update(a_view("(⌐■_■)", "Hi, I'm TestUnit"))
 
-    assert hooked.sent == []
+    data = check_message(hooked.only("face_status"), "face_status")
+    assert (data["face"], data["status"]) == ("", "")
+    assert data["mode"] == "AUTO", (
+        "mode degrades to AUTO, not to an empty string, because the wire "
+        "enum has no empty member (docs/schemas/common.json)"
+    )
+
+
+def test_a_readable_face_still_pushes_when_only_the_mode_cannot_be_read(
+    hooked, check_message
+):
+    """The third of the four view/mode combinations: the view answers fine,
+    only the mode read fails. Before the fix this one also lost the whole
+    push, indistinguishably from the view also having failed - this test is
+    what tells the two apart."""
+
+    class ModeBroken:
+        def __init__(self, view) -> None:
+            self._view = view
+
+        def view(self):
+            return self._view
+
+        @property
+        def mode(self):
+            raise RuntimeError("mode is unreadable")
+
+    view = a_view("(⌐■_■)", "Hi, I'm TestUnit")
+    hooked.plugin.on_ready(ModeBroken(view))
+    hooked.plugin.on_ui_update(view)
+
+    data = check_message(hooked.only("face_status"), "face_status")
+    assert data["face"] == "(⌐■_■)"
+    assert data["status"] == "Hi, I'm TestUnit"
+    assert data["mode"] == "AUTO"
 
 
 class FlakyBroadcast:

@@ -1600,14 +1600,34 @@ class Router:
             return None
 
     def _mode(self) -> str:
-        """AUTO, PASV or MANUAL as the client should display it."""
+        """AUTO, PASV or MANUAL as the client should display it.
+
+        Never raises below the agent getter: face_status() depends on that to
+        always have a mode to report. `self._agent()` itself is trusted not to
+        raise - it is our own closure over `on_ready`'s argument, not a call
+        into third-party code - but everything read off what it returns is
+        guarded: `agent.mode`, in case a fork turns it into a property that
+        raises, and `pasv_mode.passive`, which is more exposed than either,
+        being a plugin we do not control and treat as a soft dependency
+        precisely because of that. `_pasv_plugin()` only guards the lookup in
+        `plugins.loaded`; reading `.passive` off what it returns is a separate
+        call into that plugin and needs its own guard.
+        """
         agent = self._agent()
         if agent is None:
             return "AUTO"
-        if getattr(agent, "mode", "auto") == "manual":
+        try:
+            mode = getattr(agent, "mode", "auto")
+        except Exception:
+            mode = "auto"
+        if mode == "manual":
             return "MANUAL"
         plugin = self._pasv_plugin()
-        if plugin is not None and bool(getattr(plugin, "passive", False)):
+        try:
+            passive = plugin is not None and bool(getattr(plugin, "passive", False))
+        except Exception:
+            passive = False
+        if passive:
             return "PASV"
         return "AUTO"
 
@@ -1744,7 +1764,17 @@ class Router:
         return {"png": base64.b64encode(raw).decode("ascii"), "mtime": float(mtime)}
 
     def face_status(self) -> dict:
-        """Current face and status as text. Faces are unicode, never images (D11)."""
+        """Current face and status as text. Faces are unicode, never images (D11).
+
+        Never raises, on the same trust boundary as _mode(): every read below
+        the agent getter is guarded, and the getter itself is trusted not to
+        raise. on_ui_update depends on that to always have something to push,
+        so a view it cannot read still degrades to a partial payload instead
+        of silencing face_status altogether (SPEC.md 2.13). Note that _mode()
+        is called from the return statement, outside the try below, which
+        covers the view read alone - the guarantee comes from _mode() keeping
+        its own, not from being wrapped here.
+        """
         face = status = ""
         try:
             # No hasattr guard: F28a pins `Agent.view`, so the only ways this
@@ -2773,6 +2803,12 @@ class Companion(plugins.Plugin):
         try:
             current = self._router.face_status()
         except Exception:
+            # Unreachable while face_status() honours its documented contract
+            # of never raising (SPEC.md 2.13); this except exists because
+            # §2.14 forbids an unhandled exception escaping a hook, not
+            # because the call is expected to fail. Reachable in a test
+            # through the self._router seam, so it is not dead code.
+            log.exception("[companion] could not build face_status")
             return
         signature = (current.get("face", ""), current.get("status", ""))
         if signature == self._last_face:

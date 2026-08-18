@@ -337,3 +337,90 @@ def test_the_mode_here_is_the_one_stats_reports(router_factory, agent_factory, l
     the_router = router_factory(agent_factory(mode="auto"))
 
     assert the_router.face_status()["mode"] == the_router.stats()["mode"]
+
+
+# ---------------------------------------------------------------------------
+# A mode that cannot be reported (2026-08-18: always push what can be read)
+# ---------------------------------------------------------------------------
+#
+# `face_status` used to fail two ways for two different reasons: an unreadable
+# *view* degraded to empty text and still went out, but an unreadable *mode*
+# made the whole payload-building call raise. Whatever raised it, that broke a
+# reply path that SPEC 2.14 requires never to fail. The rule now is single: a
+# read that fails costs only its own field, `mode` degrades to `"AUTO"` rather
+# than to an empty string because `docs/schemas/common.json` types it as the
+# enum `["AUTO", "PASV", "MANUAL"]`, and the four combinations of view/mode
+# readability all still have to produce a schema-valid payload.
+
+
+class _ModeBroken:
+    """An agent whose view answers but whose `mode` read raises.
+
+    F10/F11 make `agent.mode` a plain label with no re-derivation on a real
+    unit, but the payload builder still has to survive whatever unreadable
+    state an agent can be handed - the same shape `Collapsing` in
+    `test_hooks.py` exercises for the push path, reused here for the reply
+    path so the two are pinned against the same failure.
+    """
+
+    def __init__(self, view) -> None:
+        self._view = view
+
+    def view(self):
+        return self._view
+
+    @property
+    def mode(self):
+        raise RuntimeError("mode is unreadable")
+
+
+def test_mode_degrades_to_auto_when_only_the_mode_read_fails(router_factory, reply):
+    """View readable, mode not: the third of the four combinations, and the
+    one that used to cost the whole reply rather than just the field."""
+    agent = _ModeBroken(View({"face": FACE, "status": STATUS}))
+
+    data = reply(router_factory(agent))
+
+    assert data["face"] == FACE
+    assert data["status"] == STATUS
+    assert data["mode"] == "AUTO"
+
+
+def test_mode_degrades_to_auto_when_neither_the_view_nor_the_mode_answer(
+    router_factory, reply
+):
+    """The fourth combination: nothing on the agent answers at all, and the
+    reply still has to be a valid `face_status` - not a dropped reply, and not
+    a `mode: ""` that fails the very schema the message is supposed to meet."""
+
+    class Nothing(_ModeBroken):
+        def view(self):
+            raise RuntimeError("the agent is going away")
+
+    data = reply(router_factory(Nothing(None)))
+
+    assert (data["face"], data["status"]) == ("", "")
+    assert data["mode"] == "AUTO"
+
+
+def test_mode_degrades_to_auto_when_only_the_pasv_plugin_cannot_answer(
+    router_factory, agent_factory, reply, stub_plugins
+):
+    """F12, and the pseudocode at SPEC.md:632: `Router._mode()` reads
+    `plugins.loaded['pasv_mode'].passive` through `getattr(..., False)` inside
+    `Router._pasv_plugin()`'s caller, which only swallows `AttributeError`. A
+    plugin whose `passive` property raises anything else must still cost only
+    the mode text, not the reply - `agent.mode` itself never failed here, so
+    this is a second, independent way the mode source can break (SPEC F12)."""
+
+    class BrokenPasv:
+        @property
+        def passive(self):
+            raise RuntimeError("pasv_mode is unreadable")
+
+    stub_plugins.loaded["pasv_mode"] = BrokenPasv()
+    agent = agent_factory(mode="auto")
+
+    data = reply(router_factory(agent))
+
+    assert data["mode"] == "AUTO"

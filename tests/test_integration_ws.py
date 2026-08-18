@@ -902,16 +902,49 @@ def test_a_silent_client_is_closed_after_the_auth_timeout(wss_server, client_ssl
     The deadline is measured with `deps.now()`, so it is driven by advancing the
     fake clock rather than by waiting: the test is then about the rule firing,
     not about how long a shared CI runner took to get round to it.
+
+    `ws_connect` returning only means the client side of the handshake finished;
+    the deadline is set inside the server's handler, a separate task that races
+    this line. Advancing once and waiting once bakes in whichever order wins: if
+    the advance runs first, the handler reads a clock that has already moved and
+    sets its deadline 30s past *that*, so the single advance never reaches it and
+    the test instead waits out the real `RECV_TIMEOUT`. Advancing every pass of a
+    poll loop is independent of that order - however late the handler read the
+    clock, a few more passes put it 31s past the deadline.
+
+    Two more things the loop is careful about, because a regression should fail
+    loudly rather than resemble the flake this replaces:
+
+    - The budget check runs *before* each wait, not only inside the timeout
+      branch, so a server that keeps answering within every window still gets
+      cut off at the budget instead of looping forever.
+    - Any frame received before the close is a failure in its own right - SPEC
+      2.4 forbids delivering anything to an unauthenticated socket - so it is
+      raised immediately rather than swallowed and looped past.
     """
     server = wss_server(token=TOKEN, overrides={"auth_timeout": 30})
 
     async def scenario():
         async with ws_connect(server.url, ssl=client_ssl) as websocket:
             # Says nothing, ever. Time passes; the server must hang up on its own.
-            server.harness.advance(31)
-            with pytest.raises(ConnectionClosed) as raised:
-                await asyncio.wait_for(websocket.recv(), RECV_TIMEOUT)
-            return close_code_of(raised.value, websocket)
+            deadline = time.monotonic() + RECV_TIMEOUT
+            while True:
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        "the auth deadline never fired: the connection is still "
+                        "open after repeated advances past it"
+                    )
+                server.harness.advance(31)
+                try:
+                    message = await asyncio.wait_for(websocket.recv(), 0.5)
+                except asyncio.TimeoutError:
+                    continue
+                except ConnectionClosed as closed:
+                    return close_code_of(closed, websocket)
+                else:
+                    raise AssertionError(
+                        f"received a frame before the close: {message!r}"
+                    )
 
     assert run(scenario()) == 1008
 
@@ -927,7 +960,6 @@ def test_an_authenticated_client_is_not_closed_by_the_deadline(
             await expect_burst(websocket, check)
             # Well past the deadline: authenticating must cancel it, not defer it.
             server.harness.advance(300)
-            await asyncio.sleep(0.2)
             await send(websocket, {"type": "ping"})
             return await recv_message(websocket)
 

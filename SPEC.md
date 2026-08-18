@@ -508,7 +508,8 @@ and nothing else, which is what lets §4.3.2 state one.
 It exists so an idle client can tell a quiet plugin from a dead link: over BT PAN a dropped
 tether does not close the socket, it simply stops delivering, and without a periodic frame the
 app would sit on a dead connection showing stale data. The frontend does not reconnect on a missed frame, which would be a guess: it reconnects when
-its own `ping` goes unanswered (§4.3.1), and reads staleness from the data (§10.5).
+its own `ping` goes unanswered, and reads staleness from the data rather than from the
+spacing of frames (§4.3.1 for both).
 
 **`stats` rides the ticker with it** (§4.3.7, issue #65). **Not yet: the loop broadcasts only an empty `keepalive` today, and the clamp below does not exist either.** Everything from here to the end of this section describes the decided behaviour, not the shipped one, and the cadence question behind it is answered: issue #65 moves the broadcast onto a ticker of its own, sharing nothing with the bettercap refresh, so the period stated here is one the plugin can hold to once it ships. A periodic frame proves the link is
 delivering and says nothing about whether the data behind it moved, and the client needs both:
@@ -2055,7 +2056,9 @@ where the bar begins; nothing passes underneath it. The bar is translucent in ap
 that is styling rather than an invitation to scroll content beneath it: content half-visible
 through a blur is not readable, and the last row of a list has to be reachable without
 guesswork. The views area therefore reserves exactly the bar's outer height, border included,
-and the two are one expression rather than two numbers that must agree (§10.5).
+and the two are one expression rather than two numbers that must agree. The consequence,
+nothing painted below the content area in either orientation, is asserted as a geometry
+invariant (§10.5).
 
 **Touch targets need separation as well as size.** 44px is the floor for how large a control
 is, and says nothing about how far it sits from its neighbour. Those are different failures: a
@@ -2207,7 +2210,7 @@ and can change, and it is not the same as having no fix.
 - **plugin-tests**: `pytest` on **Python 3.13**, the version the device ships (F26), and again on
   **3.11**, the floor upstream declares (F21). The device's version is the one that blocks a merge;
   the floor runs because somebody can be on an older image. No pwnagotchi installation required:
-  the fake package in `tests/fakes/pwnagotchi_stub/` stands in. The coverage gate of §10.8 runs here and is what
+  the fake package in `tests/fakes/pwnagotchi_stub/` stands in. The coverage gate of §10.7 runs here and is what
   fails the build, not a warning. `tests/tools/test_certs.py` runs in the same job; the runner
   already has `openssl`.
 - **language**: there is no automated check, deliberately. One was written and removed. A

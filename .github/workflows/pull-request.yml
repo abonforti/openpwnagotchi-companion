@@ -18,14 +18,30 @@ jobs:
   labels:
     name: Labelled
     runs-on: ubuntu-latest
+    # No checkout and no third-party action in this job, so the only scope it
+    # needs is the one that reads the labels. Job-level permissions replace the
+    # workflow map rather than merging with it, so contents falls to none here.
+    permissions:
+      pull-requests: read
     steps:
-      # No checkout: the labels are in the event payload, and cloning the
-      # repository to read them would be work for nothing.
+      # No checkout: nothing here reads the tree.
+      #
+      # The labels are read from the API rather than from the event payload,
+      # which is a snapshot of the moment the event fired. A pull request
+      # opened without labels carries an empty list in that snapshot for ever,
+      # and a rerun replays the same snapshot: the job would fail again with
+      # the labels plainly on the pull request, and no rerun could ever fix it.
+      # Adding a label does fire a fresh event, so the payload was not always
+      # wrong; it was wrong exactly when someone tried to correct the failure
+      # the way the interface offers.
       - name: Every pull request carries at least one label
         env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          LABELS=$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name]')
           count=$(jq 'length' <<<"$LABELS")
           if [ "$count" -eq 0 ]; then
             echo "::error::This pull request has no labels."

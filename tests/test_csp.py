@@ -17,6 +17,8 @@ import socket
 import threading
 from http.server import ThreadingHTTPServer
 
+from urllib.parse import urlsplit
+
 import pytest
 
 from plugin import companion
@@ -258,7 +260,14 @@ def test_the_tile_origin_appears_nowhere_else(get):
         if name == "img-src":
             continue
         assert "https://*.tile.openstreetmap.org" not in tokens
-        assert not any("tile.openstreetmap.org" in token for token in tokens)
+        # By host rather than by substring: the point is that no spelling of the
+        # tile origin reaches another directive, and a host comparison says that
+        # without also matching an unrelated origin that merely contains the name.
+        hosts = [(urlsplit(token).hostname or "").lstrip("*.") for token in tokens]
+        assert not any(
+            host == "tile.openstreetmap.org" or host.endswith(".tile.openstreetmap.org")
+            for host in hosts
+        )
 
 
 # ---------------------------------------------------------------------------

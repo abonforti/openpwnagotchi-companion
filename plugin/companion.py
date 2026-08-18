@@ -144,6 +144,56 @@ def option(options: Mapping[str, Any], key: str) -> Any:
     return value
 
 
+def clamp_interval(
+    name: str,
+    value: Any,
+    low: float,
+    high: float,
+    default: float,
+    zero_is_default: bool = False,
+) -> tuple[float, bool]:
+    """Clamps a poll/broadcast interval, and reports whether it clamped.
+
+    `name` is the config key, used only for the warning logged when `value`
+    cannot be turned into a usable number - a non-numeric value such as
+    `keepalive_interval = "20s"` is a configuration mistake and the owner
+    should hear about it, unlike a genuinely missing key, which `option()`
+    has already resolved to the DEFAULTS entry before this function sees it.
+    Booleans and NaN and the infinities are rejected the same way. TOML has a
+    bare `nan` literal, and `true` is a value `float()` accepts: `float(True)`
+    is `1.0`, which would clamp to `low` and be reported as an out-of-range
+    number rather than as the mistake it is.
+    `min(max(nan, low), high)` is `nan`, which would make
+    `threading.Event.wait(nan)` return immediately and spin the caller at
+    full CPU. With `zero_is_default` a configured `0` also takes `default`
+    instead of `low`: for `keepalive_interval` a `0` used to disable the
+    broadcast entirely, so an owner who set it did not ask for a full
+    payload every `low` seconds instead (SPEC 2.4).
+    """
+    if isinstance(value, bool):
+        # bool is an int, so float() takes it silently.
+        numeric = None
+    else:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = None
+    if numeric is None or _finite(numeric) is None:
+        log.warning(
+            "[companion] %s is not a usable number (%r); using default %s",
+            name,
+            value,
+            default,
+        )
+        return default, False
+    if zero_is_default and numeric == 0:
+        # Always a substitution worth reporting:
+        # no caller defaults to 0, which is the value this branch exists to refuse.
+        return default, True
+    clamped = min(max(numeric, low), high)
+    return clamped, clamped != numeric
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
@@ -2828,6 +2878,12 @@ class Companion(plugins.Plugin):
         self._clients = ClientSet()
         self._stop = threading.Event()
         self._last_face: tuple[str, str] | None = None
+        # Clamped by on_loaded(); the DEFAULTS value keeps _background
+        # runnable even in a test that never calls on_loaded (SPEC 10.7).
+        self._session_poll_interval = float(DEFAULTS["session_poll_interval"])
+        # Same reasoning for _stats_ticker: seeded here so it is runnable in a
+        # test that never calls on_loaded (SPEC 10.7).
+        self._keepalive_interval = float(DEFAULTS["keepalive_interval"])
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -2851,9 +2907,35 @@ class Companion(plugins.Plugin):
             return
 
         self._battery = BatteryReader(self.options, self.deps)
-        self._session = SessionCache(
-            lambda: self._agent, self.deps, float(option(self.options, "session_poll_interval"))
+        # Clamped once here and stored on self, not recomputed in
+        # _background: the same clamped value is passed to SessionCache below
+        # and used as the loop period, and computing it twice from duplicated
+        # literals is what would let the two drift apart (SPEC 2.4).
+        poll, poll_clamped = clamp_interval(
+            "session_poll_interval",
+            option(self.options, "session_poll_interval"),
+            1,
+            5,
+            float(DEFAULTS["session_poll_interval"]),
         )
+        if poll_clamped:
+            log.info("[companion] session_poll_interval clamped to %.0f", poll)
+        self._session_poll_interval = poll
+        self._session = SessionCache(lambda: self._agent, self.deps, poll)
+        # Clamped once here too, for the same reason: on_loaded owns
+        # configuration, so one place decides each interval and neither loop
+        # can drift from it (SPEC 2.4). The ticker reads the attribute.
+        keepalive, keepalive_clamped = clamp_interval(
+            "keepalive_interval",
+            option(self.options, "keepalive_interval"),
+            5,
+            20,
+            float(DEFAULTS["keepalive_interval"]),
+            zero_is_default=True,
+        )
+        if keepalive_clamped:
+            log.info("[companion] keepalive_interval clamped to %.0f", keepalive)
+        self._keepalive_interval = keepalive
         self._gps = GpsResolver(self.options, self.deps, self._session)
         self._router = Router(
             self.options,
@@ -2905,26 +2987,17 @@ class Companion(plugins.Plugin):
         """Refreshes the session and gpsd caches, and reconciles the listeners.
 
         Everything slow lives here so that no request handler ever blocks on an
-        HTTP call to bettercap or a gpsd socket.
+        HTTP call to bettercap or a gpsd socket. The periodic `stats`/`keepalive`
+        broadcast used to ride this loop; it now has a ticker of its own
+        (`_stats_ticker`, SPEC 4.3.7, issue #65), so this one goes back to
+        waking on `session_poll_interval` alone.
         """
-        poll = float(option(self.options, "session_poll_interval"))
+        # session_poll_interval is clamped once, in on_loaded, and read
+        # from self here: the same clamped value already went into
+        # SessionCache above, so this loop can never disagree with it
+        # (SPEC 2.4).
         rebind = float(option(self.options, "rebind_interval"))
-        keepalive = float(option(self.options, "keepalive_interval"))
         next_rebind = 0.0
-        # Seeded a full interval out rather than at zero: the first pass runs
-        # before any client has had time to connect, so firing immediately would
-        # spend a broadcast on an empty set and then leave the first real
-        # keepalive an entire interval away.
-        next_keepalive = self.deps.now() + keepalive
-        # The loop wakes on the session poll, so a keepalive can only go out on
-        # a tick, and waking often enough for both keeps the spacing bounded.
-        # No client behaviour rests on that bound: the client reconnects on an
-        # unanswered ping and reads staleness from the sessionAge a frame
-        # carries, never from when a keepalive arrived (SPEC 4.3.1). What a
-        # late keepalive costs is lateness, not a false state. This whole
-        # computation goes when the broadcasts move to a ticker of their own
-        # (SPEC 2.4, issue #65).
-        tick = min(poll, keepalive) if keepalive > 0 else poll
         while not self._stop.is_set():
             try:
                 if self._session is not None:
@@ -2935,23 +3008,63 @@ class Companion(plugins.Plugin):
                 if self._listeners is not None and now >= next_rebind:
                     self._listeners.reconcile()
                     next_rebind = now + rebind
-                # An idle client cannot otherwise tell a quiet plugin from a
-                # dead link: over BT PAN a dropped tether does not close the
-                # socket, it just stops delivering, and the app would sit on a
-                # dead connection showing stale data (SPEC 2.4).
-                if keepalive > 0 and now >= next_keepalive:
-                    self.broadcast(envelope("keepalive", {}, now))
-                    next_keepalive = now + keepalive
             except Exception:
                 log.exception("[companion] background pass failed")
-            self._stop.wait(tick)
+            self._stop.wait(self._session_poll_interval)
+
+    def _stats_ticker(self) -> None:
+        """Broadcasts `stats` and `keepalive` together, every `keepalive_interval`.
+
+        A ticker of its own (SPEC 4.3.7, issue #65): it shares no thread and no
+        wait with `_background`, so the spacing between broadcasts is
+        `keepalive_interval` and nothing else, which is what lets SPEC 4.3.2
+        state a cadence at all. `stats` is built from the caches `Router.stats()`
+        already reads, never from `agent.session()` (SPEC F7), so this never
+        blocks on bettercap. `keepalive` rides the same tick because a client
+        that has just received `stats` has the liveness information
+        `keepalive` was carrying anyway - dropping it would be a contract
+        change, not a cleanup (SPEC 2.4).
+        """
+        # keepalive_interval is clamped once, in on_loaded, and read from
+        # self here, the same way _background reads _session_poll_interval
+        # (SPEC 2.4).
+        while not self._stop.is_set():
+            try:
+                # Building the payload scans the handshake directory and
+                # reads a sysfs node; skip the pass entirely when nobody is
+                # connected rather than pay that cost every tick on a Pi
+                # Zero.
+                if len(self._clients):
+                    now = self.deps.now()
+                    # keepalive goes out first, in its own try: Router.stats()
+                    # is not total (int(pwnagotchi.uptime()), self._session.age
+                    # are unguarded), and a repeatable stats failure must not
+                    # also silence the one frame an idle client relies on to
+                    # tell a quiet plugin from a dead link (SPEC 2.4).
+                    try:
+                        self.broadcast(envelope("keepalive", {}, now))
+                    except Exception:
+                        log.exception("[companion] keepalive broadcast failed")
+                    # self._router is None only when on_loaded returned early
+                    # (e.g. missing TLS material) yet on_ready still spawned
+                    # this thread; there is no test that drives that path
+                    # (SPEC 2.4, issue #65 review).
+                    if self._router is not None:
+                        try:
+                            self.broadcast(envelope("stats", self._router.stats(), now))
+                        except Exception:
+                            log.exception("[companion] stats broadcast failed")
+            except Exception:
+                log.exception("[companion] stats ticker pass failed")
+            self._stop.wait(self._keepalive_interval)
 
     def on_ready(self, agent: Any) -> None:
-        """Captures the agent and starts the background refresh and rebind threads."""
+        """Captures the agent and starts the background refresh, rebind and stats threads."""
         self._agent = agent
         if self._session is not None:
             self._session.refresh()
         self.deps.spawn(self._background)
+        self.deps.spawn(self._stats_ticker)
 
     def on_unload(self, ui: Any = None) -> None:
         """Stops the threads and closes every listener."""

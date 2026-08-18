@@ -1,0 +1,756 @@
+"""The periodic `stats`/`keepalive` broadcast, SPEC 2.4 and 4.3.7 (issue #65).
+
+Before #65 the periodic broadcast rode the bettercap-refresh loop, so its
+spacing was the loop's rather than `keepalive_interval`'s, and it carried only
+an empty `keepalive` - a client had no way to notice a bettercap that had died
+short of polling `get_stats` itself. `_background` now wakes on
+`session_poll_interval` alone and sends nothing; a ticker of its own
+(`Companion._stats_ticker`) broadcasts `stats` and `keepalive` together, every
+`keepalive_interval`, without ever touching `agent.session()` - a synchronous
+HTTP call with a 30 second timeout that would stall every connected client if
+it ran on this path (SPEC 2.5, F7).
+
+Both `keepalive_interval` (5-20 s) and `session_poll_interval` (1-5 s) are
+clamped through the shared `clamp_interval()`, and the clamp is logged,
+because both are load-bearing for how a client reads staleness (SPEC 2.4).
+`keepalive_interval = 0`, which used to disable the broadcast outright, now
+takes the default of 20 rather than the floor of 5. A value that cannot be
+turned into a number at all - a stray string, or the bare `nan`/`inf`
+literals TOML allows - falls back to the default and is reported at WARNING
+rather than reaching `Event.wait()`, where a NaN spins the loop at full CPU
+instead of ever sleeping.
+
+Both intervals are clamped exactly once, in `on_loaded`, and stored on
+`Companion._session_poll_interval` / `Companion._keepalive_interval`;
+neither loop re-clamps `self.options` itself, so mutating options after
+`on_loaded` must be inert, and a value poked into `plugin.options` has to
+reach the plugin through `wired_plugin_factory`'s override *before*
+`on_loaded` runs rather than afterwards. `keepalive_interval` is clamped
+there rather than inside `_stats_ticker` because `on_loaded` owns configuration:
+one place decides each interval, and neither loop can drift from it.
+
+`_stats_ticker`'s loop body has an outer `try/except` around both inner
+sends, the same shape `_background` already had, because `len(self._clients)`
+and `deps.now()` sit outside either inner `try` and a fault there would
+otherwise end the thread silently.
+
+Driven synchronously throughout with `SteppingStop`, a `threading.Event`
+double whose `wait(timeout)` records the timeout and returns immediately: the
+clamped floor is 5 s and a real-clock test would have to sleep for it on every
+pass, which this suite cannot afford (SPEC 10.7, the development host is
+small). One test near the bottom uses a real thread and a real `Event`
+instead, because `SteppingStop` is exactly the double the shutdown path
+depends on and cannot also be what proves that path works.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+
+import pytest
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
+
+from plugin import companion
+
+
+# ---------------------------------------------------------------------------
+# Schema validation, mirroring test_hooks.py local fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def outgoing_validator(schemas_dir):
+    common = Resource.from_contents(
+        json.loads((schemas_dir / "common.json").read_text(encoding="utf-8")),
+        default_specification=DRAFT202012,
+    )
+    registry = Registry().with_resources(
+        [
+            ("common.json", common),
+            ("outgoing/common.json", common),
+        ]
+    )
+
+    def _for(kind: str) -> Draft202012Validator:
+        schema = json.loads(
+            (schemas_dir / "outgoing" / f"{kind}.json").read_text(encoding="utf-8")
+        )
+        schema.pop("$id", None)
+        return Draft202012Validator(schema, registry=registry)
+
+    return _for
+
+
+@pytest.fixture
+def check_message(outgoing_validator):
+    def _check(message: dict, kind: str) -> dict:
+        assert message["type"] == kind
+        outgoing_validator(kind).validate(message)
+        return message["data"]
+
+    return _check
+
+
+# ---------------------------------------------------------------------------
+# A stop event that never sleeps
+# ---------------------------------------------------------------------------
+
+
+class SteppingStop:
+    """A `threading.Event` double that lets a ticker loop run to completion
+    without a real clock.
+
+    `wait(timeout)` records the timeout it was given - which is the spacing
+    the loop asked for - and reports itself set after `passes` calls, which is
+    what ends the `while not self._stop.is_set()` loop. No thread and no sleep
+    are involved: the loop body runs synchronously, `passes` times, in the
+    calling thread.
+    """
+
+    def __init__(self, passes: int) -> None:
+        self.waits: list[float] = []
+        self._remaining = passes
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waits.append(timeout)
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._set = True
+        return self._set
+
+
+def run_ticker(plugin, passes: int) -> SteppingStop:
+    """Runs `Companion._stats_ticker` for exactly `passes` loop bodies."""
+    stop = SteppingStop(passes)
+    plugin._stop = stop
+    plugin._stats_ticker()
+    return stop
+
+
+def run_background(plugin, passes: int) -> SteppingStop:
+    """Runs `Companion._background` for exactly `passes` loop bodies."""
+    stop = SteppingStop(passes)
+    plugin._stop = stop
+    plugin._background()
+    return stop
+
+
+# ---------------------------------------------------------------------------
+# A fully wired plugin, driven by hand rather than by its own threads
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def wired_plugin_factory(options, harness, agent, tls_material, tmp_path):
+    """Builds `Companion` instances taken through `on_loaded`/`on_ready`.
+
+    A factory rather than a single object because some tests (the clamp ones)
+    need to set `options` *before* `on_loaded` runs, since `on_loaded` is the
+    only place `session_poll_interval` is ever clamped now - a value poked
+    into `plugin.options` afterwards has nothing left to read it.
+
+    `harness.deps.spawn` only records its target and never runs it (see
+    `DepsHarness` in conftest.py), so `on_ready` never actually starts
+    `_background` or `_stats_ticker` as threads - each test drives the one it
+    is about directly, with `SteppingStop` standing in for `plugin._stop`.
+
+    `plugin.broadcast` is replaced with a list-recording function by default,
+    the same pattern `tests/test_keepalive.py` and `tests/test_hooks.py` use;
+    a test after the real fan-out rebinds it to the genuine method.
+    """
+    built: list[companion.Companion] = []
+
+    def _make(overrides: dict | None = None):
+        plugin = companion.Companion()
+        plugin.deps = harness.deps
+        plugin.options = {
+            **options,
+            "tls_cert": str(tls_material["cert"]),
+            "tls_key": str(tls_material["key"]),
+            "web_root": str(tmp_path),
+            **(overrides or {}),
+        }
+        plugin.on_loaded()
+        assert plugin._router is not None, "the fixture did not produce a wired plugin"
+        plugin.on_ready(agent)
+
+        sent: list[dict] = []
+        plugin.broadcast = sent.append
+
+        built.append(plugin)
+        return plugin, agent, sent
+
+    yield _make
+
+    for plugin in built:
+        plugin.on_unload()
+
+
+@pytest.fixture
+def wired_plugin(wired_plugin_factory):
+    return wired_plugin_factory()
+
+
+def admit_a_client(plugin) -> None:
+    """Adds a member to `_clients`, the way a successful `auth` does.
+
+    The ticker only has something to send to once a socket has joined this
+    set (SPEC 2.4: a connection joins the broadcast set at the same moment
+    authentication succeeds). Which sockets get admitted - a token accepted,
+    rejected, or not required - belongs to the auth test file; here the set
+    is populated directly so the cadence tests do not also have to open a
+    real connection.
+    """
+    plugin._clients.add(object())
+
+
+class RecordingClient:
+    """The minimum a real WebSocket connection offers `Companion.broadcast()`:
+    an object with an async `send()`. Used only by the fan-out test below,
+    which routes through the genuine `broadcast()` rather than the
+    list-recording double every other test in this file installs.
+
+    `broadcast()` schedules one coroutine per message via
+    `run_coroutine_threadsafe` and does not wait on either, so the two sends
+    from one tick can land in either order and are not simultaneous; a test
+    reading `received` must wait for both rather than for the first.
+    """
+
+    def __init__(self) -> None:
+        self.received: list[str] = []
+        self._lock = threading.Lock()
+        self._new_arrival = threading.Event()
+
+    async def send(self, payload: str) -> None:
+        with self._lock:
+            self.received.append(payload)
+        self._new_arrival.set()
+
+    def wait_for_count(self, count: int, timeout: float = 2.0) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                if len(self.received) >= count:
+                    return
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, (
+                f"only {len(self.received)} of {count} messages delivered "
+                f"within {timeout}s"
+            )
+            self._new_arrival.wait(remaining)
+            self._new_arrival.clear()
+
+
+# ---------------------------------------------------------------------------
+# stats + keepalive ride the same tick
+# ---------------------------------------------------------------------------
+
+
+def test_stats_and_keepalive_go_out_on_the_same_tick(wired_plugin, check_message):
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+
+    run_ticker(plugin, passes=1)
+
+    types = [message["type"] for message in sent]
+    # Both, not one: SPEC 4.3.7 is explicit that keepalive is redundant
+    # information once stats is broadcast, and dropping it anyway is a
+    # deliberate decision this suite must not make for the plugin.
+    assert sorted(types) == ["keepalive", "stats"], sent
+    stats_message = next(m for m in sent if m["type"] == "stats")
+    keepalive_message = next(m for m in sent if m["type"] == "keepalive")
+    check_message(stats_message, "stats")
+    check_message(keepalive_message, "keepalive")
+
+
+def test_keepalive_data_is_empty(wired_plugin):
+    """The `keepalive` schema fixes this too, but the ticker builds the
+    envelope itself rather than going through a schema at runtime, so a stray
+    key added there would not otherwise be caught here."""
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+
+    run_ticker(plugin, passes=1)
+
+    keepalive_message = next(m for m in sent if m["type"] == "keepalive")
+    assert keepalive_message["data"] == {}
+
+
+def test_empty_client_set_means_nothing_broadcast(wired_plugin):
+    """With nobody in `_clients` the tick has nobody to send to, so it sends
+    nothing at all - not a `stats` with an empty recipient list, not a
+    `keepalive` either. This is the plugin-side mechanism; which sockets end
+    up in `_clients` in the first place (only authenticated ones) is
+    `tests/test_integration_ws.py`'s contract, not exercised here."""
+    plugin, agent, sent = wired_plugin
+
+    run_ticker(plugin, passes=3)
+
+    assert sent == []
+
+
+def test_broadcast_reaches_every_admitted_client(wired_plugin):
+    """Fan-out through the real `Companion.broadcast()`, not the
+    list-recording double every other test here installs: two admitted
+    clients, both must receive both frames from the same tick.
+    """
+    plugin, agent, sent = wired_plugin
+    # Route through the genuine method: the recording override the fixture
+    # installs is only good for reading "was this built", never "did the
+    # real fan-out deliver it".
+    plugin.broadcast = companion.Companion.broadcast.__get__(plugin)
+    plugin._listeners._ensure_loop()
+    clients = [RecordingClient(), RecordingClient()]
+    for client in clients:
+        plugin._clients.add(client)
+
+    run_ticker(plugin, passes=1)
+
+    for client in clients:
+        client.wait_for_count(2)
+        types = {json.loads(payload)["type"] for payload in client.received}
+        assert types == {"stats", "keepalive"}, (
+            f"client received {types}, expected both frames from the tick"
+        )
+
+
+# ---------------------------------------------------------------------------
+# A stats failure must not cost that tick's keepalive (SPEC 10.2 test row)
+# ---------------------------------------------------------------------------
+
+
+class ExplodingRouter:
+    """A `Router` double whose `stats()` always raises."""
+
+    def stats(self) -> dict:
+        raise RuntimeError("bettercap payload could not be built")
+
+
+def test_a_stats_failure_does_not_cost_the_ticks_keepalive(wired_plugin, caplog):
+    """`Router.stats()` is not total - `int(pwnagotchi.uptime())` and
+    `SessionCache.age` are unguarded - so a broken payload must not also
+    silence the one frame an idle client relies on to tell a quiet plugin
+    from a dead link.
+    """
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+    plugin._router = ExplodingRouter()
+
+    with caplog.at_level("ERROR"):
+        run_ticker(plugin, passes=1)
+
+    types = [message["type"] for message in sent]
+    assert types == ["keepalive"], (
+        "a stats failure must not also cost that tick's keepalive "
+        f"(sent: {types})"
+    )
+    assert any(r.levelname == "ERROR" for r in caplog.records), (
+        "a failed stats build must be logged, not swallowed in silence"
+    )
+
+
+def test_a_keepalive_failure_does_not_cost_the_ticks_stats(wired_plugin, check_message):
+    """The other direction of the same rule: `keepalive` and `stats` are sent
+    from two independent `try` blocks, so a keepalive send failing must not
+    also take that tick's stats down with it."""
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+    record = plugin.broadcast  # the sent.append double the fixture installed
+
+    def flaky(message):
+        if message["type"] == "keepalive":
+            raise RuntimeError("the socket went away mid keepalive")
+        record(message)
+
+    plugin.broadcast = flaky
+
+    run_ticker(plugin, passes=1)
+
+    types = [message["type"] for message in sent]
+    assert types == ["stats"], (
+        f"a keepalive failure must not cost that tick's stats (sent: {types})"
+    )
+    check_message(sent[0], "stats")
+
+
+# ---------------------------------------------------------------------------
+# The blocking-call rule (SPEC 2.5, F7)
+# ---------------------------------------------------------------------------
+
+
+def test_the_ticker_never_calls_agent_session(wired_plugin):
+    """`agent.session()` is a synchronous HTTP GET to bettercap with a 30 s
+    timeout; calling it from the ticker would stall every connected client for
+    up to 30 seconds on every tick. `stats` must come entirely from the
+    cache."""
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+    # on_ready() already seeded the cache with one refresh of its own; the
+    # ticker itself must add none on top of that.
+    before = agent.session_calls
+
+    run_ticker(plugin, passes=5)
+
+    assert len(sent) == 10, "expected 5 stats and 5 keepalive frames"
+    assert agent.session_calls == before, (
+        "the stats ticker called agent.session(), which blocks the request "
+        "path for up to 30 seconds (SPEC 2.5, F7)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Spacing is keepalive_interval, and nothing else
+# ---------------------------------------------------------------------------
+
+
+def test_the_spacing_is_exactly_keepalive_interval(wired_plugin_factory):
+    """Before #65 the broadcast rode a loop waking at
+    min(session_poll_interval, keepalive_interval), so a 5 s poll turned a
+    nominal 20 s cadence into 20-25 s. On its own ticker the wait between
+    passes must be keepalive_interval and nothing else - not the poll
+    interval, not a minimum of the two.
+
+    `keepalive_interval` is clamped in `on_loaded` now, exactly like
+    `session_poll_interval`, so the override has to be given to the factory
+    before it runs rather than poked into `plugin.options` afterwards."""
+    plugin, agent, sent = wired_plugin_factory(
+        {"keepalive_interval": 9, "session_poll_interval": 2}
+    )
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=3)
+
+    assert stop.waits == [9.0, 9.0, 9.0]
+    assert len(sent) == 6
+
+
+# ---------------------------------------------------------------------------
+# keepalive_interval clamp: 5-20, logged, 0 -> default rather than floor
+# ---------------------------------------------------------------------------
+
+
+def test_keepalive_interval_below_the_floor_is_clamped_to_5(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": 2})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [5.0]
+    assert any(
+        "keepalive_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    ), "the clamp must be logged, not applied silently"
+
+
+def test_keepalive_interval_above_the_ceiling_is_clamped_to_20(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": 3600})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [20.0]
+    assert any(
+        "keepalive_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_keepalive_interval_zero_takes_the_default_not_the_floor(wired_plugin_factory, caplog):
+    """The one case three drafts of SPEC 2.4 got wrong on paper: `0` used to
+    disable the broadcast outright, and the floor of the new clamp is 5, but
+    `0` must land on the default of 20 - not on 5, which would turn a
+    deliberately silenced unit into one broadcasting a full payload every five
+    seconds over BT PAN."""
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": 0})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [float(companion.DEFAULTS["keepalive_interval"])]
+    assert stop.waits == [20.0]
+
+
+def test_keepalive_interval_inside_the_range_is_left_alone(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": 12})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [12.0]
+    assert not any(
+        "keepalive_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    ), "a value already inside 5-20 must not be reported as clamped"
+
+
+def test_keepalive_interval_non_numeric_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog
+):
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": "20s"})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [float(companion.DEFAULTS["keepalive_interval"])]
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any(
+        "keepalive_interval" in r.getMessage() and "20s" in r.getMessage()
+        for r in warnings
+    ), "a non-numeric value must be reported at WARNING, distinct from the INFO clamp lines"
+
+
+@pytest.mark.parametrize(
+    "bad_value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+def test_keepalive_interval_non_finite_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog, bad_value
+):
+    """The worst bug the review found: `min(max(nan, low), high)` is `nan`,
+    and `threading.Event.wait(nan)` returns immediately, so a bare `nan` -
+    which TOML allows as a literal - used to spin the ticker at full CPU
+    instead of ever sleeping. `inf`/`-inf` are rejected for the same reason
+    `_finite()` already rejects them elsewhere on the wire."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": bad_value})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [float(companion.DEFAULTS["keepalive_interval"])]
+    assert any(
+        r.levelname == "WARNING" and "keepalive_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_keepalive_interval_true_falls_back_to_default_and_warns(wired_plugin_factory, caplog):
+    """`float(True)` is `1.0`, a value `clamp_interval` would otherwise accept
+    and clamp to the floor of 5, reporting it at INFO as an out-of-range
+    number rather than at WARNING as the type mistake it is. `bool` is
+    rejected before it ever reaches `float()` for exactly this reason."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"keepalive_interval": True})
+    admit_a_client(plugin)
+
+    stop = run_ticker(plugin, passes=1)
+
+    assert stop.waits == [float(companion.DEFAULTS["keepalive_interval"])]
+    assert any(
+        r.levelname == "WARNING" and "keepalive_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+# ---------------------------------------------------------------------------
+# session_poll_interval: clamped once in on_loaded, shared by two consumers
+# ---------------------------------------------------------------------------
+
+
+def test_session_poll_interval_below_the_floor_is_clamped_once_for_both_consumers(
+    wired_plugin_factory, caplog
+):
+    """`session_poll_interval` is clamped exactly once, in `on_loaded`, and
+    stored on `Companion._session_poll_interval`. Mutating `options` after
+    `on_loaded` must be inert: `_background` reads the stored attribute,
+    never `self.options`, again.
+
+    This no longer asserts on `SessionCache._interval`: it is assigned at
+    construction and read nowhere in the plugin (`refresh()` fetches
+    unconditionally, so there is no TTL to enforce), which makes that
+    assertion show two variables holding the same float rather than one
+    clamped value reaching two consumers - tracked as issue #106. The
+    observable half - the loop period `_background` actually waits on - is
+    what remains here.
+    """
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": 0.1, "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == 1.0
+    assert any(
+        "session_poll_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+    plugin.options = {**plugin.options, "session_poll_interval": 4}
+    stop = run_background(plugin, passes=1)
+    assert stop.waits == [1.0], (
+        "on_loaded already clamped this; options changed afterwards must not matter"
+    )
+
+
+def test_session_poll_interval_above_the_ceiling_is_clamped_once_for_both_consumers(
+    wired_plugin_factory, caplog
+):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": 3600, "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == 5.0
+    assert any(
+        "session_poll_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_session_poll_interval_inside_the_range_is_left_alone(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": 3, "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == 3.0
+    assert not any(
+        "session_poll_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_session_poll_interval_non_numeric_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog
+):
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": "5s", "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
+    assert any(
+        r.levelname == "WARNING" and "session_poll_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_session_poll_interval_nan_falls_back_to_default_and_warns(wired_plugin_factory, caplog):
+    """The same spin risk as `keepalive_interval`'s: `_background` waits on
+    `self._session_poll_interval` too, so a `nan` here is just as dangerous."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": float("nan"), "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
+    stop = run_background(plugin, passes=1)
+    assert stop.waits == [float(companion.DEFAULTS["session_poll_interval"])]
+    assert any(
+        r.levelname == "WARNING" and "session_poll_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_session_poll_interval_true_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog
+):
+    """The same `float(True) == 1.0` trap as `keepalive_interval`'s: `1.0` is
+    inside 1-5 and would otherwise be accepted outright, silently taking a
+    boolean typo as a deliberate one-second poll."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"session_poll_interval": True, "rebind_interval": 3600}
+        )
+
+    assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
+    stop = run_background(plugin, passes=1)
+    assert stop.waits == [float(companion.DEFAULTS["session_poll_interval"])]
+    assert any(
+        r.levelname == "WARNING" and "session_poll_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+# ---------------------------------------------------------------------------
+# _background no longer carries the broadcast (the other half of #65)
+# ---------------------------------------------------------------------------
+
+
+def test_the_background_loop_broadcasts_nothing(wired_plugin):
+    """The point of #65: the periodic stats/keepalive broadcast moves off
+    this loop entirely. Even with a client admitted and a short poll
+    interval, `_background` must produce no broadcast of any kind - that is
+    now `_stats_ticker`'s job alone."""
+    plugin, agent, sent = wired_plugin
+    admit_a_client(plugin)
+    plugin.options = {
+        **plugin.options,
+        "session_poll_interval": 1,
+        "rebind_interval": 3600,
+    }
+
+    run_background(plugin, passes=5)
+
+    assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# The outer guard: a fault outside either inner send must not end the thread
+# ---------------------------------------------------------------------------
+
+
+class ExplodingClientSet:
+    """A `ClientSet` double whose `__len__` raises.
+
+    `len(self._clients)` is the first thing `_stats_ticker`'s loop body does
+    and sits outside both inner `try` blocks, which makes it the honest place
+    to prove the outer guard: without it, a fault here - or in `deps.now()`,
+    reached the same way - ends the thread silently and the ticker never
+    broadcasts again, on a device nobody is watching.
+    """
+
+    def __len__(self) -> int:
+        raise RuntimeError("client set is corrupted")
+
+
+def test_a_fault_outside_the_inner_sends_does_not_kill_the_ticker(wired_plugin, caplog):
+    plugin, agent, sent = wired_plugin
+    plugin._clients = ExplodingClientSet()
+
+    with caplog.at_level("ERROR"):
+        stop = run_ticker(plugin, passes=3)
+
+    assert len(stop.waits) == 3, "the ticker stopped instead of completing every pass"
+    assert sent == []
+    assert any(r.levelname == "ERROR" for r in caplog.records), (
+        "a fault outside the inner sends must be logged, not swallowed in silence"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shutdown is real, not just SteppingStop-shaped
+# ---------------------------------------------------------------------------
+
+
+def test_the_ticker_exits_promptly_when_stopped(wired_plugin_factory):
+    """Every other test in this file drives `_stats_ticker` with
+    `SteppingStop`, which has the exact semantics the shutdown path depends
+    on - `Event.wait(timeout)` returning as soon as `set()` is called, not
+    only once the timeout elapses. That double is not itself proof the real
+    `threading.Event` behaves the same way, so this one test runs the ticker
+    on a real thread against a real `Event`, with the actual 5 s floor in
+    play, and closes it immediately rather than waiting out a tick."""
+    plugin, agent, sent = wired_plugin_factory({"keepalive_interval": 5})
+    plugin._stop = threading.Event()
+
+    thread = threading.Thread(target=plugin._stats_ticker, daemon=True)
+    thread.start()
+    plugin._stop.set()
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive(), "the ticker ignored the stop event"

@@ -2564,9 +2564,13 @@ class Companion(plugins.Plugin):
         # keepalive an entire interval away.
         next_keepalive = self.deps.now() + keepalive
         # The loop wakes on the session poll, so a keepalive can only go out on
-        # a tick. Waking often enough for both keeps the cadence a bound rather
-        # than a suggestion, which matters because the client reconnects when a
-        # keepalive is late (SPEC 10.5).
+        # a tick, and waking often enough for both keeps the spacing bounded.
+        # No client behaviour rests on that bound: the client reconnects on an
+        # unanswered ping and reads staleness from the sessionAge a frame
+        # carries, never from when a keepalive arrived (SPEC 4.3.1). What a
+        # late keepalive costs is lateness, not a false state. This whole
+        # computation goes when the broadcasts move to a ticker of their own
+        # (SPEC 2.4, issue #65).
         tick = min(poll, keepalive) if keepalive > 0 else poll
         while not self._stop.is_set():
             try:

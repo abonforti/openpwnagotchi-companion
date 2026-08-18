@@ -185,12 +185,12 @@ pisugar = true                     # battery via pisugar (auto-detect pisugarx_e
 gps_source = "auto"                # auto | bettercap | gpsd | none (browser fallback always on)
 gpsd_host = "127.0.0.1"
 gpsd_port = 2947
-session_poll_interval = 5          # bettercap session refresh; it caps the loop tick. Clamp pending #65 (SPEC 2.4)
+session_poll_interval = 5          # bettercap session refresh. Stops capping the broadcast tick with #65 (SPEC 2.4)
 rebind_interval = 30               # seconds between local-address re-enumeration passes
 save_gps_log = false
 gps_log_path = "/var/tmp/pwnagotchi_gps.log"
 mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
-keepalive_interval = 20            # decided: stats broadcasts, clamped 5-20, 0 means default. Pending #65 (SPEC 2.4)
+keepalive_interval = 20            # decided: stats broadcasts, clamped 5-20, 0 means default. Not shipped, #65 (SPEC 2.4)
 ```
 
 Every value has a hardcoded default in the plugin matching the table above. Missing keys must
@@ -495,20 +495,24 @@ it cannot carry a `type`, and `bad_request` is the only enum member that fits.
 
 `keepalive` is broadcast every `keepalive_interval` seconds (default 20, accepted range 5-20 —
 see the clamp below) from
-the background thread, which therefore wakes at `min(session_poll_interval, keepalive_interval)`
-rather than on the session poll alone: the frame can only go out on a tick, so a loop that woke
-every 5 s would turn a nominal 20 s cadence into 20-25 s and make a client whose timeout is set
-to the nominal value reconnect for no reason.
+the background thread, which today wakes at `min(session_poll_interval, keepalive_interval)`
+because it carries the keepalive. **Once #65 ships**, both broadcasts move to a ticker of their
+own and this loop wakes on `session_poll_interval` alone, refreshing and broadcasting nothing.
+
+That move is the point of #65. While the broadcast rides this loop its spacing is the loop's,
+so a 5 s poll turns a nominal 20 s cadence into 20-25 s and a client whose timeout was set to
+the nominal value reconnects for no reason. On a ticker the spacing is `keepalive_interval`
+and nothing else, which is what lets §4.3.2 state one.
 
 It exists so an idle client can tell a quiet plugin from a dead link: over BT PAN a dropped
 tether does not close the socket, it simply stops delivering, and without a periodic frame the
-app would sit on a dead connection showing stale data. The frontend treats a missed interval as
-a reason to reconnect (§10.5).
+app would sit on a dead connection showing stale data. The frontend does not reconnect on a missed frame, which would be a guess: it reconnects when
+its own `ping` goes unanswered (§4.3.1), and reads staleness from the data (§10.5).
 
-**`stats` rides this same tick** (§4.3.7, issue #65). **Not yet: the loop broadcasts only an empty `keepalive` today, and the clamp below does not exist either.** Everything from here to the end of this section describes the decided behaviour, not the shipped one, and it is blocked on the threading question in issue #65 — the broadcast shares a thread with a blocking bettercap call, so no cadence stated here can be guaranteed where it currently lives. A periodic frame proves the link is
+**`stats` rides the ticker with it** (§4.3.7, issue #65). **Not yet: the loop broadcasts only an empty `keepalive` today, and the clamp below does not exist either.** Everything from here to the end of this section describes the decided behaviour, not the shipped one, and the cadence question behind it is answered: issue #65 moves the broadcast onto a ticker of its own, sharing nothing with the bettercap refresh, so the period stated here is one the plugin can hold to once it ships. A periodic frame proves the link is
 delivering and says nothing about whether the data behind it moved, and the client needs both:
 `degraded` in §4.3.1 is defined as socket-alive-but-data-stale, and it cannot be computed from a
-frame that carries nothing. So the loop broadcasts **both on the same tick**: `stats` for the
+frame that carries nothing. So the ticker sends **both on the same tick**: `stats` for the
 freshness, and the `keepalive` that was already there.
 
 Sending both rather than replacing one with the other is deliberate and is a decision, not an
@@ -527,25 +531,56 @@ a full `stats` payload every second over BT PAN.
 The arithmetic is written out because three drafts of this section got it wrong, each time by
 reasoning about it in prose.
 
-The loop computes `tick = min(session_poll_interval, keepalive_interval)` and re-arms from the
-moment it actually fired, so consecutive broadcasts are at most `keepalive_interval + tick`
-apart. Call that the **spacing**. With a staleness threshold `S`, a client survives `n` missed
-broadcasts when `(n + 1) x spacing < S`:
+The ticker re-arms from the moment it actually fired and shares nothing with the refresh, so
+consecutive broadcasts are `keepalive_interval` apart plus
+whatever a send costs. The ticker no longer waits on `agent.session()`, which is the point of
+moving it, but it still waits on itself. Call that the **spacing**.
 
-| `keepalive_interval` | `session_poll_interval` | tick | spacing | missed broadcasts survived at `S = 55` |
-|---|---|---|---|---|
-| 20 | 5 | 5 | 25 | **1** (50 < 55; a second would be 75) |
-| 25 | 5 | 5 | 30 | 0 (the first miss is already 60) |
-| 20 | 30 | 20 | 40 | 0 |
-| 20 | 5, clamped from 30 | 5 | 25 | 1 |
+Staleness is a property of the data, not of the frames (§4.3.1): the client reads whatever
+`sessionAge` a frame carries and never extrapolates between frames. So the spacing does not
+add to the age. **The refresh loop sets the age; the ticker only decides how often it is
+sampled.**
 
-Row one is the intent: **one missed broadcast is ordinary jitter on this link and is survived; a
-second is a pattern and is not.** Row two is why the ceiling is 20 rather than the 25 an earlier
-draft chose — at 25 the app degrades on the first missed broadcast, which on BT PAN happens
-often enough to make every state control flicker out. Row three is why clamping
-`keepalive_interval` alone was not enough: `session_poll_interval` sets the tick, so leaving it
-free reaches the same failure through a key the specification still documented as unconstrained.
-Row four is the rule as it now stands.
+The age therefore peaks once per failed refresh episode. The episode runs from the last
+success to the next one, so it carries a poll interval before each attempt and bettercap's
+30 s timeout (F7) for each failure:
+
+| episode | peak `sessionAge` at `session_poll_interval = 5` | against `S = 55` |
+|---|---|---|
+| one refresh times out, the next succeeds | 5 + 30 + 5 = 40 | under: an ordinary slow moment is not reported as stale |
+| two in a row | 5 + 30 + 5 + 30 + 5 = 75 | over: a pattern is reported |
+
+**`S = 55` is chosen to sit between them**, and that is the whole of its derivation. It is not
+a function of `keepalive_interval`, which is why the clamp on that key is argued below on
+other grounds.
+
+That is the intent stated once: **one bettercap timeout is an ordinary event on this unit and
+must not show the data as stale; a second is a pattern and should.**
+
+`keepalive_interval` is clamped to 5-20 for a different reason, since it cannot cause a false
+`degraded`. It bounds **how long the client believes something that has stopped being true**:
+the age it displays, the moment it notices a real stall, and the moment it notices recovery,
+are all one spacing behind the unit. It also decides whether the stall is seen at all. In a
+two-episode peak at `session_poll_interval = 5` the age is above 55 for 75 - 55 = **20 s**, so
+at the ceiling at most one sample lands inside that window, and only while a send costs
+nothing worth counting: the ceiling is already at the equality rather than inside a margin, and a larger interval can step over the peak and report nothing, the more often the larger it
+is.
+
+At the poll floor the window narrows to 8 s: 1 + 30 + 1 + 30 + 1 is 63. A sampler at the
+keepalive ceiling of 20 s misses that more often than not, though one at the keepalive floor of
+5 s always catches it. Polling fast therefore trades the report of a two-episode stall for a
+faster report of the recovery, and that is the right way round: a stall that persists is caught within a
+few episodes, since the sampler and the episode drift against each other, while a recovery the
+app fails to notice is a control the user cannot use.
+
+Two clamps interacting this way, to bound a number neither of them names, is the argument for
+the capability in the closing note below rather than for more arithmetic here.
+
+`session_poll_interval` is clamped to 1-5 for a different reason, now that it no longer sets
+the broadcast spacing. `sessionAge` is wall-clock age, so the poll interval does not govern how
+it grows; it governs how soon it is **reset** once bettercap answers again. At 5 s a recovered
+unit leaves `degraded` on the next broadcast; at a minute it would stay stale-looking long
+after it was well.
 
 **The better shape, deliberately not taken here.** The plugin could publish its effective spacing
 in `Capabilities` and let the client derive `S` from it, which would survive any configuration
@@ -1383,24 +1418,26 @@ verification is recorded so it is not re-derived by the next person to see a bla
   is shown calmly, not as an error. `restarting` is entered on a `restarting` message (§2.6.1)
   and suppresses the error banner while showing the reason.
 
-> **Not ready to implement against. Blocked on issue #65.**
+> **Decided, not yet shipped.** The behaviour below is settled; the plugin has not caught up.
 >
-> The timing rules below key a client staleness threshold to the plugin's periodic broadcast.
-> That broadcast currently shares a thread with `agent.session()`, a blocking bettercap call with
-> a 30 second timeout, so the interval between two broadcasts is `work + tick` rather than
-> `tick` — and a slow bettercap can stretch it past any threshold stated here, with the link
-> perfectly healthy and not one frame lost. Clamping the intervals does not help: the clamp
-> bounds the sleep, and the sleep is not what overran.
+> The timing rules key a client staleness threshold to the refresh episode, and the periodic
+> broadcast to how late the client hears of one. That broadcast is moving off the refresh
+> thread onto a ticker of its own, sharing nothing
+> with `agent.session()` and its 30 second timeout. That is what makes a cadence promisable:
+> the loop period was `work + tick` rather than `tick`, so a slow bettercap could stretch the
+> spacing past any threshold stated here with the link perfectly healthy. Clamping did not
+> help, because the clamp bounds the sleep and the sleep is not what overran. The decision is
+> recorded on issue #65. The arithmetic behind the numbers is derived in §2.4, in the tree,
+> rather than left in a ticket.
 >
-> A second question is unsettled with it. `common.json` already says of `sessionAge` that "the
-> client shows stale data as degraded rather than wrong", which is a route into `degraded` that
-> §4.3.1 below wrongly retracts — and one where disabling the controls would be the wrong
-> answer, because a dead bettercap leaves a healthy unit that can still change mode.
+> `degraded` is defined on `sessionAge`, as `common.json` always said: the unit is reachable
+> and its broadcasts are arriving, and the data behind them has stopped moving. §4.3.1 once
+> retracted that route on the premise that the refresh and the broadcast are the same thread.
+> They are the same loop today, and that is not what makes the state impossible.
+> `refresh()` swallows its own exception, so a dead bettercap leaves the broadcasts flowing and only `sessionAge` growing.
 >
-> Everything else in §4.3 is settled and reviewed: the states and their transitions, the queue
-> rules, the no-optimism rule, the token storage, the error surfaces. **The numbers are not, and
-> neither is the full definition of `degraded`.** Both wait on the plugin-side decision in
-> issue #65.
+> Until the plugin ships the ticker, a client written against this section will measure a
+> staleness that the plugin cannot yet hold to. Issue #65 is the gate.
 
 #### 4.3.1 The connection state machine
 
@@ -1421,7 +1458,7 @@ where the table says so and gives the reason.
 |---|---|---|
 | `connecting` | a quiet indicator, no copy — the normal first second | disabled |
 | `connected` | the data, unqualified | **enabled** |
-| `degraded` | the data, marked stale, with its age | disabled |
+| `degraded` | the data, marked stale, with its age | **enabled**, see below |
 | `offline` | the calm copy about the Personal Hotspot; never an error dialog | disabled |
 | `unauthorized` | that a token is needed or wrong, and a way to fix it | disabled |
 | `restarting` | the reason the plugin gave, error banner suppressed | disabled |
@@ -1437,7 +1474,8 @@ there, or is ignored.
 
 | from | event | to |
 |---|---|---|
-| `connecting` | first `stats` of this connection arrives | `connected`, staleness clock started |
+| `connecting` | first `stats` of this connection, `sessionAge` under 55 s and not `null` | `connected` |
+| `connecting` | first `stats` of this connection, `sessionAge` 55 s or more, or `null` | `degraded` |
 | `connecting` | 55 s elapse without it | `offline` |
 | `connecting` | `restarting` message | `restarting` |
 | `connecting` | `error` with `code: "unauthorized"`, then close | `unauthorized` (*rejected*) |
@@ -1445,12 +1483,13 @@ there, or is ignored.
 | `connecting` | third consecutive close before any `stats`, no token stored | `unauthorized` (*required*), by inference — see below |
 | `connecting` | bare 1008, an `auth` frame **was** sent | `offline` |
 | `connecting` | any other close, or the socket fails to open | `offline` |
-| `connected` | `stats` arrives | `connected`, staleness clock reset |
-| `connected` | 55 s since the last `stats` | `degraded` |
+| `connected` | a `stats` whose `sessionAge` is under 55 s and not `null` | `connected` |
+| `connected` | a `stats` whose `sessionAge` is 55 s or more, or `null` | `degraded` |
 | `connected` | no `pong` within its timeout | `connecting` |
 | `connected` | `restarting` message | `restarting` |
 | `connected` | close | as for `connecting`, by the same four close rules |
-| `degraded` | `stats` arrives | `connected` |
+| `degraded` | a `stats` whose `sessionAge` is back under 55 s, and not `null` | `connected` |
+| `degraded` | a `stats` still at or over 55 s, or `null` | `degraded`, with the displayed age updated |
 | `degraded` | no `pong` within its timeout | `connecting` |
 | `degraded` | `restarting` message | `restarting` |
 | `degraded` | close | as for `connecting` |
@@ -1459,7 +1498,8 @@ there, or is ignored.
 | `unauthorized` | the user changes the stored token | `connecting` |
 | `restarting` | close, reason is `mode_change` or `reboot` | `restarting`; the backoff loop runs underneath |
 | `restarting` | close, reason is `shutdown` | `restarting`; **no reconnection is attempted** |
-| `restarting` | first `stats` of a new connection | `connected` |
+| `restarting` | first `stats` of a new connection, `sessionAge` under 55 s and not `null` | `connected` |
+| `restarting` | first `stats` of a new connection, `sessionAge` 55 s or more, or `null` | `degraded`, which after a reboot is the ordinary case rather than the exception |
 | `restarting` | patience expires (90 s `mode_change`, 180 s `reboot`) | `offline` |
 | `restarting` | patience expires, reason is `shutdown` | never: there is no patience timer |
 | `restarting` | the user asks to reconnect | `connecting`, for any reason |
@@ -1482,8 +1522,14 @@ against a wedged plugin and never sends `initial_burst()` sits there for ever: i
 `degraded`, which needs a first `stats` to measure staleness from, and it cannot reach `offline`,
 which needs no socket. Worse, a dropped tether would present as `connecting` rather than
 `offline`, so the calm hotspot copy would be unreachable in the most common failure in the
-product's life. The bound is the same 55 s as the staleness threshold, for the same reason:
-either way, nothing has arrived for two broadcast intervals.
+product's life. The bound is the same 55 s as the staleness threshold, and deliberately one number rather than
+two. Its own worst case is much smaller: the first `stats` comes from `initial_burst()` (§4.3.7),
+which fires on connect and builds its payload from the caches, never from `agent.session()`
+(§2.5), so nothing on that path can time out. The honest bound is a connect and an auth round
+trip on a slow link, seconds rather than tens of them. Everything above that is margin, and taking the margin here costs a few seconds in a
+state that is already showing a quiet indicator, while a second threshold would be a second
+thing to keep true. Beyond it, the socket is open against something that is not answering,
+which is what `offline` is for.
 
 **`restarting` with reason `shutdown` is terminal.** `RestartReason` is
 `mode_change | reboot | shutdown` (`common.json`), and after a shutdown the unit does not come
@@ -1535,46 +1581,55 @@ Socket alive, data stale. Without it, data from four minutes ago renders identic
 now, which on a screen showing a battery percentage and a handshake count is not cosmetic: it is
 the app asserting something it does not know.
 
-Staleness is measured from the last `stats`, never from the last frame of any kind, because a
-frame proves the socket is alive and proves nothing about the data. **This requires the plugin to
-broadcast `stats` rather than only answering `get_stats`** — see §4.3.7, a change to the plugin
-and not only to the client.
+Staleness is read from `sessionAge` inside the payload, never from when a frame turned up,
+because arrival proves the socket is alive and proves nothing about the data behind it. A
+`sessionAge` of `null` is stale by the same rule: it means the bettercap snapshot has never
+succeeded, which is the case this state exists for. **This requires the plugin to broadcast
+`stats` rather than only answering `get_stats`**, see §4.3.7, a change to the plugin and not
+only to the client.
 
 **It is not the presentation of a dropped tether, and an earlier draft claimed it was.** The
 arithmetic runs the other way: on a stall the ping goes out within 15 s and the pong times out
-10 s later, so the client forces a reconnect within 25 s of the drop, thirty seconds before
-staleness fires at 55. A dropped tether goes `connected → connecting → offline` and never touches
+10 s later, so the client forces a reconnect within 25 s of the drop. Staleness does not race
+it and does not fire late: it is read from a payload, and a dropped tether delivers none. A dropped tether goes `connected → connecting → offline` and never touches
 `degraded`.
 
-`degraded` is reached by **one** mechanism: the broadcast loop wedges while the asyncio handler
-still answers `ping`. The two threads are separate (`plugin/companion.py`, the background loop
-versus the connection handler), so this is structurally possible rather than hypothetical. An
-earlier draft offered three reasons for it, and the other two collapse under examination — a
-large frame stuck in the send path head-of-line blocks the `pong` behind it, which is the
-heartbeat path, and "the plugin stopped refreshing" is the same thread as the one that
-broadcasts, so it is this case restated. One real mechanism is enough to justify the state; three
-stated where one exists is how this document has already been wrong twice.
+`degraded` is reached by **one** mechanism: the broadcasts keep arriving and the data inside
+them stops moving. `refresh()` swallows its own exception (`plugin/companion.py`), so a
+bettercap that has died leaves the ticker sending on time while `sessionAge` climbs inside
+the payload. The link is healthy, the plugin is healthy, and the data is old. This is what
+`common.json` has always said of `sessionAge`, and it is why staleness is read from the age
+the payload declares rather than from the arrival of a frame.
 
-That single mechanism is also the strongest argument for disabling the controls there. The socket
-is provably alive, so a command **will** be delivered — to a unit whose state the app cannot see,
-whose broadcast loop is already misbehaving.
+**A unit whose broadcasts have stopped is not `degraded`.** It is `connecting`, and then
+`offline`: staleness is read from a payload, so a socket delivering nothing can never move the
+client toward `degraded` at all, and the heartbeat catches it in 25 s, and the transition table above has states for exactly that. An earlier draft reached
+`degraded` by the broadcast loop wedging while the handler still answered `ping`. That was
+true of a broadcast sharing a thread with the bettercap refresh; with the ticker of §4.3.7 it
+shares nothing with anything, and a ticker that has stopped is a plugin that has stopped.
+
+**So the controls stay enabled here**, which reverses what an earlier draft said. The unit is
+answering, its uplink is proven by `pong`, and it can change mode perfectly well. Disabling
+the controls would punish the user for bettercap's failure, in the one state where the app
+can still do something useful. The staleness is shown, not acted on.
 
 
 #### 4.3.2 The timings
 
 Three plugin-side figures set the floor for everything here, and none of them is ours to choose.
 `session_poll_interval` defaults to 5 s and is the cache refresh. `keepalive_interval` defaults
-to 20 s. `auth_timeout` defaults to 10 s. Critically, the background loop ticks at
-`min(session_poll_interval, keepalive_interval)`, so a broadcast due at 20 s can land as late as
-25 s: **every client timeout must be derived from 25, not from 20.**
+to 20 s. `auth_timeout` defaults to 10 s. The refresh loop ticks at
+`min(session_poll_interval, keepalive_interval)` today and carries the broadcast with it, so a
+frame due at 20 s can land at 25. The ticker of §4.3.7 does not share that loop, so **the
+spacing is 20 s** and the numbers below are derived from it.
 
 The transport sets the rest. BT PAN is slow and stalls under load, so a client tuned for a LAN
 spends its life reconnecting a link that was merely slow.
 
 | | value | why this number |
 |---|---|---|
-| server broadcast | 20 s nominal, **25 s worst case** | the plugin's `keepalive_interval`, granular to the loop tick. Carries `stats` (§4.3.7) |
-| staleness threshold | 55 s | two missed broadcasts at the worst-case spacing, plus margin. One missed broadcast is ordinary jitter on this link; two is a pattern |
+| server broadcast | 20 s | the plugin's `keepalive_interval`, on a ticker of its own rather than granular to the refresh loop. Carries `stats` (§4.3.7) |
+| staleness threshold | 55 s | between one failed refresh episode and two: 5 + 30 + 5 = 40 against 5 + 30 + 5 + 30 + 5 = 75 (§2.4). It is what the data's age can honestly be while the unit is merely slow. Independent of `keepalive_interval`, which sets how late the client hears of it, not how high it climbs |
 | heartbeat `ping` | 15 s | the server broadcast proves the **downlink**; this proves the **uplink**, which is what a command needs and which a half-open socket can lose on its own |
 | `pong` timeout | 10 s | no answer in ten seconds on a link that normally answers in tens of milliseconds is a dead socket, not a slow one |
 | request timeout | 15 s | generous on purpose, because BT PAN under load really does take that long, and a request that fails while the answer is in flight is worse than a slow spinner |
@@ -1600,8 +1655,8 @@ and **wrong for the four commands that change state** (`set_mode`, `set_pasv`, `
 `shutdown`).
 
 - **A read is queued and re-sent.** Losing one costs nothing and re-sending it is invisible.
-- **A state command is refused at the point of tapping.** The control is enabled **only in
-  `connected`**, and the command never enters the queue.
+- **A state command is refused at the point of tapping.** The control is enabled in
+  `connected` and in `degraded`, and nowhere else; the command never enters the queue.
 - **A state command already in flight when the socket drops is discarded and reported as
   failed**, never re-sent. It is the same hazard as the queued one, arriving by a different door.
 - **`gps_data` is discarded too**, for a different reason. It is a read by shape and a position
@@ -1616,22 +1671,23 @@ the tether, put it in a pocket, and rejoin two hours later — at which point th
 delivers a reboot to a unit that is doing something else. For `shutdown` it is worse. A command
 whose effect is unbounded in time must not survive the moment it was intended for.
 
-**`degraded` does not enable the controls, and that is the whole point of the state.** §4.3.1
-establishes how it is reached: not by a dropped tether, which the heartbeat catches first and
-which presents as `connecting`, but by the broadcast loop wedging while the connection handler
-still answers `ping`.
+**`degraded` enables the controls, and the reason is how it is reached.** §4.3.1 establishes
+that it is not a dropped tether, which the heartbeat catches first and which presents as
+`connecting`, and not a stopped broadcast, which is a stopped plugin. It is a unit answering
+normally whose bettercap data has gone stale. The uplink is proven, the mode change will
+arrive, and the only thing the app cannot vouch for is the age of what it is displaying,
+which it says on the face of it.
 
-That is precisely the case in which a command must not be offered. The socket is **provably
-alive**, so the request will be delivered — to a unit whose state the app cannot see, whose
-broadcast thread is already misbehaving, and whose mode the user is reading from data that
-stopped moving. Every other failure here ends with the request undelivered; this one ends with it
-delivered blind.
+Two earlier drafts argued the other way, from opposite premises, and both are recorded here
+because the wrong derivation is the one a test author reconstructs. The first held that
+`degraded` was the signature of a dropped tether and that an open socket meant the request
+would arrive safely. The second held that it was a wedged broadcast thread, so a command would
+be delivered blind to a unit whose state the app could not see. The first was wrong about the
+state, the second about the plugin: once the broadcast has a ticker of its own, a ticker that
+has stopped is a plugin that has stopped, and that is not this state.
 
-An earlier draft of this paragraph argued the opposite conclusion from the opposite premise, that
-`degraded` was the signature of a dropped tether and the socket being open meant the request would
-arrive safely. Both halves were wrong and they cancelled into a plausible-looking rule. The
-correction is recorded rather than quietly applied, because the wrong derivation is the one a test
-author would reconstruct.
+What survives from both is the habit: a rule about enabling controls has to name the mechanism
+it assumes, or it will outlive it.
 
 #### 4.3.4 Nothing is applied optimistically
 
@@ -1717,12 +1773,18 @@ leaves the unit in exactly two situations: in `initial_burst()` on connection, a
 to a `get_stats` request. The background loop broadcasts `keepalive` and nothing else.
 
 Written against that, §4.3.1 and §4.3.4 are not merely imperfect, they are unimplementable. A
-staleness threshold measured from the last `stats` puts every client into `degraded` a minute
-after connecting and leaves it there for ever, and a mode change shown as pending "until `stats`
-confirms it" stays pending for ever, because nothing ever arrives to confirm it.
+client reads staleness from the `sessionAge` of the last `stats` it received, so with no
+periodic `stats` it reads for ever the one number the initial burst gave it: a unit whose
+bettercap died an hour ago still presents as fresh, which is the failure this state exists to
+prevent. And a mode change shown as pending "until `stats` confirms it" stays pending for
+ever, because nothing ever arrives to confirm it.
 
-**The plugin broadcasts `stats` on the keepalive tick.** One message where there were two, and
-receiving it proves both things a client needs to know: that the link is delivering, and that the
+**The plugin broadcasts `stats` every `keepalive_interval`, from a ticker of its own.** The
+ticker reads the caches and sends; it shares no thread with `refresh()` and therefore no
+waiting with `agent.session()`, which is what lets §4.3.2 state a spacing at all. `keepalive`
+rides it too, so the two frames stay on one tick and the refresh loop goes back to refreshing.
+The same frame answers both questions a client has, and receiving it proves both things a
+client needs to know: that the link is delivering, and that the
 data is current. The alternative — the client polling `get_stats` on a timer — was rejected
 because it pays a round trip on a link whose round trips are the expensive part, multiplies with
 every connected client where a broadcast does not, and leaves the client unable to distinguish a
@@ -2391,7 +2453,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
-| `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every authenticated client and to no unauthenticated one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, since it sets the loop tick and leaving it free reaches the same failure through another key; **the ceiling is what the client staleness threshold was computed from**, so a value above it makes the app degrade on the first missed broadcast and disables every state control while it does (§2.4). The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |
+| `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every authenticated client and to no unauthenticated one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |
 
 A rule the `read_pisugar_i2c` row exists to state: **a test may not assert a property of the
 machine it happens to run on.** The first version of that test asserted the read returns nulls
@@ -2428,7 +2490,8 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   with it. **Backoff**: each delay drawn from `[0, cap]` and never above the cap, over enough
   draws to show it is not always at it. **States**: `connecting` held until the first `stats` of
   the connection rather than entering `degraded` on a reconnect after a long absence; `degraded`
-  entered at the staleness threshold and left when `stats` arrives. **`unauthorized`**, whose
+  entered on a `stats` whose `sessionAge` is at or over 55 s, or `null`, and left only on one
+  whose `sessionAge` is back under it and not `null`, never merely because a frame arrived. **`unauthorized`**, whose
   three cases are the ones a test will otherwise get backwards: an `error` frame with that code
   enters it with reason *rejected*; a bare 1008 with **no** `auth` frame sent enters it with
   reason *required*; a bare 1008 **after** an `auth` frame was sent is `offline`. Reconnection is

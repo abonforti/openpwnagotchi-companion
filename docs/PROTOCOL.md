@@ -68,13 +68,14 @@ that the plugin was forked from, so an existing client keeps working.
 4. Steady state: the client polls what it needs and receives pushes as they happen.
 5. `stats` arrives periodically, on the `keepalive_interval` tick, so an idle client can tell a
    quiet plugin from a dead link **and** can tell fresh data from stale. A frame that carries
-   nothing proves only the first, and the client needs both. An empty `keepalive` goes out on
-   the same tick and is kept for any client that already acts on it.
+   nothing proves only the first, and the client needs both. An empty `keepalive` rides the same
+   ticker and is kept for any client that already acts on it.
 
    **Decided, not yet shipped.** Today only the empty `keepalive` goes out. Issue #65 tracks it,
-   and blocks on a real problem rather than on effort: the broadcast currently shares a thread
-   with a blocking bettercap call, so its cadence is not something the plugin can promise from
-   where it stands. Do not write a client that depends on the period until that is settled.
+   and the problem behind it is settled: the broadcast moves onto a ticker of its own, sharing
+   nothing with the blocking bettercap call that used to stretch its period. Until that ships,
+   a client written against the period will not observe it, so do not ship one that depends on
+   it. Issue #65 is the gate.
 6. The client also sends `ping` on its own schedule and forces a reconnect if no `pong` comes
    back within its timeout. That direction matters separately: the periodic broadcast proves the
    downlink, and a command needs the uplink.

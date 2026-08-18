@@ -56,6 +56,10 @@ against real hardware.
 - The authentication deadline is now enforced against a client that sends nothing. It was only
   checked when a frame arrived, so a peer that opened a socket and stayed silent - the case the
   rule exists for - held it open indefinitely.
+- Connecting to the HTTPS port and sending nothing used to freeze the whole static server, not
+  just that one connection: every other visitor's PWA hung mid-request, and even reloading the
+  plugin could not clear it, since the same stall blocked shutdown too. No token guards this
+  port, so anyone who could reach it at all could trigger it with a single idle connection.
 
 ### Added
 

@@ -37,6 +37,7 @@ import re
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -2189,11 +2190,15 @@ class Listeners:
 
         The cost is bounded, address by address, for every wait the plugin
         controls: `_serve_ws` waits up to ten seconds for its future, closing
-        an address waits up to five for `_shutdown_ws`, and `_shutdown_http` costs
-        one `poll_interval` (0.5s) for `serve_forever` to notice - but only
-        while that loop is in its select, which is the exception below, not a
-        bound. Enumerating local addresses is either a handful of local
-        syscalls or, on the `ip -4 addr show` fallback, capped by its own 5 s
+        an address waits up to five for `_shutdown_ws`, and `_shutdown_http`
+        costs one `poll_interval` (0.5s) for `serve_forever` to notice.
+        `_serve_http`'s `Server.get_request` wraps each accepted connection
+        in TLS, not the listening socket, and does so without
+        `do_handshake_on_connect`, so `accept()` on that socket is a plain TCP
+        accept and `serve_forever`'s select loop is never parked inside a
+        handshake (#100) - the 0.5s figure is a real bound, not a best case.
+        Enumerating local addresses is either a handful of local syscalls or,
+        on the `ip -4 addr show` fallback, capped by its own 5 s
         `subprocess.run` timeout. Everything else in the locked path -
         selection, binding the HTTPS socket, starting a server's thread,
         releasing a socket that never served - is local and synchronous,
@@ -2205,16 +2210,6 @@ class Listeners:
         otherwise-bounded, costs up rather than sharing one bound. (This
         assumes the default `Deps.list_local_ipv4`; a caller that replaces the
         seam with something that blocks indefinitely owns that trade.)
-
-        One wait is not bounded, and is not the plugin's to bound: closing an
-        address whose HTTPS server is mid-`accept()` calls `_shutdown_http`,
-        which calls `BaseServer.shutdown()`, which waits with no timeout on an
-        event that only `serve_forever`'s loop clears. A peer that completes
-        the TCP connect and then sends nothing parks that loop inside the TLS
-        handshake indefinitely - `SSLSocket.accept()` has
-        `do_handshake_on_connect=True` and no timeout - and `stop()` waits for
-        it. Pre-existing on `master`, a security defect in its own right, and
-        tracked as its own fix rather than folded into this one: issue #100.
         """
         with self._lock:
             if self._stopped:
@@ -2281,11 +2276,12 @@ class Listeners:
         new caller must go through that selection, not call `_open` with an
         address from elsewhere.
 
-        The HTTPS server is created and TLS-wrapped here but not started: its
-        serving thread is only launched once `self._bound[ip]` holds this
-        address, so a request cannot be dispatched, and answered with a
-        Content-Security-Policy header, before that address exists to be
-        named in it (SPEC 2.15.1).
+        The HTTPS server is created and bound here, but not TLS-wrapped and not
+        started: TLS is applied per accepted connection, not at creation (see
+        `_serve_http`), and the serving thread is only launched once
+        `self._bound[ip]` holds this address, so a request cannot be
+        dispatched, and answered with a Content-Security-Policy header, before
+        that address exists to be named in it (SPEC 2.15.1).
         """
         http_server = ws_server = None
         try:
@@ -2339,12 +2335,31 @@ class Listeners:
         )
 
     def _serve_http(self, ip: str) -> Any:
-        """Creates and TLS-wraps the HTTPS static server. Does not serve yet.
+        """Creates the HTTPS static server. Does not serve yet, and does not
+        negotiate TLS yet either.
 
         The socket is already bound and listening once the constructor below
         returns - connections can queue in the backlog - but nothing is
         accepted until `_start_http` runs the serving thread, which `_open`
         only does after `self._bound[ip]` is set.
+
+        The listening socket itself is never TLS-wrapped. `Server.get_request`
+        wraps each accepted connection instead, with `do_handshake_on_connect=
+        False`: wrapping there returns immediately - it only builds the SSL
+        object, it does not touch the network - so `accept()` stays a plain
+        TCP accept and the handshake happens lazily on the connection's first
+        read, inside `SimpleHTTPRequestHandler.handle_one_request`, which runs
+        on the handler thread `ThreadingMixIn` spawns for that connection, not
+        on the `serve_forever` loop (#100).
+
+        The residual is one thread and one file descriptor per silent peer, not
+        one in total. `daemon_threads = True` below is what stops
+        `server_close()` waiting on a handshake that will never finish - the
+        entire point of this change - but the same setting means that thread is
+        never joined, by `stop()`, by a reload, or by anything else. It outlives
+        all three: a peer that connects and sends nothing keeps its thread and
+        its socket alive for the life of the process, and each further silent
+        peer adds one more of each. Tracked separately as its own defect: #102.
         """
         import http.server
         import socketserver
@@ -2357,6 +2372,7 @@ class Listeners:
             lambda: sorted(self._bound),
             int(option(self._options, "ws_port")),
         )
+        ssl_context = self._ssl
 
         class Server(http.server.ThreadingHTTPServer):
             # `ThreadingMixIn.block_on_close` stays at its default `True`, so
@@ -2365,7 +2381,10 @@ class Listeners:
             # returns promptly only because `_Threads.append` never records a
             # daemon thread, which is what `daemon_threads = True` buys here -
             # flip it and `server_close()` starts waiting, with no timeout,
-            # for every in-flight handler thread to finish on its own.
+            # for every in-flight handler thread to finish on its own. That
+            # now includes a thread parked in the lazy TLS handshake described
+            # on `_serve_http` above, which is exactly why this still has to
+            # hold: `server_close()` must never wait on one of those either.
             daemon_threads = True
             allow_reuse_address = True
 
@@ -2386,8 +2405,44 @@ class Listeners:
                 self.server_name = host
                 self.server_port = port
 
+            def get_request(self) -> tuple[Any, Any]:
+                # Wraps the *accepted* connection, not the listening socket
+                # (see `_serve_http`): `do_handshake_on_connect=False` means
+                # this only builds the SSL object around `conn`, it does not
+                # negotiate anything, so this method - called from the
+                # `serve_forever` loop - returns as fast as the plain
+                # `accept()` it wraps. `super()`, not the concrete
+                # `socketserver.TCPServer`, so this keeps resolving correctly
+                # if a mixin ever adds its own `get_request`.
+                conn, addr = super().get_request()
+                wrapped = ssl_context.wrap_socket(
+                    conn, server_side=True, do_handshake_on_connect=False
+                )
+                return wrapped, addr
+
+            def handle_error(self, request: Any, client_address: Any) -> None:
+                # The default prints a full traceback to stderr, unconditionally.
+                # `get_request` above moved the TLS handshake onto this handler
+                # thread's first read, so a caller who sends plaintext, or breaks
+                # the handshake off, or anything else that raises here, reaches
+                # this method with no check of its own in the way - this server
+                # has none, unlike the token check on the WSS side. The default
+                # would let that caller fill the log with tracebacks on demand.
+                # `exc_info=True` would do the same through this logger, so only
+                # the exception itself is logged, one line, at debug like every
+                # other error this class logs - never the frames that produced it.
+                #
+                # `%r` rather than `%s` is load-bearing, not style: `str()` of an
+                # OSError carries the path it failed on, while `repr()` drops it.
+                # This log is read, and pasted into issues, by people who are not
+                # the only ones who can reach this port.
+                log.debug(
+                    "[companion:http] error handling request from %s: %r",
+                    client_address,
+                    sys.exc_info()[1],
+                )
+
         server = Server((ip, int(option(self._options, "http_port"))), handler)
-        server.socket = self._ssl.wrap_socket(server.socket, server_side=True)
         return server
 
     @staticmethod

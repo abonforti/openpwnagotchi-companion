@@ -124,6 +124,7 @@ openpwnagotchi-companion/
 │   ├── test_auth.py
 │   ├── test_binding.py
 │   ├── test_listeners_stop_race.py  # stop() vs reconcile(), see §10.2 (issue #90)
+│   ├── test_https_handshake_off_accept.py  # accept-loop TLS handshake hang, see §10.2 (issue #100)
 │   ├── test_static_server.py
 │   ├── test_csp.py
 │   ├── test_protocol_conformance.py # every outgoing message validated against its schema
@@ -278,19 +279,18 @@ not by either alone:
 A pass that arrives after a teardown has begun does nothing and reports the state as it found it.
 `stop()` stays idempotent: a second call closes an already-empty set. The lock is held for the
 whole pass, so `stop()` can wait for one already under way, bounded address by address for every
-wait the plugin controls: up to ten seconds per address for the WSS bind and a few seconds more to
-close one, real on a pass touching several addresses at once but not indefinite. The one wait
-that is not ours to bound is stated below. The HTTPS bind itself does not add to that bound:
+wait the plugin controls: up to ten seconds per address for the WSS bind, a few seconds more to
+close one, and one `poll_interval` (0.5s) for a closing HTTPS server's `serve_forever` loop to
+notice `shutdown()` - real on a pass touching several addresses at once but not indefinite. That
+last figure is a real bound and not a best case: `Server.get_request` in `_serve_http` TLS-wraps
+each accepted connection, not the listening socket, and does so without
+`do_handshake_on_connect`, so `accept()` on that socket is a plain TCP accept and the
+`serve_forever` loop is never parked inside a handshake waiting for a peer that will never send
+anything (issue #100, fixed). The HTTPS bind itself does not add to the bound either:
 `Server.server_bind` in `_serve_http` skips the reverse-DNS
 lookup `http.server.HTTPServer` normally makes after binding, which over BT PAN resolves against
 the iPhone and, with nothing reachable at it, would otherwise cost seconds per address on top of
 the above.
-
-One wait is not bounded, and is not the plugin's to bound. Closing an address whose HTTPS server is
-mid-`accept()` calls `BaseServer.shutdown()`, which waits with no timeout for `serve_forever`'s
-loop to notice; a peer that completes the TCP connect and sends nothing parks that loop inside the
-TLS handshake indefinitely, and `stop()` waits for it. Pre-existing on `master`, a security defect
-in its own right, and tracked separately as issue #100 rather than folded into this rule.
 
 ##### What the enumeration itself guarantees
 
@@ -1234,8 +1234,20 @@ This is tested in `tests/test_handshakes.py` with both shapes. Never assume the 
 
 ### 2.15 HTTPS static server (D14)
 
-A `ThreadingHTTPServer` subclass whose socket is wrapped with `ssl_ctx.wrap_socket(...,
-server_side=True)`, running in its own thread, with `SimpleHTTPRequestHandler(directory=web_root)`.
+A `ThreadingHTTPServer` subclass running in its own thread, with
+`SimpleHTTPRequestHandler(directory=web_root)`. The listening socket itself is never TLS-wrapped;
+each *accepted* connection is, in `get_request()`, with `ssl_ctx.wrap_socket(conn,
+server_side=True, do_handshake_on_connect=False)`. That keeps `accept()` a plain TCP accept and
+lets the handshake happen lazily on the connection's first read, on the handler thread
+`ThreadingMixIn` spawns for it, not on the `serve_forever` loop (issue #100).
+
+That fix has a residual, and it is not one thread total, it is one thread and one file
+descriptor per silent peer. `daemon_threads = True` (`_serve_http`) is what stops
+`server_close()` waiting on a handshake that will never finish, which is the entire point of the
+fix above - but the same setting means that thread is never joined, by `stop()`, by a reload, or
+by anything else. It outlives all three: a peer that connects and sends nothing keeps its thread
+and its socket for the life of the process, and every further silent peer adds one more of each,
+unbounded in aggregate. Tracked separately as issue #102.
 
 Two requirements v1 omitted, both of which break the PWA silently:
 
@@ -1267,6 +1279,18 @@ Additional rules:
 - Log at debug only; a request log at info would flood the pwnagotchi log.
 - Directory listings disabled.
 - The server must not raise out of its thread; wrap `serve_forever` in try/except and log.
+- **An exception raised while handling a request is logged as the exception itself, at debug,
+  never as its frames.** `exc_info=True` (or an equivalent that lets the logger format the
+  traceback) is forbidden here for the same reason `end_headers` was fixed to stop doing it
+  (issue #93, #67): this server sits behind no check of its own, unlike the token on the WSS
+  side, so whoever can reach the port decides how often this path runs, and moving the TLS
+  handshake onto the handler thread (this section, issue #100) is what put a caller-triggered
+  exception in this handler in the first place - a broken or absent handshake now raises where a
+  request is handled, not at `accept()`. The two belong to one decision: a handler thread an
+  unauthenticated caller can enter at will must never let that caller choose what a traceback of
+  it writes into a log the caller does not own. The exception is logged by its `repr`, not
+  its `str`: `str()` of an `OSError` carries the path it failed on and `repr()` does not,
+  so the choice is part of the rule rather than a formatting preference.
 
 #### 2.15.1 Content-Security-Policy and the headers beside it (issue #67)
 
@@ -2639,6 +2663,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_listeners.py` | the teardown and error-guard paths of `Listeners`, which run only once something has already gone wrong and are what stands between a failure and a crash: the HTTP server thread surviving a `serve_forever` that raises; `_serve_ws` returning nothing and starting no loop when no client handler was supplied; closing an address that was never bound; a `shutdown()`, a `close()` and a `call_soon_threadsafe` that each raise, none of which may reach the caller; a websockets server object with no `wait_closed`; `stop()` idempotent and joining nothing when there is no loop thread. **The early returns are pinned by the silence of the log, not by the absence of an exception** - the guarded line below each of them swallows and logs, so removing the guard is invisible to a test that only asserts nothing raised |
 | `test_listeners_stop_race.py` | issue #90: `Listeners.stop()` racing `Listeners.reconcile()` on separate threads, driven into a deterministic overlap through the `Deps.list_local_ipv4` seam rather than left to chance - a teardown that starts while a pass is parked mid-flight leaves nothing bound afterwards, and a pass that runs after teardown already completed binds nothing, both asserted against real sockets and `socket.bind` and neither call ever raising. Also the two adjacent hangs the same lock exposed: a bind failure on one listener (WSS occupied) must still let `stop()` return and must not leave the other side listening; a serving thread that fails to start (`RuntimeError: can't start new thread`, injected by thread target rather than by address) must leave nothing in `self._bound`, must not hang `stop()`, and must not poison the address for a later pass. And the `server_bind` override: `socket.getfqdn` never runs during a bind, `server_name`/`server_port` are set from the literal address, and a real HTTPS request still returns the CSP header naming it |
+| `test_https_handshake_off_accept.py` | issue #100: the HTTPS accept loop no longer runs the TLS handshake itself. A peer that completes the TCP connect and sends nothing does not stop a normal HTTPS request to the same server getting served, does not stop `stop()` returning, and leaves nothing listening once `stop()` has run - all three asserted against real sockets and a real `Listeners` instance, with an explicit timeout on every wait so a regression fails the test rather than hanging the job. Also a peer that sends garbage instead of a ClientHello: the failed handshake does not block the next client either, and produces no raw traceback on either output it could reach - neither the log (via `caplog`, which also rejects a record carrying `exc_info`) nor stderr (via `capsys`, catching the `handle_error` override being removed outright rather than merely weakened) |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |

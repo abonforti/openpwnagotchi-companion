@@ -205,7 +205,7 @@
         "uptime",
         "face"
       ],
-      "why": "every Peer method peer_dict calls; the no-underscore and pwnd_tot forms do not exist"
+      "why": "every Peer method normalise_peer calls; the no-underscore and pwnd_tot forms do not exist"
     },
     {
       "id": "F16b",
@@ -220,7 +220,7 @@
         "last_channel",
         "rssi"
       ],
-      "why": "the Peer attributes peer_dict reads; last_channel, not channel"
+      "why": "the Peer attributes normalise_peer reads; last_channel, not channel"
     },
     {
       "id": "F17",

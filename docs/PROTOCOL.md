@@ -59,12 +59,26 @@ that the plugin was forked from, so an existing client keeps working.
 2. If the plugin is configured with a non-empty `token`, the client's **first** frame must be
    `auth`. Anything else, or nothing at all within `auth_timeout` seconds (default 10), closes
    the connection with code `1008`. When no token is configured this step is skipped entirely.
-3. On accept, the plugin sends an initial `stats`, `access_points` and `face_status` so the UI
-   has state without asking.
+3. **After** authentication has passed, never before it, the plugin sends an initial `stats`,
+   `access_points` and `face_status` so the UI has state without asking. The ordering is a
+   security requirement rather than a convenience: the burst carries the unit's state, and an
+   unauthenticated socket must not receive it. The same gate admits the socket to the broadcast
+   set, so an unauthenticated client receives no later push either — not the burst, and not
+   `wifi_update`, `handshake`, `peer_detected` or `status_change`.
 4. Steady state: the client polls what it needs and receives pushes as they happen.
-5. `keepalive` arrives periodically so an idle client can tell a quiet plugin from a dead link.
-   The client also sends `ping` on its own schedule and forces a reconnect if no `pong` comes
-   back within its timeout.
+5. `stats` arrives periodically, on the `keepalive_interval` tick, so an idle client can tell a
+   quiet plugin from a dead link **and** can tell fresh data from stale. A frame that carries
+   nothing proves only the first, and the client needs both. An empty `keepalive` rides the same
+   ticker and is kept for any client that already acts on it.
+
+   **Decided, not yet shipped.** Today only the empty `keepalive` goes out. Issue #65 tracks it,
+   and the problem behind it is settled: the broadcast moves onto a ticker of its own, sharing
+   nothing with the blocking bettercap call that used to stretch its period. Until that ships,
+   a client written against the period will not observe it, so do not ship one that depends on
+   it. Issue #65 is the gate.
+6. The client also sends `ping` on its own schedule and forces a reconnect if no `pong` comes
+   back within its timeout. That direction matters separately: the periodic broadcast proves the
+   downlink, and a command needs the uplink.
 
 ## Requests and replies
 

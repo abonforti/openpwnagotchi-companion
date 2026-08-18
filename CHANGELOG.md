@@ -14,6 +14,21 @@ against real hardware.
 
 ### Changed
 
+- **The two loop intervals are clamped: `keepalive_interval` to 5-20 s, `session_poll_interval`
+  to 1-5 s.** `stats` now rides a ticker of its own at `keepalive_interval` (SPEC §2.4, §4.3.7,
+  issue #65), so between
+  them they decide whether the app can tell fresh data from stale. The staleness threshold is
+  derived from the refresh episode rather than from the broadcast spacing, so above the ceiling
+  the app does not report a stall falsely; it reports it late, or steps over it between two
+  samples and misses it. `session_poll_interval` is clamped as well because it sets how soon
+  `sessionAge` is reset once bettercap answers again. **`degraded` now leaves the state-changing
+  controls enabled**, reversing an earlier decision: it means the unit is answering and its
+  bettercap data is old, not that the link is in doubt, and refusing a mode change there would
+  punish the user for a failure the unit can still act around. A configured `keepalive_interval = 0`, which used
+  to disable the broadcast, now takes the default 20 rather than the floor, so a unit that had it
+  switched off does not begin sending a full payload every second. The clamp is logged when it
+  applies. Nothing is broken for anyone by this: the `0`-disables behaviour it withdraws was
+  itself added in this same unreleased cycle and has never been in a tagged version.
 - **Breaking configuration change.** The plugin binds by address rather than by interface name:
   `interfaces = ["bnep0", "usb0"]` is replaced by
   `bind_addresses = ["172.20.10.0/28", "10.0.0.2"]`, whose entries are IPv4 addresses or CIDR
@@ -51,8 +66,9 @@ against real hardware.
   by those scripts, driving every command end to end.
 - `tests/tools/test_certs.py`: the certificate scripts driven with `subprocess` and inspected
   with `openssl`, in pytest rather than bats.
-- `keepalive` is now actually emitted, every `keepalive_interval` seconds (default 20, `0`
-  disables). It was in the schema and in `docs/PROTOCOL.md` but nothing sent it.
+- `keepalive` is now actually emitted, every `keepalive_interval` seconds (default 20). It was in
+  the schema and in `docs/PROTOCOL.md` but nothing sent it. The `0`-disables behaviour described
+  here was withdrawn later in this same unreleased cycle; see `Changed` above.
 - `.github/labels.json` and `.github/sync_labels.sh`: the label taxonomy as a file, and the
   script that applies it.
 

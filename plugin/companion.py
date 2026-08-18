@@ -2299,8 +2299,13 @@ class Listeners:
         where a request already accepted, or one landing before the accept
         loop noticed `shutdown()`, rendered a policy that omitted an address
         its own response was still using. Looked up rather than popped here so
-        the entry survives for that in-flight response; the pop below is what
-        actually drops it once both listeners have stopped taking new work.
+        the entry survives while the listeners are still taking work.
+
+        Not a guarantee for every in-flight response: shutdown() returns while a
+        handler may still be running, so a request accepted just before the close
+        can render after the pop and omit the address it arrived on. That
+        direction over-restricts a client whose listeners are already down, which
+        is the harmless one; the reverse ordering got it wrong the other way.
         """
         entry = self._bound.get(ip)
         if entry is None:

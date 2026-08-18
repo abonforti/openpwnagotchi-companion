@@ -1212,6 +1212,7 @@ Additional rules:
   the SPA fallback), 403 or 404 is acceptable; what is forbidden is disclosing the contents.
 - Log at debug only; a request log at info would flood the pwnagotchi log.
 - Directory listings disabled.
+- The server must not raise out of its thread; wrap `serve_forever` in try/except and log.
 
 #### 2.15.1 Content-Security-Policy and the headers beside it (issue #67)
 
@@ -1221,7 +1222,8 @@ never met. Escaping (issue #32) is one layer; this is the second, and the two fa
 An escape missed on one screen does not execute if inline script cannot run.
 
 **Emitted as a response header on every response the static server produces, never as a `<meta>`
-tag.** Every response includes the ones the server generates on its own: the 400 for a path
+tag.** A meta-delivered policy silently drops `frame-ancestors`, `sandbox`
+and reporting, which is three of the directives below. Every response includes the ones the server generates on its own: the 400 for a path
 containing `..`, the 404, and the errors raised before the request line is even parsed. That
 last case needs care in the handler, because the request path does not exist yet at that
 point, and reading it there means the response never leaves at all.
@@ -1230,8 +1232,7 @@ The exception is a request that never establishes an HTTP/1.x version: an HTTP/0
 unsupported version, a line with no version at all. The header machinery is inert until a
 version is set, so the server answers with a bare body or nothing. No browser produces any of
 them. Named by mechanism rather than by example, so the claim above can stay absolute for
-everything a client can actually send. A meta-delivered policy silently drops `frame-ancestors`, `sandbox` and reporting, which
-is three of the directives below.
+everything a client can actually send.
 
 ```
 default-src 'self';
@@ -1308,7 +1309,6 @@ change, with the escaping, rather than to this one.
 
 The residual risk is unchanged and stated in §9: both layers live inside the origin, so a
 compromised build artifact reads the token with the policy fully satisfied.
-- The server must not raise out of its thread; wrap `serve_forever` in try/except and log.
 
 ---
 
@@ -2548,7 +2548,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_auth.py` | token accepted, rejected, wrong type, missing; `compare_digest` used; unauthenticated connection closed after `auth_timeout`; auth skipped when no token configured |
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
-| `test_csp.py` | the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
+| `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
 | `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every authenticated client and to no unauthenticated one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |

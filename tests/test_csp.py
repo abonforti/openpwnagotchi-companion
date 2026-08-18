@@ -263,7 +263,7 @@ def test_the_tile_origin_appears_nowhere_else(get):
         # By host rather than by substring: the point is that no spelling of the
         # tile origin reaches another directive, and a host comparison says that
         # without also matching an unrelated origin that merely contains the name.
-        hosts = [(urlsplit(token).hostname or "").lstrip("*.") for token in tokens]
+        hosts = [(urlsplit(token).hostname or "").removeprefix("*.") for token in tokens]
         assert not any(
             host == "tile.openstreetmap.org" or host.endswith(".tile.openstreetmap.org")
             for host in hosts

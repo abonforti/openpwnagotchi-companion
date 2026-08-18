@@ -28,7 +28,10 @@ against real hardware.
   to disable the broadcast, now takes the default 20 rather than the floor, so a unit that had it
   switched off does not begin sending a full payload every second. The clamp is logged when it
   applies. Nothing is broken for anyone by this: the `0`-disables behaviour it withdraws was
-  itself added in this same unreleased cycle and has never been in a tagged version.
+  itself added in this same unreleased cycle and has never been in a tagged version. A value
+  that is not a usable number at all - a string, a boolean, `nan`, either infinity - takes the
+  default and is reported at `WARNING`, one level above the clamp, because a number outside
+  the range is a preference the plugin overrode while `"20s"` is a mistake worth surfacing.
 - **Breaking configuration change.** The plugin binds by address rather than by interface name:
   `interfaces = ["bnep0", "usb0"]` is replaced by
   `bind_addresses = ["172.20.10.0/28", "10.0.0.2"]`, whose entries are IPv4 addresses or CIDR

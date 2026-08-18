@@ -14,6 +14,7 @@ only for their argument handling.
 
 from __future__ import annotations
 
+import collections
 import importlib.util
 import json
 import re
@@ -257,3 +258,84 @@ def test_the_manifest_invents_no_facts():
     invented = {fact_number(fact["id"]) for fact in manifest["facts"]} - pinned
 
     assert not invented, f"pinned_symbols.json checks {sorted(invented)}, not in SPEC section 11"
+
+
+def spec_enumerations(spec: str) -> dict[str, set[str]]:
+    """Every "F<n>... pin ..." sentence in SPEC.md, keyed by fact number.
+
+    Two notations are accepted, because the manifest's own id scheme is not uniform:
+    a contiguous letter range like "F28a-d pin ..." (F28's four entries are lettered
+    a through d), and an explicit comma list like "F6, F6b pin ..." (F6's first entry
+    keeps the bare fact id, with only the second one lettered). Renaming ids to force
+    one notation would touch the manifest's facts, which is out of scope here, so the
+    parser accepts both rather than the SPEC sentence quietly lying about what exists.
+
+    Two things this does not do, deliberately left as a comment rather than closed,
+    because neither weakens what the test below detects: it scans the whole of
+    SPEC.md rather than the fact's own row, so a sentence counts wherever it sits in
+    the document; and if a fact somehow ended up with two sentences (one of each
+    notation, or two of the same), the second write to `enumerated[number]` silently
+    wins over the first rather than being flagged as a conflict. Both would need a
+    row-scoped parse to close, which the current regexes do not attempt.
+    """
+    enumerated: dict[str, set[str]] = {}
+
+    for digits, start, end in re.findall(r"\bF(\d+)([a-z])-([a-z]) pin\b", spec):
+        enumerated[f"F{digits}"] = {f"F{digits}{chr(c)}" for c in range(ord(start), ord(end) + 1)}
+
+    for group in re.findall(r"\b((?:F\d+[a-z]?)(?:, F\d+[a-z]?)+) pin\b", spec):
+        listed = group.split(", ")
+        enumerated[fact_number(listed[0])] = set(listed)
+
+    return enumerated
+
+
+def test_every_multi_entry_fact_has_a_spec_sentence_naming_its_entries():
+    """Entry-level granularity, for every fact that needs more than one manifest entry.
+
+    The two tests above work at fact-number granularity: fact_number() folds F28a-d back
+    to F28, so a fact with several entries reads as "covered" as long as at least one of
+    them survives. That is the gap issue #63 describes - deleting F28d, the entry that
+    asserts pwnagotchi/ui/display.py declares no get of its own, leaves F28 "covered" by
+    its three siblings and every test above green, even though the absence those siblings
+    depend on is no longer checked.
+
+    Rather than hand this test a second, separately-maintained count, it makes the
+    enumeration a rule instead of a coincidence: any fact with more than one manifest
+    entry must be named, in full, by a "F<n>... pin ..." sentence in SPEC.md - the same
+    phrasing F28 already used before this change, generalised to a comma list where the
+    ids are not a clean letter range. A fact that gains or loses an entry without the
+    sentence changing to match is exactly what this catches, for every such fact, not
+    only F28.
+    """
+    spec = (REPO_ROOT / "SPEC.md").read_text(encoding="utf-8")
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    ids = [fact["id"] for fact in manifest["facts"]]
+
+    by_number = collections.defaultdict(set)
+    for entry_id in ids:
+        by_number[fact_number(entry_id)].add(entry_id)
+    multi_entry = {number: entries for number, entries in by_number.items() if len(entries) > 1}
+
+    enumerated = spec_enumerations(spec)
+
+    unsentenced = sorted(number for number in multi_entry if number not in enumerated)
+    assert not unsentenced, (
+        f"facts {unsentenced} have more than one entry in pinned_symbols.json but no "
+        "'F<n>... pin ...' sentence in SPEC.md naming them; add one to the fact's row, "
+        "listing exactly the entries that cover it, e.g. "
+        f"'{unsentenced[0]}, {unsentenced[0]}b pin ...'"
+    )
+
+    # Checked against every sentenced fact, not just multi_entry: a fact whose bare,
+    # unlettered id is the one that survives a deletion (F6, F16, F23 all keep it) would
+    # otherwise drop back to a single entry and quietly leave multi_entry, escaping the
+    # check that is supposed to catch exactly that deletion.
+    for number, sentenced in enumerated.items():
+        entries = by_number.get(number, set())
+        missing = sentenced - entries
+        extra = entries - sentenced
+        assert not missing and not extra, (
+            f"SPEC.md's sentence for {number} names {sorted(sentenced)} but "
+            f"pinned_symbols.json actually has {sorted(entries)} for it; keep them in sync"
+        )

@@ -275,3 +275,27 @@ jobs:
             exit 1
           fi
           echo "no coverage exclusions found"
+
+      # Svelte escapes {...} by default, so the safe path is the default one and
+      # {@html} is the only way to leave it. Every string this app renders that a
+      # stranger chose - SSIDs, peer names, faces, log lines - would go through it
+      # (SPEC 4.5.3). Banned outright rather than reviewed case by case, because a
+      # reviewer who is tired is exactly the failure this protects against.
+      #
+      # The pattern is the tag rather than `{@html`, because `{ @html x}` compiles
+      # just as well and a formatter is enough to produce it. `@html` means nothing
+      # else in this tree, so matching it alone costs no false positives and cannot
+      # be spaced around.
+      #
+      # This catches the Svelte construct and only that. The other two rules of
+      # 4.5.3, handlers bound rather than built as markup and context-appropriate
+      # escaping, have no gate: a green hygiene job is not the escaping rule
+      # enforced, it is one sink closed.
+      - name: No unescaped markup
+        run: |
+          if git grep -n -E '@html' -- 'frontend/src/*' > /dev/null 2>&1; then
+            echo "::error::'{@html}' is banned (SPEC.md 4.5.3)."
+            git grep -n -E '@html' -- 'frontend/src/*'
+            exit 1
+          fi
+          echo "no unescaped markup found"

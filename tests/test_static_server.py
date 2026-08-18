@@ -100,6 +100,34 @@ def test_javascript_is_text_javascript(get, path):
     assert headers["content-type"].startswith("text/javascript")
 
 
+# ---------------------------------------------------------------------------
+# Charset (SPEC 4.2, SPEC 2.15)
+# ---------------------------------------------------------------------------
+
+# WebKit does not sniff an undeclared encoding and falls back to a single-byte
+# one, so every non-ASCII byte in the document - the whole pwnagotchi face
+# vocabulary, any SSID with one - renders as mojibake. The <meta charset> tag
+# in the document only helps within its own 1024-byte window and only for a
+# document opened outside the plugin; the header set here is the one that
+# always wins and the one asserted below.
+
+
+def test_index_html_carries_the_utf8_charset_header(get):
+    _, headers, _ = get("/index.html")
+
+    assert headers["content-type"] == "text/html; charset=utf-8"
+
+
+def test_the_spa_fallback_also_carries_the_utf8_charset_header(get):
+    # The fallback is a different code path from a direct index.html request
+    # (SPEC 2.15) and it is the one a deep link or a refresh hits, so the
+    # charset rule has to hold there independently rather than being inferred
+    # from the direct-request case above.
+    _, headers, _ = get("/peers")
+
+    assert headers["content-type"] == "text/html; charset=utf-8"
+
+
 @pytest.mark.parametrize(
     "path,expected",
     [

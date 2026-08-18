@@ -52,7 +52,7 @@ def web_root(tmp_path):
 
 @pytest.fixture
 def server(web_root):
-    handler = companion.make_http_handler(str(web_root))
+    handler = companion.make_http_handler(str(web_root), lambda: ["172.20.10.2"], 8082)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -224,7 +224,9 @@ def test_a_hashed_asset_may_be_cached(get):
 
 
 def test_a_missing_web_root_does_not_take_the_server_down(tmp_path):
-    handler = companion.make_http_handler(str(tmp_path / "never-installed"))
+    handler = companion.make_http_handler(
+        str(tmp_path / "never-installed"), lambda: ["172.20.10.2"], 8082
+    )
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()

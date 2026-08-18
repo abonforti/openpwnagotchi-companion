@@ -2352,8 +2352,8 @@ class Listeners:
         try:
             server.shutdown()
             server.server_close()
-        except Exception:
-            pass
+        except Exception as err:
+            log.debug("[companion] http server shutdown failed: %s", err)
 
     def _shutdown_ws(self, server: Any) -> None:
         """Closes a WSS server and waits for it, on the loop that owns it.
@@ -2374,8 +2374,8 @@ class Listeners:
 
         try:
             asyncio.run_coroutine_threadsafe(close(), self._loop).result(timeout=5)
-        except Exception:
-            pass
+        except Exception as err:
+            log.debug("[companion] ws server shutdown failed: %r", err)
 
     def stop(self) -> None:
         """Closes every listener. Idempotent."""
@@ -2387,16 +2387,16 @@ class Listeners:
             return
         try:
             loop.call_soon_threadsafe(loop.stop)
-        except Exception:
-            pass
+        except Exception as err:
+            log.debug("[companion] could not stop the ws loop: %s", err)
         if thread is not None:
             thread.join(timeout=2)
         try:
             # Stopping the loop is not closing it; an unclosed loop leaks its
             # selector and surfaces as a ResourceWarning somewhere unrelated.
             loop.close()
-        except Exception:
-            pass
+        except Exception as err:
+            log.debug("[companion] could not close the ws loop: %s", err)
 
 
 # ---------------------------------------------------------------------------

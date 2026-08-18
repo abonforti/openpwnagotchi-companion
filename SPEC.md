@@ -2439,7 +2439,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 
 | File | Covers |
 |---|---|
-| `test_stats.py` | field-by-field `stats` mapping; `pasv_or_auto` across all four states; `capabilities` reflects `plugins.loaded`; **asserts `session()` call count is 0** during `get_stats` |
+| `test_stats.py` | field-by-field `stats` mapping; `pasv_or_auto` across all four states; `capabilities` reflects `plugins.loaded`; **asserts `session()` call count is 0** during `get_stats`; `SessionCache.refresh` before `on_ready` (agent getter returning `None`) and on a non-`Mapping` bettercap snapshot both return `False` without raising and leave a prior snapshot and its climbing age untouched, and the `None`-agent case is asserted to log nothing at all - it is a normal startup state, not the failure a dead bettercap logs |
 | `test_access_points.py` | `mac`→`bssid` mapping; `clients: None`; missing keys; empty list |
 | `test_handshakes.py` | SSID containing underscores; `.pcap` and `.pcapng`; unparseable name yields `bssid: null`; sidecar present/absent/malformed; 500-entry cap sets `truncated`; unreadable file skipped; both `on_handshake` argument shapes normalise identically |
 | `test_peers.py` | every field in the §2.8 table; the `datetime` vs float `last_seen` asymmetry; a `Peer` whose timestamp parsing fell back to `str`; missing `adv` keys |

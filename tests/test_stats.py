@@ -8,6 +8,8 @@ answer. `get_stats` must make exactly zero of them, and the fake agent counts.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from conftest import FakeAgent
@@ -174,6 +176,81 @@ def test_session_cache_survives_a_failing_session_call(harness):
     assert cache.refresh() is False
     assert cache.snapshot == {}
     assert cache.age is None
+
+
+def test_refresh_before_on_ready_returns_false_without_a_snapshot(harness):
+    # `agent_getter` returns `None` in the window between plugin load and
+    # `on_ready`, before `self.agent` exists at all (SPEC 2.1). `refresh()`
+    # must not blow up reaching for `.session()` on that `None`.
+    cache = companion.SessionCache(lambda: None, harness.deps, 5)
+
+    assert cache.refresh() is False
+    assert cache.snapshot == {}
+    assert cache.age is None
+
+
+def test_refresh_before_on_ready_logs_no_failure(harness, caplog):
+    # The window before `on_ready` is a normal startup state, not bettercap
+    # being unreachable - the two must not read the same in the log a client
+    # or the owner actually reads on the device. Assert the absence of any
+    # record, not the absence of one particular sentence: pinning the exact
+    # wording would break on a harmless rephrasing.
+    cache = companion.SessionCache(lambda: None, harness.deps, 5)
+
+    with caplog.at_level(logging.DEBUG, logger="plugin.companion"):
+        cache.refresh()
+
+    assert caplog.records == []
+
+
+def test_refresh_before_on_ready_leaves_a_prior_snapshot_climbing_not_reset(
+    harness, bettercap_session
+):
+    # Once a snapshot exists, a later call that finds no agent must not throw
+    # it away or reset its age to zero - the age is what SPEC 4.3.1 reads to
+    # decide `degraded`, so a spurious reset would hide staleness instead of
+    # reporting it.
+    agent = FakeAgent(session_payload=bettercap_session)
+    box = {"agent": agent}
+    cache = companion.SessionCache(lambda: box["agent"], harness.deps, 5)
+    assert cache.refresh() is True
+    harness.advance(3.0)
+
+    box["agent"] = None
+    assert cache.refresh() is False
+    harness.advance(4.0)
+
+    assert cache.snapshot["gps"]["Latitude"] == pytest.approx(-33.512345)
+    assert cache.age == pytest.approx(7.0)
+
+
+def test_refresh_rejects_a_non_mapping_snapshot(harness):
+    # Bettercap's REST API is not this plugin's to trust blindly; a shape that
+    # is not a Mapping (a list, a string, ...) must be refused rather than
+    # cached and later indexed with `[...]` by a reader.
+    agent = FakeAgent()
+    agent._session_payload = ["not", "a", "mapping"]
+    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+
+    assert cache.refresh() is False
+    assert cache.snapshot == {}
+    assert cache.age is None
+
+
+def test_refresh_with_a_non_mapping_snapshot_leaves_a_prior_snapshot_climbing_not_reset(
+    harness, bettercap_session
+):
+    agent = FakeAgent(session_payload=bettercap_session)
+    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+    assert cache.refresh() is True
+    harness.advance(2.0)
+
+    agent._session_payload = ["not", "a", "mapping"]
+    assert cache.refresh() is False
+    harness.advance(5.0)
+
+    assert cache.snapshot["gps"]["Latitude"] == pytest.approx(-33.512345)
+    assert cache.age == pytest.approx(7.0)
 
 
 # ---------------------------------------------------------------------------

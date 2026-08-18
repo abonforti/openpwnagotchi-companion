@@ -1624,9 +1624,10 @@ verification is recorded so it is not re-derived by the next person to see a bla
 
 - Connect to `wss://<host>:<ws_port>` from settings. Reconnect with exponential backoff plus
   jitter, capped.
-- Outbound queue with a per-message `message_id`; resolve on the matching `acknowledgment`;
-  re-send on reconnect. Heartbeat `ping` every N seconds; force a reconnect if no `pong`
-  arrives within the timeout.
+- Outbound queue with a per-message `message_id`, and **reads are re-sent on reconnect while
+  state commands are not** (§4.3.3). **A read resolves on its typed reply, a command on its
+  `acknowledgment`** (§4.3.8).
+- Heartbeat `ping` every N seconds; force a reconnect if no `pong` arrives within the timeout.
 - If a token is set, send `{type:'auth',token}` as the first frame.
 - Typed `send()` plus an event dispatch that updates the stores. Types come from
   `lib/protocol.ts`, which is **generated** from `docs/schemas` by
@@ -2020,6 +2021,68 @@ the post-`1.0` one: removing the message type is MINOR there, and adding a perio
 an existing type is PATCH, since no message shape changes and a client that ignores it is
 unaffected. After `1.0` the same removal would be MAJOR, which is a reason to decide it before
 then rather than after.
+
+#### 4.3.8 What a request resolves with, and when its clock starts
+
+**A read resolves on its typed reply. A command resolves on its `acknowledgment`.** Not
+"whichever arrives first", which is the reading that looks equivalent and is not.
+
+`Router.handle` appends the `acknowledgment` **before** the typed reply for every message that
+carried a `message_id` (§10.7.2). So a promise that settles on the first correlated frame settles
+on the acknowledgment every time, deterministically, and `get_handshakes` resolves with a receipt
+rather than with handshakes. The caller is then left fishing its own answer out of the message
+stream with no correlation, which is the thing the `message_id` exists to spare it.
+
+The two cases differ because the reply differs. For `set_mode`, `set_pasv`, `reboot` and
+`shutdown` the acknowledgment **is** the reply: there is no typed answer, and §4.3.4 is explicit
+that the acknowledgment means the command was accepted rather than that its effect is visible.
+For a read the acknowledgment is a transit receipt, and the answer is the `stats`,
+`access_points`, `handshakes_list` or `log_lines` frame behind it. Those are the names in
+`docs/schemas/outgoing/`, which is the only place they come from.
+
+An `error` carrying the `message_id` settles either one, as a failure.
+
+**The 15 s request timeout runs from the call, not from the send.** A read asked for while the
+socket is down is queued (§4.3.3) and its timer starts anyway, because the caller is a view that
+will otherwise wait for ever on a promise nobody will settle: the app is designed around a link
+that drops, so "queued" is a normal condition and not a pause in the contract. A read that times
+out while still queued leaves the queue with it; re-sending on reconnect applies to what is still
+outstanding, not to what has already failed.
+
+#### 4.3.9 Three smaller decisions the connection layer needs
+
+**The token is re-read from storage on every connect attempt**, unless the caller supplied one
+explicitly, which then wins for as long as that client lives. The explicit form is for a caller
+that already holds the value; it is not how the app gets its token. The app stores the token and
+lets the client read it, which is what makes changing it take effect on the next attempt. §4.3.1 has the row
+`unauthorized` → the user changes the stored token → `connecting`, and a client that captured the
+token once at construction cannot honour it: it re-sends the rejected value for ever, and
+clearing the token to reach the tokenless path does nothing. **The client does not watch
+storage**, so the transition belongs to whoever changed the token: the settings screen writes it
+and then asks the client to connect. A token changed with nobody calling `connect()` changes
+nothing, which is the right division and not an omission. The key is **`companion.token`**,
+pinned here rather than left to each module, because it persists in every installed PWA and
+renaming it later logs everyone out with no way to tell them why. Storing an empty string is
+storing nothing: the read answers `null` for it rather than the empty string, so clearing and
+setting to `""` are the same act, and a caller testing for `null` is not misled by a value that
+is present and useless.
+
+**A client with no token configured sends nothing until the first frame arrives from the unit.**
+It may not flush its queue when the socket opens. §4.3.1 needs to tell *rejected* from *required*,
+and a tokenless client talking to a unit that does require a token would draw
+`error unauthorized` from its own first read and land in *rejected*, which is the wrong sentence
+to show: the user has no token, they did not supply a wrong one. The unit answers this by itself.
+With no token configured the burst goes out on accept (§2.4), so the arrival of any frame is the
+unit saying it admitted the socket, and its absence is the unit saying it did not. The gate is per
+socket rather than per client: every reconnection has to see its own first frame, because what
+is being read is whether *this* connection was admitted, and a latch set once would carry an old
+answer across a token that changed in between.
+
+**Before `connect()` is called there is no connection, and `state()` reports `offline`.** That is
+the honest value, but `offline` carries the calm copy about the Personal Hotspot (§4.3.1), and
+showing it to someone who has not yet asked for anything would answer a question nobody put. A
+view renders connection copy only after `connect()`; the state before that is for the code, not
+for the screen.
 
 ### 4.4 Stores (`lib/stores.ts`)
 
@@ -2744,6 +2807,17 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
 - `ws.spec.ts` against a mock WebSocket: backoff with jitter, queue drain on reconnect,
   `acknowledgment` resolution, `message_id` correlation, heartbeat timeout forcing a reconnect,
   auth frame sent first, `restarting` entering the dedicated state instead of the error banner.
+  **Every row of the §4.3.1 table has a test named for it**, which is the point of writing that
+  section as a table: a row with no test is the missing exit the table exists to prevent. Beyond
+  the rows: that a read resolves on its typed reply and a command on its `acknowledgment`
+  (§4.3.8), which is not the same rule and looked like it was; that the request clock starts at
+  the call rather than at the send, so a read asked for while the socket is down still fails in
+  15 s instead of hanging for ever; that the token is re-read from storage on each attempt, so a
+  corrected token actually reaches the wire; that a client with no token stays silent until the
+  unit speaks, per socket and not per client; that `unauthorized` carries the reason its two
+  entry paths differ by; and that a state command in flight when the socket drops is reported as
+  failed rather than re-sent, which is the reboot-in-a-pocket scenario §4.3.3 is written for.
+  The clock is faked throughout: a 55 s threshold must cost the suite no wall-clock time.
 
   Then everything §4.3 decides, because a rule with no test is a rule until somebody disagrees
   with it. **Backoff**: each delay drawn from `[0, cap]` and never above the cap, over enough

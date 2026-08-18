@@ -1953,7 +1953,39 @@ def build_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext | None:
     return context
 
 
-def make_http_handler(web_root: str) -> type:
+def content_security_policy(bound_addresses: Sequence[str], ws_port: int) -> str:
+    """Builds the Content-Security-Policy header value for one response.
+
+    `connect-src` names `'self'` plus one `wss://<address>:<ws_port>` origin
+    per address the plugin is currently bound to (SPEC 2.15.1, 2.3.1), so it
+    must be rebuilt per request rather than cached: a rebind changes the
+    bound set and the header has to follow it. Every address reaching here is
+    an IPv4 literal - `Listeners` enforces that on both sides of the address
+    seam (SPEC 2.3.1) - so none needs the bracket an IPv6 literal would need
+    in a URL authority.
+    """
+    connect_src = " ".join(
+        ["'self'"] + [f"wss://{ip}:{ws_port}" for ip in bound_addresses]
+    )
+    return (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data: https://*.tile.openstreetmap.org; "
+        f"connect-src {connect_src}; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "form-action 'none'; "
+        "frame-ancestors 'none'"
+    )
+
+
+def make_http_handler(
+    web_root: str,
+    bound_addresses: Callable[[], Sequence[str]],
+    ws_port: int,
+) -> type:
     """Builds the request handler class serving `web_root` over HTTPS.
 
     Two behaviours that are easy to omit and break the PWA silently (D14):
@@ -1969,6 +2001,11 @@ def make_http_handler(web_root: str) -> type:
     containing .. are rejected with 400 before any resolution, directory
     listings are disabled, and index.html and the service worker are sent
     no-cache while hashed assets are not.
+
+    `bound_addresses` is called on every response, not just once at bind time,
+    so the Content-Security-Policy header (SPEC 2.15.1) reflects the bound set
+    as it stands when the response is sent, including one taken after a
+    rebind.
     """
     import http.server
 
@@ -2027,10 +2064,25 @@ def make_http_handler(web_root: str) -> type:
             return super().send_head()
 
         def end_headers(self) -> None:
-            name = os.path.basename(self.path.split("?", 1)[0])
+            # `self.path` is unset when the request line itself was rejected: a malformed
+            # line, one over the length limit, or an unsupported HTTP version all call
+            # send_error before parse_request assigns it. Reading it there raised, and the
+            # response never left, so a caller who sent garbage got a traceback in the log
+            # and nothing on the wire.
+            name = os.path.basename(getattr(self, "path", "").split("?", 1)[0])
             if name in ("", "index.html", "sw.js", "service-worker.js", "registerSW.js"):
                 # Everything else Vite emits is content-hashed and immutable.
                 self.send_header("Cache-Control", "no-cache")
+            # On every response, not only the ones above: the token lives in
+            # localStorage and anything that runs script on this origin reads
+            # it (SPEC 2.15.1). `bound_addresses` is called here, not cached,
+            # so a rebind is reflected on the very next response.
+            self.send_header(
+                "Content-Security-Policy",
+                content_security_policy(bound_addresses(), ws_port),
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
             super().end_headers()
 
     return Handler
@@ -2138,6 +2190,12 @@ class Listeners:
         nothing the other two do not while being free to drift from them. Any
         new caller must go through that selection, not call `_open` with an
         address from elsewhere.
+
+        The HTTPS server is created and TLS-wrapped here but not started: its
+        serving thread is only launched once `self._bound[ip]` holds this
+        address, so a request cannot be dispatched, and answered with a
+        Content-Security-Policy header, before that address exists to be
+        named in it (SPEC 2.15.1).
         """
         http_server = ws_server = None
         try:
@@ -2148,6 +2206,7 @@ class Listeners:
             self._shutdown_http(http_server)
             return
         self._bound[ip] = (ws_server, http_server)
+        self._start_http(http_server, ip)
         log.info(
             "[companion] listening on wss://%s:%s and https://%s:%s",
             ip,
@@ -2157,10 +2216,20 @@ class Listeners:
         )
 
     def _serve_http(self, ip: str) -> Any:
-        """Starts the HTTPS static server on its own thread."""
+        """Creates and TLS-wraps the HTTPS static server. Does not serve yet.
+
+        The socket is already bound and listening once the constructor below
+        returns - connections can queue in the backlog - but nothing is
+        accepted until `_start_http` runs the serving thread, which `_open`
+        only does after `self._bound[ip]` is set.
+        """
         import http.server
 
-        handler = make_http_handler(str(option(self._options, "web_root")))
+        handler = make_http_handler(
+            str(option(self._options, "web_root")),
+            lambda: sorted(self._bound),
+            int(option(self._options, "ws_port")),
+        )
 
         class Server(http.server.ThreadingHTTPServer):
             daemon_threads = True
@@ -2168,6 +2237,11 @@ class Listeners:
 
         server = Server((ip, int(option(self._options, "http_port"))), handler)
         server.socket = self._ssl.wrap_socket(server.socket, server_side=True)
+        return server
+
+    @staticmethod
+    def _start_http(server: Any, ip: str) -> None:
+        """Starts the HTTPS static server's serving thread."""
 
         def run() -> None:
             try:
@@ -2176,7 +2250,6 @@ class Listeners:
                 log.debug("[companion] http server on %s stopped: %s", ip, err)
 
         threading.Thread(target=run, daemon=True).start()
-        return server
 
     def _serve_ws(self, ip: str) -> Any:
         """Starts the WSS server on the shared asyncio loop."""
@@ -2219,13 +2292,28 @@ class Listeners:
         return loop
 
     def _close(self, ip: str) -> None:
-        """Closes both listeners bound on one address, dropping its clients."""
-        entry = self._bound.pop(ip, None)
+        """Closes both listeners bound on one address, dropping its clients.
+
+        Stops serving before removing the entry, not after: `self._bound`
+        drives `connect-src` (SPEC 2.15.1), and popping first left a window
+        where a request already accepted, or one landing before the accept
+        loop noticed `shutdown()`, rendered a policy that omitted an address
+        its own response was still using. Looked up rather than popped here so
+        the entry survives while the listeners are still taking work.
+
+        Not a guarantee for every in-flight response: shutdown() returns while a
+        handler may still be running, so a request accepted just before the close
+        can render after the pop and omit the address it arrived on. That
+        direction over-restricts a client whose listeners are already down, which
+        is the harmless one; the reverse ordering got it wrong the other way.
+        """
+        entry = self._bound.get(ip)
         if entry is None:
             return
         ws_server, http_server = entry
         self._shutdown_http(http_server)
         self._shutdown_ws(ws_server)
+        self._bound.pop(ip, None)
 
     @staticmethod
     def _shutdown_http(server: Any) -> None:

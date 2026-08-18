@@ -154,6 +154,27 @@ If you find a vulnerability, report it privately through
 [GitHub's private vulnerability reporting](https://github.com/abonforti/openpwnagotchi-companion/security/advisories/new)
 rather than opening a public issue. See [SECURITY.md](SECURITY.md).
 
+### `{@html}` is banned in the frontend
+
+Almost every string this app displays was chosen by somebody else: SSIDs are 32 bytes of
+anything and this is a tool for showing the names of networks nobody here selected, peer names
+and faces arrive over the mesh from another person's unit, and log lines carry whatever a plugin
+logged. The page that renders them also holds the reboot control and, in `localStorage`, the
+token.
+
+Svelte escapes `{...}` by default, so the safe path is the default one, and `{@html}` is the way
+out of it. There is no case in this product that needs one. CI greps for it and fails the build,
+the same way it fails on `# pragma: no cover`. The grep reads tracked files, so running it locally
+before `git add` will tell you a new file is clean when it has not been looked at.
+
+Instead: render the string as text. Bind event handlers rather than writing them into markup, so
+that an apostrophe in a network name cannot end a handler and start something else. If a value
+has to reach a URL, an attribute or a style, escape it for that context, which is not the same
+escaping in each case.
+
+If you believe you have found the case that needs `{@html}`, that is a specification question
+(SPEC §4.5.3), not a local judgement call. Open an issue.
+
 ## Issues
 
 Anything worth mentioning is worth an issue: a defect, a gap, a dead link, a TODO left behind.

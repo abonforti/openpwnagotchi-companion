@@ -1732,7 +1732,9 @@ somebody else, so an injection there reaches the token. **Two layers are planned
 of writing, neither exists.** Both are tickets rather than mitigations, and the difference
 matters enough to say plainly rather than to imply protection that is not there yet.
 
-1. **Escaping of remote strings**, issue #32.
+1. **Escaping of remote strings**, issue #32. **The rule exists** (§4.5.3) and CI enforces the
+   part of it a grep can reach; the hostile-name fixtures wait on the views that would render
+   them.
 2. **A Content-Security-Policy** on the static server, issue #67. Specified separately because it
    has to name the OpenStreetMap tile origin: D2 locks the map to Leaflet with OSM tiles loaded
    over the phone's cellular link, so the app is **not** self-contained and the policy has to
@@ -2002,6 +2004,38 @@ finds rather than silently passing them.
   suggested with a note that it is desktop-only — an iPhone cannot use the USB gadget path),
   ws/http ports, optional token, quick-connect from history, diagnostics (last error, latency,
   negotiated plugin version).
+
+### 4.5.3 Remote strings are attacker-chosen (issue #32)
+
+Every string this app renders that did not come from the owner came from somebody else, and on
+this product that somebody is within radio range rather than on the other side of an account
+system. SSIDs are 32 bytes of anything and this is a tool for displaying the names of networks it
+did not choose to see. `Peer.fullName`, `Peer.face` and `Peer.identity` arrive over pwngrid from
+another person's unit. Handshake filenames are derived from SSIDs. Log lines are whatever any
+plugin logged, which on a pwnagotchi includes the SSIDs it just saw.
+
+The payload lands on the owner's phone, in a page that also holds the reboot and shutdown
+controls and, in `localStorage`, the token (§4.3.6). So the rule is not a style preference:
+
+- **`{@html}` is banned.** Svelte escapes `{...}` by default, which makes the safe path the
+  default one; `{@html}` is the only way out of it, and there is no case in this product that
+  needs one. If a case ever seems to, that is a specification question and not a local decision.
+  CI greps for it, in the same spirit as the `# pragma: no cover` ban.
+- **Event handlers are bound, never built as markup.** An inline handler assembled by string
+  concatenation breaks on an apostrophe with no hostility at all, and executes with a little.
+- **A remote string is rendered as text.** Never into a URL, an attribute or a style without the
+  escaping that context needs, which is not the same escaping in each of them.
+
+This is one of two layers. The other is a Content-Security-Policy on the static server, issue
+#67, which is not shipped yet: when it is, an escape missed on one screen will not execute,
+because inline script will not run. They fail independently, which is the only reason two
+layers are worth more than one careful one, and until the second lands this rule is carrying
+the whole weight on its own.
+
+The tests for it belong with the views that render these strings, and cannot be written before
+them: a hostile-name fixture asserted to render as text, with an SSID containing `<script>`, one
+that is nothing but quotes, a peer name carrying markup, and a log line carrying an SSID that
+does.
 
 ### 4.6 Geolocation (`lib/geo.ts`)
 

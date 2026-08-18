@@ -1123,8 +1123,8 @@ clients through the async queue, as pwnios does. `on_ui_update` diffs face/statu
 key answers `None` and is sent as an empty string, because the schema types both fields as
 strings. Keep the heartbeat/keepalive machinery from pwnios.
 
-Three consequences of that source, stated because each was inferred once and should not have to
-be inferred again:
+Consequences of that source, stated because each was inferred once and should not have to be
+inferred again:
 
 - **`status_change.status` is the same view status**, not a separate string. The mood hooks carry
   a mood and the text the unit is displaying at that moment, and the view is the only source
@@ -1132,7 +1132,27 @@ be inferred again:
 - **A view that cannot be read yields empty strings, never a missing field or a null.** That
   covers `Agent.view()` raising and `View.get` raising as well as the absent key above. The
   schema requires three strings, so the alternative is a message that fails its own contract at
-  the moment the unit is already misbehaving.
+  the moment the unit is already misbehaving. This is deliberately not distinguishable from a
+  genuinely empty face or status: the protocol carries display text, not display health, and it
+  carries no signal that reports this class of failure at all. `degraded` (§4.3.1) does not
+  answer this either, since it is defined purely on `stats.sessionAge` staleness, and a unit
+  with a collapsed view stays `connected` with a perfectly fresh session age.
+- **An unreadable `mode` degrades to `"AUTO"`, not to an empty string**, unlike `face` and
+  `status`. `common.json` `$defs.Mode` types it as an enum (`AUTO`, `PASV`, `MANUAL`), and an
+  empty string is not a shape the contract allows there, so the empty-string rule above cannot
+  extend to this field. `"AUTO"` is already what an agent-less unit reports, so the fallback
+  costs nothing new to the schema, but it does cost precision: a client cannot tell an
+  `"AUTO"` that was actually read from an `"AUTO"` that was guessed because the mode could not
+  be determined. That is accepted deliberately; the alternative, a fourth enum member such as
+  `UNKNOWN`, changes the wire format for a path that is nearly unreachable (§11 pins `mode` as a
+  plain attribute, not a property that is expected to raise), and it would leak into
+  `stats.mode`, which shares the same `$ref`.
+- **Both of those rules exist so that `face_status` is pushed, never suppressed.** A hook that
+  cannot build any part of the payload must still build the rest of it, because silence on this
+  channel is indistinguishable from a plugin that has stopped, and the client has no state that
+  means "the hook is failing but the process is alive." A partial payload is worse information
+  than a complete one, but it is strictly better than nothing, because it still tells the client
+  the socket is alive.
 - **The rule in §2.5 that `agent.session()` must not be called on the request path is general**,
   not local to `stats`. It is written under that payload because that is where it was first
   violated upstream, but it binds every handler and every hook.
@@ -2583,7 +2603,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_binding.py` | selection: literal match, containment in a block, a local address matching nothing; every entry-validation row of §2.3.1, including the `/24` floor, host bits normalised, a non-list value, and the empty-after-rejection case; a legacy `interfaces` key warns and binds nothing; the reconciliation table: appear, disappear, a new address in the same block, none matching, `EADDRINUSE`; asserts `0.0.0.0` is never passed to a bind call and that no bind decision reads an interface name |
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
-| `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed, the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
+| `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
 | `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every authenticated client and to no unauthenticated one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |
 

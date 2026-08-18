@@ -1261,8 +1261,11 @@ Two requirements v1 omitted, both of which break the PWA silently:
 
    `.js` and `.mjs` must be `text/javascript` — a service worker served with the wrong type is
    rejected by the browser. `.webmanifest` is `application/manifest+json`, `.ico` is
-   `image/vnd.microsoft.icon`, `.map` is `application/json`. For the rest what matters is only
-   that nothing the app needs arrives as `application/octet-stream`.
+   `image/vnd.microsoft.icon`, `.map` is `application/json`. **`.html` must be
+   `text/html; charset=utf-8`**, charset included: the transport layer outranks the document's
+   own `<meta charset>`, so this is what actually decides how the page is decoded, and §4.2 says
+   what a wrong decode costs. For the rest what matters is only that nothing the app needs
+   arrives as `application/octet-stream`.
 
 2. **SPA fallback.** For a `GET` whose path does not resolve to an existing file and does not
    look like an asset request, serve `index.html` with status 200 so deep links and refreshes
@@ -1501,13 +1504,42 @@ HTTPS fails quietly, the service worker never registers, and the app appears sim
 
 ### 4.2 iOS specifics (mandatory)
 
-- `index.html` head:
+- `index.html` head, with the charset declaration **first**:
   ```html
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
   ```
+
+  The charset is first because it is only honoured within the first 1024 bytes of the document.
+  It is mandatory because a document that does not declare one is decoded with an
+  implementation-defined fallback: served without the tag and without a charset in the
+  `Content-Type`, both Chromium and WebKit decode as `windows-1252` and `(◕‿‿◕)` renders as
+  `(â—•â€¿â€¿â—•)`. Measured in this repository's own Playwright harness, including with a body
+  full of non-ASCII text to give an encoding detector something to work with.
+
+  Issue #39 recorded this as WebKit failing while Chromium sniffed its way out. That is not what
+  reproduces here, and the difference matters more than the fix does: an engine's encoding
+  detector is conditional on locale and content and is not a guarantee any engine offers, so the
+  rule cannot rest on one engine being forgiving. Do not restore that reasoning.
+
+  This is not one mojibake in one string: the whole pwnagotchi face vocabulary is non-ASCII and
+  it is the most recognisable thing in the interface, and the same failure hits every SSID
+  carrying a non-ASCII character, which is the hostile-name case of §4.5.3.
+
+  The declaration is not the only line of defence. The static server sends
+  `text/html; charset=utf-8` (§2.15), and the transport layer is consulted before the document is
+  prescanned, so the header wins over the tag and a document served by the plugin decodes
+  correctly even if the tag is ever dropped from the build.
+
+  Both exist because they fail in different places, and the two gaps are narrower than they look.
+  The header does not reach a document opened from the filesystem. The tag does not reach HTML
+  the build did not produce, such as the handler's own error pages, which take their type from
+  the server alone. A document replayed by the service worker is covered by **both**: workbox
+  precaches the response with the headers it was fetched with, so the plugin's charset survives
+  into Cache Storage.
 - `manifest.webmanifest`: `display: standalone`, `scope: "/"`, `start_url: "/"`, dark
   `theme_color` / `background_color`, name/short_name, 192 + 512 icons including
   `purpose: "maskable"`, and **no `orientation` key** (§4.5.1: locking it either does nothing on
@@ -2664,7 +2696,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_listeners.py` | the teardown and error-guard paths of `Listeners`, which run only once something has already gone wrong and are what stands between a failure and a crash: the HTTP server thread surviving a `serve_forever` that raises; `_serve_ws` returning nothing and starting no loop when no client handler was supplied; closing an address that was never bound; a `shutdown()`, a `close()` and a `call_soon_threadsafe` that each raise, none of which may reach the caller; a websockets server object with no `wait_closed`; `stop()` idempotent and joining nothing when there is no loop thread. **The early returns are pinned by the silence of the log, not by the absence of an exception** - the guarded line below each of them swallows and logs, so removing the guard is invisible to a test that only asserts nothing raised |
 | `test_listeners_stop_race.py` | issue #90: `Listeners.stop()` racing `Listeners.reconcile()` on separate threads, driven into a deterministic overlap through the `Deps.list_local_ipv4` seam rather than left to chance - a teardown that starts while a pass is parked mid-flight leaves nothing bound afterwards, and a pass that runs after teardown already completed binds nothing, both asserted against real sockets and `socket.bind` and neither call ever raising. Also the two adjacent hangs the same lock exposed: a bind failure on one listener (WSS occupied) must still let `stop()` return and must not leave the other side listening; a serving thread that fails to start (`RuntimeError: can't start new thread`, injected by thread target rather than by address) must leave nothing in `self._bound`, must not hang `stop()`, and must not poison the address for a later pass. And the `server_bind` override: `socket.getfqdn` never runs during a bind, `server_name`/`server_port` are set from the literal address, and a real HTTPS request still returns the CSP header naming it |
 | `test_https_handshake_off_accept.py` | issue #100: the HTTPS accept loop no longer runs the TLS handshake itself. A peer that completes the TCP connect and sends nothing does not stop a normal HTTPS request to the same server getting served, does not stop `stop()` returning, and leaves nothing listening once `stop()` has run - all three asserted against real sockets and a real `Listeners` instance, with an explicit timeout on every wait so a regression fails the test rather than hanging the job. Also a peer that sends garbage instead of a ClientHello: the failed handshake does not block the next client either, and produces no raw traceback on either output it could reach - neither the log (via `caplog`, which also rejects a record carrying `exc_info`) nor stderr (via `capsys`, catching the `handle_error` override being removed outright rather than merely weakened) |
-| `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker |
+| `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker; `text/html; charset=utf-8` on a direct `index.html` request and on the SPA fallback alike (SPEC 4.2, SPEC 2.15) |
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
@@ -2747,6 +2779,13 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   orientation, the map never owning the full width or height of the views area so a drag always
   has somewhere to scroll the app, touch targets at 44px, contrast computed for every token
   against every surface it can land on.
+- `charset.spec.ts` (SPEC 4.2): the built `dist/index.html` declares `utf-8` within the first
+  1024 bytes, checked once against the raw response bytes rather than once per project since the
+  rule has no engine dependency; and `document.characterSet` is `UTF-8` in every project, which
+  is the assertion that would have caught the original defect - in either engine, as measured:
+  neither sniffs its way out of a missing declaration under this harness. The fourth criterion of issue #39, the pwnagotchi face
+  rendering identically in both engines, is not here: no view renders one yet, and the file says
+  so rather than letting the gap pass for covered.
 - **Screenshot baselines are not committed.** They are platform-specific, CI runs amd64 and the
   review host is arm64, so a shared baseline fails on font rendering alone and a gate nobody
   trusts is worse than no gate. Screenshots are uploaded as workflow artifacts for human review

@@ -2162,9 +2162,69 @@ class Listeners:
         self._ever_enumerated = False
         self._loop: Any = None
         self._loop_thread: threading.Thread | None = None
+        # `_bound` is written from two threads: the background loop calling
+        # `reconcile()` and whichever thread pwnagotchi calls `on_unload` on,
+        # which calls `stop()`. The lock alone would make each pass atomic but
+        # would not stop a `reconcile()` that was already waiting on it from
+        # binding right after `stop()` finished, re-opening what teardown just
+        # closed; `_stopped` is what makes that pass a no-op instead.
+        #
+        # This only covers the writers. A serving thread's HTTP handler also
+        # reads `_bound` for the CSP header, on every response, without this
+        # lock (see the `lambda: sorted(self._bound)` passed to
+        # `make_http_handler` in `_serve_http`). That read is not made
+        # consistent by this lock and does not need to be: it is a snapshot
+        # for a header on one response, a stale one only widens or narrows
+        # `connect-src` by whichever address is mid-rebind, and the next
+        # response reads again. Locking it would only add contention.
+        self._lock = threading.Lock()
+        self._stopped = False
 
     def reconcile(self) -> list[str]:
-        """Runs one reconciliation pass. Returns the addresses bound after it."""
+        """Runs one reconciliation pass. Returns the addresses bound after it.
+
+        Holds the lock for the whole pass, not just the writes to `_bound`:
+        interleaving with `stop()` is what this guards against, and a pass
+        `stop()` cannot see until it finishes is the point, not a side effect.
+
+        The cost is bounded, address by address, for every wait the plugin
+        controls: `_serve_ws` waits up to ten seconds for its future, closing
+        an address waits up to five for `_shutdown_ws`, and `_shutdown_http` costs
+        one `poll_interval` (0.5s) for `serve_forever` to notice - but only
+        while that loop is in its select, which is the exception below, not a
+        bound. Enumerating local addresses is either a handful of local
+        syscalls or, on the `ip -4 addr show` fallback, capped by its own 5 s
+        `subprocess.run` timeout. Everything else in the locked path -
+        selection, binding the HTTPS socket, starting a server's thread,
+        releasing a socket that never served - is local and synchronous,
+        deliberately: `_serve_http`'s `Server` overrides `server_bind` to skip
+        the reverse-DNS lookup `http.server.HTTPServer` would otherwise make,
+        which on the reference hardware resolves against whatever the iPhone
+        hands out over BT PAN and can cost seconds per address with nothing
+        reachable at it. A pass touching several addresses adds these,
+        otherwise-bounded, costs up rather than sharing one bound. (This
+        assumes the default `Deps.list_local_ipv4`; a caller that replaces the
+        seam with something that blocks indefinitely owns that trade.)
+
+        One wait is not bounded, and is not the plugin's to bound: closing an
+        address whose HTTPS server is mid-`accept()` calls `_shutdown_http`,
+        which calls `BaseServer.shutdown()`, which waits with no timeout on an
+        event that only `serve_forever`'s loop clears. A peer that completes
+        the TCP connect and then sends nothing parks that loop inside the TLS
+        handshake indefinitely - `SSLSocket.accept()` has
+        `do_handshake_on_connect=True` and no timeout - and `stop()` waits for
+        it. Pre-existing on `master`, a security defect in its own right, and
+        tracked as its own fix rather than folded into this one: issue #100.
+        """
+        with self._lock:
+            if self._stopped:
+                return sorted(self._bound)
+            return self._reconcile_locked()
+
+    def _reconcile_locked(self) -> list[str]:
+        """The reconciliation pass itself. Caller holds `self._lock` and has
+        already checked `self._stopped`; nothing here checks either again.
+        """
         try:
             local = list(self._deps.list_local_ipv4())
         except Exception as err:
@@ -2233,10 +2293,43 @@ class Listeners:
             ws_server = self._serve_ws(ip)
         except OSError as err:
             log.warning("[companion] could not bind on %s: %s", ip, err)
-            self._shutdown_http(http_server)
+            # Not `_shutdown_http`: that server's `serve_forever` never ran,
+            # because `_start_http` only starts it once `_serve_ws` has also
+            # succeeded. `shutdown()` waits on an event that only a running
+            # `serve_forever` sets, so calling it here blocks forever - and
+            # since `_open` runs under `self._lock`, that hang used to cost the
+            # background thread and now costs `stop()`, i.e. `on_unload`.
+            self._close_unstarted_http(http_server)
             return
         self._bound[ip] = (ws_server, http_server)
-        self._start_http(http_server, ip)
+        try:
+            self._start_http(http_server, ip)
+        except Exception as err:
+            # `threading.Thread.start()` can refuse - `RuntimeError: can't
+            # start new thread` under memory pressure, routine on the
+            # reference hardware - after both sockets are already bound and
+            # `self._bound[ip]` already set. Left as it stood, that entry
+            # would hold an HTTPS server whose `serve_forever` never ran, and
+            # the next `stop()` would hang in `_shutdown_http` exactly as the
+            # `OSError` path above used to (see its comment). Unwind the same
+            # way: pop the entry, close the WSS server that did start, and
+            # release the HTTPS socket without `shutdown()`.
+            #
+            # Popping before closing is the opposite of `_close`'s ordering,
+            # which is load-bearing there (#67, see its docstring): a request
+            # already in flight must still find its address in `self._bound`
+            # so the CSP header it receives is not missing the one it arrived
+            # on. That does not apply here - this server never served, so no
+            # request was ever dispatched on it to render a header - which is
+            # exactly why popping first is safe on this path and would not be
+            # on `_close`'s.
+            log.warning(
+                "[companion] could not start the HTTPS serving thread on %s: %s", ip, err
+            )
+            self._bound.pop(ip, None)
+            self._shutdown_ws(ws_server)
+            self._close_unstarted_http(http_server)
+            return
         log.info(
             "[companion] listening on wss://%s:%s and https://%s:%s",
             ip,
@@ -2254,16 +2347,44 @@ class Listeners:
         only does after `self._bound[ip]` is set.
         """
         import http.server
+        import socketserver
 
         handler = make_http_handler(
             str(option(self._options, "web_root")),
+            # Read without `self._lock`: this runs on the serving thread, not
+            # the locked reconcile/stop path, and a header a moment stale is
+            # harmless (see the note on `self._lock` in `__init__`).
             lambda: sorted(self._bound),
             int(option(self._options, "ws_port")),
         )
 
         class Server(http.server.ThreadingHTTPServer):
+            # `ThreadingMixIn.block_on_close` stays at its default `True`, so
+            # `server_close()` (called by both `_shutdown_http` and
+            # `_close_unstarted_http`) joins `self._threads`. That join
+            # returns promptly only because `_Threads.append` never records a
+            # daemon thread, which is what `daemon_threads = True` buys here -
+            # flip it and `server_close()` starts waiting, with no timeout,
+            # for every in-flight handler thread to finish on its own.
             daemon_threads = True
             allow_reuse_address = True
+
+            def server_bind(self) -> None:
+                # `HTTPServer.server_bind` calls `socket.getfqdn(host)` after
+                # binding, a reverse-DNS lookup this class has no use for:
+                # `SimpleHTTPRequestHandler` never reads `server_name`, and
+                # the CGI machinery that does is not in play here. Over BT PAN
+                # the resolver is whatever the iPhone hands out, and with
+                # nothing reachable at it the lookup costs the full
+                # `resolv.conf` timeout-times-attempts-times-nameservers,
+                # inside `self._lock`, once per address `_open` binds. Skip
+                # straight to `socketserver`'s bind and fill in the two
+                # attributes `HTTPServer`'s protocol handling still reads,
+                # without the lookup.
+                socketserver.TCPServer.server_bind(self)
+                host, port = self.server_address[:2]
+                self.server_name = host
+                self.server_port = port
 
         server = Server((ip, int(option(self._options, "http_port"))), handler)
         server.socket = self._ssl.wrap_socket(server.socket, server_side=True)
@@ -2271,7 +2392,12 @@ class Listeners:
 
     @staticmethod
     def _start_http(server: Any, ip: str) -> None:
-        """Starts the HTTPS static server's serving thread."""
+        """Starts the HTTPS static server's serving thread.
+
+        `threading.Thread.start()` is not guarded here: a failure to start a
+        thread is not this server's problem to swallow, and `_open` is the
+        caller that knows how to unwind `self._bound[ip]` when it happens.
+        """
 
         def run() -> None:
             try:
@@ -2347,6 +2473,19 @@ class Listeners:
 
     @staticmethod
     def _shutdown_http(server: Any) -> None:
+        """Stops a running HTTPS server and releases its socket.
+
+        Only for a server whose serving thread was started: `shutdown()` sets
+        an event and waits for `serve_forever`'s poll loop to notice it, and
+        that loop is what clears the event once. Called on a server that never
+        served, the wait never ends. `_close` is the only caller, and `_open`
+        never lets an entry into `self._bound` unless `_start_http` returned
+        without raising: the `OSError` path and the thread-start failure path
+        both unwind before touching `self._bound[ip]` (or pop it straight back
+        out). So every server `_close` reaches went through `_start_http`
+        successfully - see `_close_unstarted_http` for the two paths where it
+        didn't.
+        """
         if server is None:
             return
         try:
@@ -2354,6 +2493,24 @@ class Listeners:
             server.server_close()
         except Exception as err:
             log.debug("[companion] http server shutdown failed: %s", err)
+
+    @staticmethod
+    def _close_unstarted_http(server: Any) -> None:
+        """Releases the socket of an HTTPS server whose serving thread never started.
+
+        Both callers are in `_open`, and neither ever started this server: the
+        WSS bind failed after the HTTPS socket was already open, or the
+        serving thread would not start. Either way the socket is open and
+        `serve_forever` never ran. `server_close()` alone is enough to release
+        it; `shutdown()` would wait on a poll loop that will never run and
+        never return (see `_shutdown_http`).
+        """
+        if server is None:
+            return
+        try:
+            server.server_close()
+        except Exception as err:
+            log.debug("[companion] http server close failed: %s", err)
 
     def _shutdown_ws(self, server: Any) -> None:
         """Closes a WSS server and waits for it, on the loop that owns it.
@@ -2378,11 +2535,20 @@ class Listeners:
             log.debug("[companion] ws server shutdown failed: %r", err)
 
     def stop(self) -> None:
-        """Closes every listener. Idempotent."""
-        for ip in list(self._bound):
-            self._close(ip)
-        loop, thread = self._loop, self._loop_thread
-        self._loop, self._loop_thread = None, None
+        """Closes every listener. Idempotent.
+
+        Takes the same lock as `reconcile()`, for the same reason: closing
+        `_bound` while a pass is opening it is the double-close and the
+        leaked-listener case this whole thing exists to rule out. `_stopped`
+        is set before anything is closed so a `reconcile()` unblocked by this
+        call sees it and returns without touching `_bound` again.
+        """
+        with self._lock:
+            self._stopped = True
+            for ip in list(self._bound):
+                self._close(ip)
+            loop, thread = self._loop, self._loop_thread
+            self._loop, self._loop_thread = None, None
         if loop is None:
             return
         try:

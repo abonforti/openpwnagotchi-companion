@@ -126,19 +126,60 @@ export function readStoredToken(): string | null {
   // set (SPEC 4.3.9), so it is folded into null here rather than left for
   // effectiveToken alone to coerce. The signature should mean what it says
   // at the one place a caller reads it directly.
-  const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY)
+  //
+  // SPEC 4.7: storage that refuses to answer does not stop the app, the
+  // same rule storeToken below is held to. This is reached from
+  // effectiveToken on every connect() call, so a throw here (storage
+  // disabled or full) would take the connection attempt down with it
+  // instead of falling back to the tokenless path.
+  let stored: string | null
+  try {
+    stored = window.localStorage.getItem(TOKEN_STORAGE_KEY)
+  } catch {
+    stored = null
+  }
   return stored === '' ? null : stored
 }
 
 /**
  * Clearing (`null`) removes this device's copy only, it is not revocation
  * (SPEC 4.3.6): the plugin still accepts the token until `config.toml` changes.
+ *
+ * Refuses anything that is not a string or null: SPEC 4.7's Settings layer
+ * builds a host patch as `Partial<Omit<Host, 'id'>>`, which TypeScript lets
+ * carry an explicit `token: undefined`, and that would otherwise coerce to
+ * the literal string "undefined" here rather than clearing the key. This
+ * function does not trust its caller's types any more than the request
+ * path trusts the network's.
+ *
+ * SPEC 4.7: storage that refuses to answer does not stop the app. This is
+ * one of the two places lib/settings.ts calls unconditionally -- loadSettings
+ * on every startup, activateHost on every switch -- so a throw here (storage
+ * disabled or full) cannot be left to propagate: it would abort a settings
+ * update after companion.settings was already persisted, leaving the
+ * in-memory store never updated to match.
+ *
+ * SPEC 4.7: a token write that fails clears the key rather than leaving
+ * it. Without this, a failed `setItem` (quota, storage disabled mid-way)
+ * during activateHost(B) leaves TOKEN_STORAGE_KEY holding the previous
+ * host's token, and the next connect() sends unit A's token to unit B.
+ * An absent token fails authentication loudly and recoverably; a wrong
+ * one authenticates to the wrong unit. The best-effort `removeItem` is
+ * itself guarded: it can throw for the same reasons `setItem` just did.
  */
 export function storeToken(token: string | null): void {
-  if (token === null) {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY)
-  } else {
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, token)
+  try {
+    if (typeof token !== 'string') {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY)
+    } else {
+      window.localStorage.setItem(TOKEN_STORAGE_KEY, token)
+    }
+  } catch {
+    try {
+      window.localStorage.removeItem(TOKEN_STORAGE_KEY)
+    } catch {
+      // Nothing more to act on here: storage is not answering at all.
+    }
   }
 }
 

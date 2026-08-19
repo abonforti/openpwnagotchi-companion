@@ -248,8 +248,10 @@ test.describe('the map leaves somewhere to drag the app', () => {
     // means, rather than an approximation nobody revisits at that moment.
     const areaRect = await viewsContentBox(page)
 
-    // SPEC 4.5 requires a region where a drag scrolls the app rather than
-    // panning the map, always reachable without scrolling first.
+    // SPEC 4.5.1 requires a region where a drag scrolls the app rather than
+    // panning the map, always reachable without scrolling first: the map is
+    // never as wide or as tall as the views area, and the strip that leaves
+    // over is what the gesture needs.
     const surface = page.locator('[data-view="map"] .leaflet-container')
     const count = await surface.count()
 

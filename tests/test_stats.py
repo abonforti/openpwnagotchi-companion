@@ -40,10 +40,23 @@ def test_initial_burst_never_calls_session(router, agent):
 
 
 def test_session_cache_is_what_calls_session(agent, deps):
-    cache = companion.SessionCache(lambda: agent, deps, 5)
+    cache = companion.SessionCache(lambda: agent, deps)
 
     assert cache.refresh() is True
     assert agent.session_calls == 1
+
+
+def test_session_cache_has_no_cadence_of_its_own(agent, deps):
+    # SessionCache carries no interval and enforces no minimum spacing between
+    # fetches (#106): the cadence is entirely `_background`'s to decide, by
+    # sleeping between calls to `refresh()`. Two calls back to back, with no
+    # time passing between them at all, must still reach the agent twice.
+    cache = companion.SessionCache(lambda: agent, deps)
+
+    cache.refresh()
+    cache.refresh()
+
+    assert agent.session_calls == 2
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +169,7 @@ def test_session_age_counts_from_the_last_successful_refresh(
     agent_factory, harness, bettercap_session
 ):
     agent = agent_factory(session_payload=bettercap_session)
-    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+    cache = companion.SessionCache(lambda: agent, harness.deps)
     cache.refresh()
     harness.advance(12.5)
 
@@ -171,7 +184,7 @@ def test_session_cache_survives_a_failing_session_call(harness):
             raise OSError("bettercap is not answering")
 
     agent = Exploding()
-    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+    cache = companion.SessionCache(lambda: agent, harness.deps)
 
     assert cache.refresh() is False
     assert cache.snapshot == {}
@@ -182,7 +195,7 @@ def test_refresh_before_on_ready_returns_false_without_a_snapshot(harness):
     # `agent_getter` returns `None` in the window between plugin load and
     # `on_ready`, before `self.agent` exists at all (SPEC 2.1). `refresh()`
     # must not blow up reaching for `.session()` on that `None`.
-    cache = companion.SessionCache(lambda: None, harness.deps, 5)
+    cache = companion.SessionCache(lambda: None, harness.deps)
 
     assert cache.refresh() is False
     assert cache.snapshot == {}
@@ -195,7 +208,7 @@ def test_refresh_before_on_ready_logs_no_failure(harness, caplog):
     # or the owner actually reads on the device. Assert the absence of any
     # record, not the absence of one particular sentence: pinning the exact
     # wording would break on a harmless rephrasing.
-    cache = companion.SessionCache(lambda: None, harness.deps, 5)
+    cache = companion.SessionCache(lambda: None, harness.deps)
 
     with caplog.at_level(logging.DEBUG, logger="plugin.companion"):
         cache.refresh()
@@ -212,7 +225,7 @@ def test_refresh_before_on_ready_leaves_a_prior_snapshot_climbing_not_reset(
     # reporting it.
     agent = FakeAgent(session_payload=bettercap_session)
     box = {"agent": agent}
-    cache = companion.SessionCache(lambda: box["agent"], harness.deps, 5)
+    cache = companion.SessionCache(lambda: box["agent"], harness.deps)
     assert cache.refresh() is True
     harness.advance(3.0)
 
@@ -230,7 +243,7 @@ def test_refresh_rejects_a_non_mapping_snapshot(harness):
     # cached and later indexed with `[...]` by a reader.
     agent = FakeAgent()
     agent._session_payload = ["not", "a", "mapping"]
-    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+    cache = companion.SessionCache(lambda: agent, harness.deps)
 
     assert cache.refresh() is False
     assert cache.snapshot == {}
@@ -241,7 +254,7 @@ def test_refresh_with_a_non_mapping_snapshot_leaves_a_prior_snapshot_climbing_no
     harness, bettercap_session
 ):
     agent = FakeAgent(session_payload=bettercap_session)
-    cache = companion.SessionCache(lambda: agent, harness.deps, 5)
+    cache = companion.SessionCache(lambda: agent, harness.deps)
     assert cache.refresh() is True
     harness.advance(2.0)
 

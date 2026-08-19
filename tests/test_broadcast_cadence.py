@@ -558,11 +558,11 @@ def test_keepalive_interval_true_falls_back_to_default_and_warns(wired_plugin_fa
 
 
 # ---------------------------------------------------------------------------
-# session_poll_interval: clamped once in on_loaded, shared by two consumers
+# session_poll_interval: clamped once in on_loaded, read by the loop that uses it
 # ---------------------------------------------------------------------------
 
 
-def test_session_poll_interval_below_the_floor_is_clamped_once_for_both_consumers(
+def test_session_poll_interval_below_the_floor_is_clamped_once_and_read_from_self(
     wired_plugin_factory, caplog
 ):
     """`session_poll_interval` is clamped exactly once, in `on_loaded`, and
@@ -570,13 +570,13 @@ def test_session_poll_interval_below_the_floor_is_clamped_once_for_both_consumer
     `on_loaded` must be inert: `_background` reads the stored attribute,
     never `self.options`, again.
 
-    This no longer asserts on `SessionCache._interval`: it is assigned at
-    construction and read nowhere in the plugin (`refresh()` fetches
-    unconditionally, so there is no TTL to enforce), which makes that
-    assertion show two variables holding the same float rather than one
-    clamped value reaching two consumers - tracked as issue #106. The
-    observable half - the loop period `_background` actually waits on - is
-    what remains here.
+    There is one consumer of the clamped value, not two. `SessionCache` used
+    to be handed it as well, and stored it without ever reading it, so an
+    assertion about it showed two variables holding the same float rather
+    than one clamped value reaching two places. The field and the argument
+    are gone (#106) and the cache has no cadence of its own: `refresh()`
+    fetches whenever it is called. What remains here is the observable half,
+    the loop period `_background` actually waits on.
     """
     with caplog.at_level("INFO"):
         plugin, agent, sent = wired_plugin_factory(
@@ -596,7 +596,7 @@ def test_session_poll_interval_below_the_floor_is_clamped_once_for_both_consumer
     )
 
 
-def test_session_poll_interval_above_the_ceiling_is_clamped_once_for_both_consumers(
+def test_session_poll_interval_above_the_ceiling_is_clamped_once_and_read_from_self(
     wired_plugin_factory, caplog
 ):
     with caplog.at_level("INFO"):

@@ -249,9 +249,7 @@ def wss_server(tmp_path, pki, agent_factory, options):
 
         # Assembled exactly as conftest's router_factory does, so the object
         # under the socket is the one the unit tests describe.
-        session = companion.SessionCache(
-            lambda: subject, deps, resolved["session_poll_interval"]
-        )
+        session = companion.SessionCache(lambda: subject, deps)
         router = companion.Router(
             resolved,
             deps,

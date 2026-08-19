@@ -311,6 +311,64 @@ describe('token storage (§4.3.6)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// SPEC 4.7: storage that refuses to answer does not stop the app. This is
+// readStoredToken's own guard, reached from effectiveToken on every
+// connect() call - a regression here would not fail at startup or at a
+// settings write, since neither of those touches this function, but at the
+// first connect() attempt after storage stops answering.
+// ---------------------------------------------------------------------------
+
+describe('a disabled localStorage does not stop readStoredToken or connect() (SPEC 4.7)', () => {
+  it('storeToken survives a storage that refuses both the write and the clear', () => {
+    // The fallback that clears the key when a write fails can itself throw,
+    // which is why it carries its own guard. Nothing in the fake storage can
+    // produce that, so it is spied here or it is never exercised at all: a
+    // guard whose failure the coverage report cannot see is the shape SPEC
+    // 10.7 asks to be named rather than assumed.
+    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    const removeSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('disabled', 'SecurityError')
+    })
+    try {
+      expect(() => storeToken('a-token-that-cannot-be-written')).not.toThrow()
+    } finally {
+      setSpy.mockRestore()
+      removeSpy.mockRestore()
+    }
+  })
+
+  it('readStoredToken returns null rather than throwing when storage is disabled', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage is disabled')
+    })
+    try {
+      expect(() => readStoredToken()).not.toThrow()
+      expect(readStoredToken()).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('connect() does not throw when storage is disabled, and falls back to the tokenless path', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage is disabled')
+    })
+    try {
+      const { client, sockets } = setup()
+      expect(() => client.connect()).not.toThrow()
+      nth(sockets, 0).open()
+      expect(nth(sockets, 0).sentOf('auth')).toHaveLength(0)
+      nth(sockets, 0).push(statsEnvelope(5))
+      expect(client.state()).toBe('connected')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Two guards: onMessage subscriber isolation, and trySend swallowing a
 // send against an already-closing/closed socket. Their
 // catch bodies are empty, so an uncovered-branch report shows nothing for

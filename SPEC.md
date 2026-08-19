@@ -2482,6 +2482,162 @@ and can change, and it is not the same as having no fix.
 
 ---
 
+### 4.7 Settings (`lib/settings.ts`)
+
+The host list of §4.5.2, persisted, and the one place that decides which unit the client talks
+to. It is the piece between §4.3 and the views: `lib/ws.ts` takes a URL and a token and asks no
+questions about where they came from.
+
+**A host is `{id, label, address, wsPort, httpPort, token}`**, with the ports defaulting to 8082
+and 8443 and `token` nullable and per host, `null` meaning the unit asks for none. One list, one active id, persisted under
+`companion.settings`, beside the token key §4.3.6 pins.
+
+**The token stays under `companion.token`, and this module is its only writer.** A per-host token
+and a single key the client reads are not in conflict as long as one of them is the source: the
+list holds each host's token, and activating a host writes that host's token to the key the
+client reads. The alternative, teaching `lib/ws.ts` about a host list, would put the choice of
+unit inside the connection layer, which is exactly the coupling §4.4 avoided in the other
+direction.
+
+**The stored blob is validated on the way in and on the way out.** A field the Settings screen
+writes is no more trustworthy than one read from storage: both end up persisted, and only one
+of them is repaired by the next load. A port that is not an integer in range is repaired to its
+default wherever it arrives, and an address that is not a bare host is refused where it is
+written rather than allowed to sit in storage until something else trips over it.
+
+The two refusals differ, and deliberately. **The parser repairs or drops**, because it is reading
+data nobody is standing in front of and the only useful outcome is a usable app. **A mutator
+throws on a bad address**, because its caller is the Settings screen, which has the owner in
+front of it and a field to put a message next to, and because an address is the one field with no
+substitute: a repaired port is still that host, a repaired address is a different unit. A throw reaching a user is a bug in that screen, not a path
+somebody walks: validate in the form, and the throw is the backstop that says the form forgot.
+
+**An address is a bare host**, a name or an IPv4 or IPv6 literal, with no scheme, no path, no
+credentials and no port. `wss://10.0.0.2:8082` as an *address* produces a URL with two schemes;
+`10.0.0.2@example.test` produces a URL whose authority is `example.test`, so the token would go
+somewhere other than the entry the owner is looking at. The CSP of §2.15.1 fails that closed
+rather than allowing it, which makes it a confusing failure rather than a leak, and it is still
+not a shape to accept. An IPv6 literal is bracketed when the URL is built.
+
+**An address is refused when the URL parser does not give back the host it was given.** That is
+the rule, and it is one rule rather than a list, because the list kept being incomplete: an
+IPv4 octet with a leading zero was refused while `0x7f.1` was not, and both are read by
+`new URL` as `127.0.0.1`. Anything the parser silently rewrites is by definition an address
+that displays as one thing and connects to another, which is the whole hazard, so the test is
+the rewrite itself rather than the notations that cause it.
+
+**An address is ASCII, and that is part of the same rule rather than a separate opinion.** The
+comparison that decides the round trip has to fold case, and JavaScript folds case by Unicode
+rules while the URL parser folds by IDNA, so the two agree on almost every character and the
+exception is enough: U+212A, the Kelvin sign, lowercases in JavaScript to the same `k` that IDNA
+maps it to, so an address written with it round-trips and then connects to a different host.
+A punycode name is already ASCII in its `xn--` form and passes unaffected, which is the shape a
+browser would have produced anyway.
+
+Cheap rejections stay in front of it, for the error message rather than for the outcome: an
+empty string, a scheme, a path, credentials, and **square brackets**, because a bare host does
+not carry URL syntax and a pre-bracketed literal would otherwise slip the IPv6 handling by not
+looking like IPv6 to it. Bracketing is this module's own business, applied when the URL is
+built. Two cases need their own rule because the round trip
+alone would let them through. A root-labelled FQDN such as `example.test.` comes back unchanged
+from the parser and is refused anyway, because being stricter than the parser is the safe
+direction when the parser's leniency is what produces the surprise. And the wildcards round-trip
+perfectly while naming no host to connect to: `::` and `0.0.0.0` are refused for the same reason
+nothing in this project ever binds them, and so is the IPv4-mapped form `::ffff:0:0`, which is
+the same address wearing a different notation. That last one is decided by expanding the
+groups and reading what they mean, not by listing spellings: listing spellings is the mistake
+the leading-zero rule made twice.
+
+A dotted-quad IPv6 form such as `::ffff:192.0.2.1` is refused outright, which is worth knowing
+because it is the shape an owner is most likely to paste for a mapped address. It is the safe
+direction and it costs nothing here: the unit is reached at its own address, and that address is
+an IPv4 literal or a name.
+
+**A settings blob that will not parse is replaced by the defaults, and the app still starts.**
+`localStorage` survives every upgrade the app will ever ship, so a shape written by an older
+version and read by a newer one is the normal case rather than corruption. Refusing to boot over
+it would strand somebody with an app that cannot be fixed from inside itself, on a device whose
+only recovery path is the settings screen it will not render. Individual fields are validated the
+same way: a bad port falls back to its default rather than rejecting the host.
+
+**Prefilled rather than discovered.** The Bluetooth address `172.20.10.2` is prefilled and the
+USB gadget address `10.0.0.2` is offered beside it. The note that the USB path is desktop-only,
+because an iPhone cannot use it, is rendered by the Settings screen (§4.5.2) and is **not** part
+of the default label: a label is persisted on first run and never re-derived, so a warning
+living there is a warning the owner can delete by renaming the entry. There is no scan: the app is served by the unit, so the
+address it was reached on is the one that works, and everything else is the owner typing what
+they set up.
+
+**The list is for a client served by the unit it talks to.** A client served by unit A and
+pointed at unit B is blocked by A's Content-Security-Policy, which names A's addresses and
+nothing else (§2.15.1). That is the price of the directive meaning anything, and Settings should
+say so where the second host is added rather than leaving somebody to discover it as a silent
+failure.
+
+**The settings blob is persisted before the token key is written.** The two are separate writes
+and a browser can fail between them, so the order decides which way the pair breaks: this way
+round, an interrupted switch leaves a saved active host whose token has not been written yet,
+and the next load reconciles it. The other way round leaves a token written for an active host
+that was never saved, which nothing later can detect, because there is nothing to compare it
+against.
+
+**Storage that refuses to answer does not stop the app.** `localStorage` throws rather than returns
+when it is disabled or full, and both are reachable on the browser this ships to. A read that
+throws is a blob that will not parse, which already has a rule; a write that throws leaves the
+session working from memory, because refusing to switch host over a full disk helps nobody.
+
+**A token write that fails clears the key instead of leaving it.** Swallowing the failure and
+moving on is what the rule above says to do for the settings blob, and it is the wrong answer
+for this one key: the value left behind belongs to the host that was active before, so the next
+connection would send unit A's token to unit B, which is the failure the whole per-host rule
+exists to prevent. An absent token fails authentication loudly and recoverably. A wrong one
+authenticates to the wrong unit.
+
+**The module mints host ids**, from `crypto.randomUUID`, which exists because §3 makes the origin
+secure. The two prefilled hosts are the exception and carry the stable ids `bluetooth` and
+`usb`: they are the same two entries on every install, and a stable id is what lets a later
+version recognise them. `loadSettings()` reads and reconciles, and the stores hold the defaults until it runs.
+
+**Switching host is teardown, `resetStores()`, attach** (§4.4.2), in that order, and this
+module does not perform it. It has no client to attach and no business holding one: what it
+owns is the **guarantee that makes the switch safe**, which is that the new host's token is
+in `companion.token` before any subscriber is told the active host changed. The sequence then
+belongs to whoever holds the client, which is the app shell subscribing to `activeHost`.
+
+The same rule extends past activation, because otherwise the key and the host record drift.
+**Every path that changes which host is active, or what the active host is, reconciles the
+key**, and there are more of them than activation:
+
+- Editing the active host's token rewrites the key.
+- Removing the active host clears it.
+- **Loading settings reconciles it**, which is the one that is easy to miss: a reload restores
+  an active host from storage while the key still holds whatever the last session left, and the
+  parser can drop that host or null a dangling id, so the key can end up paired with a host
+  that is no longer in the list.
+- **Editing a host's address clears that host's token, on the record and not only in the
+  key.** A token is issued by the unit at an address; re-pointing the entry elsewhere does not
+  carry it, and sending unit A's token to unit B is the failure this whole rule exists to
+  prevent. Clearing only the key leaves the value on the record, where the next load or the
+  next activation writes it straight back: the key is a copy, and clearing a copy fixes
+  nothing. It applies to any host and not only the active one, because an entry edited today is
+  activated tomorrow, and by then nothing remembers that its address ever changed. A patch that
+  sets a token in the same breath means the owner has supplied the new unit's token, and that
+  wins.
+
+A token left behind after its host is gone would be sent to whatever unit is selected next.
+
+**An empty host list is a state, not a corruption.** Deleting the last host is reachable from
+the Settings screen, so a stored blob whose `hosts` is a valid empty array is left empty.
+
+A list that is empty **because every entry was dropped** is a different thing, and the defaults
+come back: nobody chose that state, and leaving it empty strands somebody with no entry to
+connect to and no prefilled one to start from, on the screen that is their only way back.
+
+**A host with no usable `id` or `address` is dropped; every other bad field is repaired.** Those
+two have no substitute: a host with no address is not a host. A missing label falls back to the
+address, a bad port to its default, which is the difference between losing one field and
+losing the entry.
+
 ## 5. CI/CD (`.github/workflows/`)
 
 ### 5.1 `ci.yml` (push + PR)
@@ -2939,7 +3095,7 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   PASV control; §4.3.4, the mode and PASV indicators derived from `stats` and never from the tap,
   showing the request as pending in between and **not** reverting silently if the command fails;
   §4.6.1's GPS states resolved first-match-wins in the stated order.
-- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape.
+- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as a bare host so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered

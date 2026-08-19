@@ -216,11 +216,13 @@ let attachedClient: WsClient | null = null
  * Throws if a client is already attached: switching hosts, or anything
  * else that wants a second client, is teardown (call the returned
  * function), then resetStores(), then attach again (SPEC 4.4.2). The
- * returned teardown unsubscribes both listeners it registered, and nothing
- * else: a component that mounts and unmounts this more than once (as a
- * view swap does) must not accumulate a duplicate handler on the
+ * returned teardown unsubscribes both listeners it registered and sets
+ * `connection` to `offline`, since a mirror with no client behind it shows
+ * nothing connected (SPEC 4.4.1). It registers no duplicate handler on the
  * underlying client, which lives for the whole session and outlives any
- * single subscriber.
+ * single subscriber. Note that this makes a mount/unmount cycle visible in
+ * `connection`, so the single caller SPEC 4.8 allows is also what keeps a
+ * view swap from reporting `offline` under a live client.
  *
  * The teardown is idempotent, and the `attachedClient === client` check
  * inside it is unreachable defence in depth, not a path a test can reach:
@@ -273,5 +275,16 @@ export function connectStores(client: WsClient): () => void {
     if (attachedClient === client) {
       attachedClient = null
     }
+    // SPEC 4.4.1/4.4.2: with no client attached, `connection` reads
+    // `offline` -- the same mirror rule as ever, not an exception to it,
+    // because there is nothing left to mirror. This is what makes a build
+    // failure in lib/session.ts visible: `createClient` can throw before a
+    // client ever exists to emit a state of its own, and without this the
+    // store would keep echoing whatever the previous client last reported,
+    // describing a connection that no longer exists. Holds for every
+    // detach, not only that failure path -- an explicit stop (SPEC 4.4.2)
+    // leaves `connection` honest the same way it leaves the data stores
+    // empty.
+    connectionWritable.set({ state: 'offline', unauthorizedReason: null })
   }
 }

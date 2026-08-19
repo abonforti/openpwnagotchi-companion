@@ -434,6 +434,23 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     fake.emitState('connecting')
     expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null })
   })
+
+  it('reads offline once no client is attached, not the client\'s last reported state (SPEC 4.4.2)', () => {
+    // Not the module-initial value: without the rule under test, deleting
+    // the previous client's own report ("connected") would still leave
+    // this reading connected, since nothing else ever writes to
+    // `connection` between the two calls. That is what makes this
+    // assertion prove the teardown rule rather than an accident of
+    // whatever `connection` started at.
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitState('connected')
+    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null })
+
+    teardown?.()
+
+    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null })
+  })
 })
 
 describe("seeding at mount: the adapter reads the client's current stats, not only future pushes", () => {

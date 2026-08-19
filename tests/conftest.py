@@ -400,9 +400,7 @@ def router_factory(options, deps):
         resolved = dict(options)
         resolved.update(overrides or {})
         agent_getter = lambda: agent  # noqa: E731
-        session = companion.SessionCache(
-            agent_getter, deps, resolved["session_poll_interval"]
-        )
+        session = companion.SessionCache(agent_getter, deps)
         gps = companion.GpsResolver(resolved, deps, session)
         battery = companion.BatteryReader(resolved, deps)
         store = lambda: companion.HandshakeStore(  # noqa: E731

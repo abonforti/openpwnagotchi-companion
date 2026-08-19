@@ -978,12 +978,24 @@ class SessionCache:
 
     `age` is exposed on the wire so the client can show stale data as degraded
     rather than presenting it as current.
+
+    The cadence is not here. `refresh()` fetches whenever it is called, and how
+    often that happens is decided by `_background`, the only periodic caller,
+    which sleeps `session_poll_interval` between passes. `on_ready` calls it
+    once more, a one-shot so the first client does not wait a whole period for
+    the first snapshot.
+
+    This class used to take an `interval` and store it without ever reading it,
+    which is worse than a dead field: on the #65 branch both a comment and a
+    test assertion read it as a cache TTL and said so, and neither was true
+    (#106). A TTL would not have changed either caller's behaviour anyway, since
+    the one-shot runs with nothing fetched yet. If the cache ever does have to
+    limit itself, that is a rule to write and test, not a number to store.
     """
 
-    def __init__(self, agent_getter: Callable[[], Any], deps: Deps, interval: float) -> None:
+    def __init__(self, agent_getter: Callable[[], Any], deps: Deps) -> None:
         self._agent_getter = agent_getter
         self._deps = deps
-        self._interval = float(interval)
         self._lock = threading.Lock()
         self._snapshot: dict = {}
         self._fetched_at: float | None = None
@@ -2907,10 +2919,11 @@ class Companion(plugins.Plugin):
             return
 
         self._battery = BatteryReader(self.options, self.deps)
-        # Clamped once here and stored on self, not recomputed in
-        # _background: the same clamped value is passed to SessionCache below
-        # and used as the loop period, and computing it twice from duplicated
-        # literals is what would let the two drift apart (SPEC 2.4).
+        # Clamped once here and stored on self, not recomputed in _background:
+        # the clamp logs when it corrects a value, and a second computation
+        # would either log twice or diverge silently from the first (SPEC 2.4).
+        # One consumer reads it, the loop below. SessionCache used to be handed
+        # it too and never read it (#106).
         poll, poll_clamped = clamp_interval(
             "session_poll_interval",
             option(self.options, "session_poll_interval"),
@@ -2921,7 +2934,7 @@ class Companion(plugins.Plugin):
         if poll_clamped:
             log.info("[companion] session_poll_interval clamped to %.0f", poll)
         self._session_poll_interval = poll
-        self._session = SessionCache(lambda: self._agent, self.deps, poll)
+        self._session = SessionCache(lambda: self._agent, self.deps)
         # Clamped once here too, for the same reason: on_loaded owns
         # configuration, so one place decides each interval and neither loop
         # can drift from it (SPEC 2.4). The ticker reads the attribute.
@@ -2992,10 +3005,12 @@ class Companion(plugins.Plugin):
         (`_stats_ticker`, SPEC 4.3.7, issue #65), so this one goes back to
         waking on `session_poll_interval` alone.
         """
-        # session_poll_interval is clamped once, in on_loaded, and read
-        # from self here: the same clamped value already went into
-        # SessionCache above, so this loop can never disagree with it
-        # (SPEC 2.4).
+        # self._session_poll_interval, read at the bottom of this loop, is
+        # clamped once in on_loaded and read from self rather than from
+        # self.options: options mutated after on_loaded must be inert, or a
+        # value that failed the clamp would take effect on the next pass
+        # anyway (SPEC 2.4). rebind_interval below is the one interval that
+        # gets none of that, tracked as issue #105.
         rebind = float(option(self.options, "rebind_interval"))
         next_rebind = 0.0
         while not self._stop.is_set():

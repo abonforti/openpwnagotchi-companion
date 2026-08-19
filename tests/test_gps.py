@@ -271,7 +271,7 @@ def make_resolver(options, harness, agent, session_payload=None):
     from plugin.companion import GpsResolver, SessionCache
 
     agent._session_payload = session_payload or {}
-    cache = SessionCache(lambda: agent, harness.deps, 5)
+    cache = SessionCache(lambda: agent, harness.deps)
     cache.refresh()
     return GpsResolver(options, harness.deps, cache)
 

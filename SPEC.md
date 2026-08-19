@@ -3115,7 +3115,8 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_static_server.py` | `.webmanifest` and `.js` content types; SPA fallback serves `index.html`; `..` rejected with 400; no directory listing; `no-cache` on index and service worker; `text/html; charset=utf-8` on a direct `index.html` request and on the SPA fallback alike (SPEC 4.2, SPEC 2.15) |
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_ci_gates.py` | every step under `.github/workflows/` that scans through `grep` or `git grep`, driven as real shell with stubbed `git`, `grep` and `gh` exiting with a status the test chooses: a match fails the job and prints the ban's own message, exit 1 is the clean result, and 128 fails without printing the clean line; the auto-merge job enables the merge with `--auto --squash` on a documentation-only file list, leaves a list containing code to a human, refuses to decide when the scan could not run, and reports rather than fails when `gh pr merge` does; a step whose shape cannot be driven has to be named in an explicit registry, and a guard test fails when an uncovered one appears, so the next scan added cannot fall silently outside the parametrization; the stubs exit loudly on any invocation they do not recognise rather than reaching the real binary, and nothing touches the network |
-| `test_pre_commit_hook.py` | the leak gate's own exit-status rule (§13): a `git diff --cached` that fails refuses the commit instead of reading an empty staged list as nothing to scan, on both the file list and the unified diff; an unset `companion.denylist` still gives the existing "not configured" failure rather than the new one, so the two stay distinguishable and `tolerate=(1,)` is real; a `git config` failing with any other status is a failure; a clean staged diff exits 0, a matching one exits 1, and the matching line is never printed because it is the secret |
+| `test_shipped_files.py` | the inventory of every directory copied verbatim into the build (§13.2), in both directions: an undeclared file fails and is named, a declared file that is gone fails as missing rather than as unexpected, and the real repository passes as it stands so a wrong inventory is caught here rather than in CI; the index and the disk are each proven to be read, with a file tracked but deleted locally and a file present but untracked; `.githooks/pre-commit` refuses on an undeclared file before it needs a denylist at all; and the hygiene job in `ci.yml` actually invokes the script, because a gate nobody runs is not a gate |
+| `test_pre_commit_hook.py` | the leak gate's own exit-status rule (§13): a `git diff --cached` that fails refuses the commit instead of reading an empty staged list as nothing to scan, on both the file list and the unified diff; an unset `companion.denylist` still gives the existing "not configured" failure rather than the new one, so the two stay distinguishable and `tolerate=(1,)` is real; a `git config` failing with any other status is a failure; a clean staged diff exits 0, a matching one exits 1, and the matching line is never printed because it is the secret; and the shipped-inventory gate the hook now runs first refuses when its `git ls-files` fails, before the denylist is looked up at all |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
 | `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every client in the broadcast set (that only authenticated sockets join it is `test_integration_ws.py`); **a failure building `stats` must not cost that tick's `keepalive`**, since the liveness frame is what tells an idle client a quiet plugin from a dead link and a broken payload is exactly when it is needed; a tick with nobody connected sends nothing at all (§2.4) and does not move the next one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |
@@ -3579,6 +3580,59 @@ Verification is worth checking once rather than assuming: a signed commit still 
 unverified if the key is not on the GitHub account, or if the commit's author e-mail is not one
 of that key's verified addresses. Both must line up, and a key that expires takes future
 signatures with it.
+
+### 13.2 What ships, and what may not be in it
+
+`frontend/public/` is Vite's static directory. Everything in it is copied verbatim into `dist/`,
+packed into the release archive, unpacked into `web_root` by `tools/install-on-pi.sh` and served
+by the plugin's static server (§2.15). A file that lands there is not untidy, it is published to
+anyone who can reach the unit over the tether.
+
+This is written down because it nearly happened. An agent's mutation run left a full copy of
+`frontend/src/` at `frontend/public/src/`, twenty-odd files including test fixtures and stale
+copies of source. Nothing reached a commit, and the only reason is that somebody read `git status`
+before typing `git commit`. `git add -A` sweeps whatever is untracked, so that reading was the
+entire protection.
+
+**The rule.** Every directory copied verbatim into the build declares its contents exactly, in
+`.github/check_shipped_files.py`. An unexpected file fails, and a declared file that is missing
+fails too: a manifest that vanished ships an app that does not install, which is the same mistake
+seen from the other side. Both git's index and the disk are read, because the index alone misses
+the untracked scratch that is about to be swept in, and the disk alone misses a tracked file
+deleted locally. On disk, anything that is not a real directory counts as an entry, symlinks
+included, named but never followed: filtering on "is it a file" would let `public/src -> ../src`
+through, which is the same incident in one line instead of twenty files. An empty directory is invisible to the check
+and deliberately so: git cannot track one, so it carries nothing and ships nothing.
+
+Worth knowing when reading a green result: `globPatterns` in the service worker covers only
+`js,css,html,png,svg,webmanifest`, so a stray `.ts` or `.json` under `public/` is copied into the
+build and served without ever being precached. That is the shape of the risk rather than a
+mitigation of it.
+
+The check runs in CI and in `.githooks/pre-commit`, from the same script so the two cannot drift.
+The hook runs it before the denylist scan and runs it whether or not anything is staged, because
+the file it catches is usually untracked and there is no staged diff to look at yet. A git that
+cannot be read is a failure and not a pass, reported as a message naming the command and its
+status rather than as a traceback: the caller is a commit hook, and a stack trace there says
+nothing about what to do (§13).
+
+**Which directories.** `frontend/public/` is the only one today. `dist/` is built rather than
+copied and is not tracked; `coverage/` and `dev-dist/` are ignored build output; the plugin ships
+as a single file the installer names explicitly, not as a directory scan. The declaration is a
+mapping rather than a single path so that adding a directory is one entry, and it should be added
+the day the build starts copying one rather than the day something unexpected turns up in it.
+
+**What was rejected.** A `.gitignore` entry, which was the obvious first answer. It hides the
+mistake instead of reporting it: the scratch directory stops appearing in `git status`, which is
+precisely the reading that caught it, and a differently-named directory or a `git add -f` walks
+straight past. An ignore rule is right for output nobody should look at and wrong for a place
+where anything unexpected is a defect.
+
+**Scratch belongs outside the repository.** No gate helps if the scratch is written somewhere the
+gate does not cover, and the agents that produce it are told to work on copies. Their charters
+name a path outside the repository rather than "outside the tree you were given", which was the
+wording that produced `frontend/public/src/` in the first place: it is outside `frontend/src/`,
+and inside the directory that ships.
 
 ## 14. Execution order for the implementer
 

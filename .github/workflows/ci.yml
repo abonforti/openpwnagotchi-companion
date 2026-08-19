@@ -251,6 +251,15 @@ jobs:
       - name: Secret scan
         run: python .github/check_secrets.py
 
+      # Everything under frontend/public is copied verbatim into dist/ and
+      # served by the unit, so a stray file there is published rather than
+      # untidy. An agent once left a copy of frontend/src/ in it, fixtures and
+      # all, and only a careful reading of `git status` caught it (#117). The
+      # inventory is exact in both directions: an extra file and a missing one
+      # both fail.
+      - name: Shipped directories hold only what they declare
+        run: python .github/check_shipped_files.py
+
       # Every ban scan below reads three outcomes, not two: `git grep` exits 0 on a
       # match, 1 when nothing matched, and 128 when it cannot compile the pattern or
       # read the tree. The `if git grep ...; then fail; fi` shape these used to have

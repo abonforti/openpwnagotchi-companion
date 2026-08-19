@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local leak gate. Scans the staged diff against an owner-specific denylist.
+"""Local commit gates: what must not be published, and what must not be shipped.
 
 The denylist is NOT stored in this repository and its path is NOT hardcoded here:
 it names the very things that must never be published. Point git at it once, with
@@ -17,6 +17,7 @@ thorough one and applies judgement this script cannot. Run both.
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 
 def git(*args, tolerate=()):
@@ -45,6 +46,26 @@ def fail(*lines):
         print(line, file=sys.stderr)
     sys.exit(1)
 
+
+# The shipped-inventory gate runs first and runs unconditionally, because the
+# file it catches is typically untracked: `git add -A` is what sweeps a scratch
+# directory into a commit, and until that happens there is no staged diff to
+# scan. Same script CI runs, so the two cannot drift (SPEC 13.2).
+shipped_check = Path(__file__).resolve().parent.parent / ".github" / "check_shipped_files.py"
+if not shipped_check.is_file():
+    fail(
+        "pre-commit: .github/check_shipped_files.py is missing, so the shipped-inventory "
+        "gate has not run.",
+        "  This hook expects to be reached through `git config core.hooksPath .githooks`.",
+        "  A hook copied into .git/hooks/ cannot find the rest of the repository.",
+    )
+shipped = subprocess.run([sys.executable, str(shipped_check)], capture_output=True, text=True)
+if shipped.returncode:
+    fail(
+        shipped.stdout.rstrip(),
+        shipped.stderr.rstrip(),
+        "pre-commit: a directory that ships to the unit holds a file nobody declared.",
+    )
 
 denylist_path = git("config", "--get", "companion.denylist", tolerate=(1,)).strip()
 if not denylist_path:

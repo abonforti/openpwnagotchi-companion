@@ -95,7 +95,7 @@ executed and the rule was never asserted. So a coverage figure is not evidence a
 offer it as such.
 
 For every rule you pin, prove the test bites: break the rule in a **scratch copy of the
-implementation outside the tree you were given**, run your tests against the copy, and name the
+implementation in a directory outside this repository**, run your tests against the copy, and name the
 test that dies. Working on a copy is also the one sanctioned contact with implementation code:
 you break it mechanically, you do not study it. Mutants worth running are the cheap, targeted
 ones: invert the new condition, delete the new guard, widen an accepted range, swap an ordering
@@ -118,3 +118,16 @@ Report the files written, what each covers, the mutation results one line per mu
 most importantly, **every ambiguity or contradiction you hit in `SPEC.md`**. That list is the
 highest-value thing you produce. Do not report the coverage number as evidence of anything; the
 mutation section above says why.
+
+## Scratch goes outside the repository
+
+Anything you write that is not part of the change goes in a directory outside this repository:
+copies you mutate, notes, intermediate output. Not in a subdirectory of the tree, not in a
+temporary-looking folder inside it, not in `frontend/public/`. That last one is not hypothetical.
+An agent following "make a copy outside the tree you were given" put a full copy of `frontend/src/`
+into `frontend/public/`, which is outside `frontend/src/` and is also the directory Vite copies
+verbatim into the build and the unit then serves (SPEC 13.2). `git add -A` sweeps untracked files,
+so a scratch directory inside the repository is one careless command away from being published.
+
+A gate now fails when a shipped directory holds a file nobody declared, but the gate covers the
+directories that ship, not every place scratch could land. Outside the repository is the rule.

@@ -11,6 +11,12 @@ commit is made. Filing tests for it under the plugin's hook file would put
 
 The contract under test:
 
+- Before any of that, the hook runs `.github/check_shipped_files.py`
+  unconditionally - whether or not anything is staged - because the file
+  that check exists to catch is usually untracked, and there is no staged
+  diff to look at until `git add -A` sweeps it in (SPEC 13.2). A nonzero
+  exit from that script makes the hook refuse before it ever looks at the
+  denylist.
 - `git(*args, tolerate=())` runs git, and a nonzero exit status not listed in
   `tolerate` calls `fail()`, which prints to stderr and exits 1 without
   returning to the caller.
@@ -36,10 +42,22 @@ CI workflow scans in `test_ci_gates.py`, so the hook's own
 repository. No real denylist path or pattern is used anywhere here: the
 denylist file the hook reads is a throwaway one written into `tmp_path` with
 synthetic patterns, never the owner's real one (SPEC 13).
+
+The hook's `shipped_check` subprocess call runs `.github/check_shipped_files.py`
+by its real path (SPEC 13.2's REPO_ROOT is fixed from that script's own
+`__file__`, not from an argument), and that script itself calls
+`git -C <repo root> ls-files -- <directory>` for every shipped directory. The
+stub therefore has to answer that call too, or every test here would be
+exercising a shipped-inventory failure instead of the denylist logic it is
+actually named for. It answers with the real declared inventory, read from
+`.github/check_shipped_files.py`'s own `SHIPPED_DIRECTORIES` at run time
+rather than a snapshot copied into this file, so the stub does not go stale
+the day a shipped file is added or renamed.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import stat
 import subprocess
@@ -50,12 +68,32 @@ from pathlib import Path
 # Stubbing and running the hook
 # ---------------------------------------------------------------------------
 
-PRE_COMMIT_HOOK = Path(__file__).resolve().parent.parent / ".githooks" / "pre-commit"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PRE_COMMIT_HOOK = REPO_ROOT / ".githooks" / "pre-commit"
+SHIPPED_FILES_CHECK = REPO_ROOT / ".github" / "check_shipped_files.py"
+
+
+def _real_shipped_ls_files_stdout() -> str:
+    """What `git -C <repo root> ls-files -- <directory>` would really answer
+    for every directory the shipped-inventory check declares, read from
+    `SHIPPED_DIRECTORIES` at run time so this does not drift from the
+    declaration it is standing in for."""
+    spec = importlib.util.spec_from_file_location("shipped_check_under_hook", SHIPPED_FILES_CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    lines = [
+        f"{directory}/{name}"
+        for directory, names in module.SHIPPED_DIRECTORIES.items()
+        for name in names
+    ]
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _write_git_stub(
     stub_dir: Path,
     *,
+    ls_files_stdout: str | None = None,
+    ls_files_status: int = 0,
     config_stdout: str = "",
     config_status: int = 0,
     staged_stdout: str = "",
@@ -63,27 +101,45 @@ def _write_git_stub(
     diff_stdout: str = "",
     diff_status: int = 0,
 ) -> Path:
-    """A `git` stub answering the three calls the hook makes: `config --get
-    companion.denylist`, `diff --cached --name-only --diff-filter=ACM`, and
-    `diff --cached --unified=0 -- <files>`. Each call's stdout and exit
-    status are controlled independently, so a test can make either `diff`
-    call fail without touching the other, and can make the config lookup
-    fail with a status other than the one the hook tolerates.
+    """A `git` stub answering the four calls the hook, directly or through
+    `.github/check_shipped_files.py`, makes: `-C <repo root> ls-files --
+    <directory>`, `config --get companion.denylist`, `diff --cached
+    --name-only --diff-filter=ACM`, and `diff --cached --unified=0 --
+    <files>`. Each call's stdout and exit status are controlled
+    independently, so a test can make either `diff` call fail without
+    touching the other, and can make the config lookup fail with a status
+    other than the one the hook tolerates.
 
-    Any invocation that matches none of the three fails loudly instead of
+    `ls-files` defaults to the real declared inventory
+    (`_real_shipped_ls_files_stdout()`) so that, unless a test asks
+    otherwise, the shipped-inventory check the hook now runs first passes
+    and the hook proceeds to the denylist logic every test here besides the
+    shipped-inventory one is actually about. The `ls-files` invocation is
+    `git -C <path> ls-files -- <directory>`, so it is matched by the
+    presence of the `ls-files` subcommand anywhere in the arguments, not by
+    position - `args[:1]` is `-C` for that call, unlike the other three.
+
+    Any invocation that matches none of the four fails loudly instead of
     silently reaching a real `git` and reading the real repository.
     """
+    if ls_files_stdout is None:
+        ls_files_stdout = _real_shipped_ls_files_stdout()
     script = stub_dir / "git"
     script.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "args = sys.argv[1:]\n"
+        f"LS_FILES_STDOUT = {ls_files_stdout!r}\n"
+        f"LS_FILES_STATUS = {ls_files_status!r}\n"
         f"CONFIG_STDOUT = {config_stdout!r}\n"
         f"CONFIG_STATUS = {config_status!r}\n"
         f"STAGED_STDOUT = {staged_stdout!r}\n"
         f"STAGED_STATUS = {staged_status!r}\n"
         f"DIFF_STDOUT = {diff_stdout!r}\n"
         f"DIFF_STATUS = {diff_status!r}\n"
+        "if 'ls-files' in args:\n"
+        "    sys.stdout.write(LS_FILES_STDOUT)\n"
+        "    sys.exit(LS_FILES_STATUS)\n"
         "if args[:1] == ['config']:\n"
         "    sys.stdout.write(CONFIG_STDOUT)\n"
         "    sys.exit(CONFIG_STATUS)\n"
@@ -167,6 +223,33 @@ def test_a_failed_unified_diff_read_refuses_to_commit(tmp_path):
     )
     assert "could not read the staged diff" in result.stderr
     assert "has not run" in result.stderr
+
+
+def test_a_failed_ls_files_read_refuses_before_the_denylist_is_ever_reached(tmp_path):
+    """The fail-closed direction of the shipped-inventory gate SPEC 13.2
+    added in front of the denylist scan: `.github/check_shipped_files.py`
+    calls `git -C <repo root> ls-files -- <directory>` for every shipped
+    directory, and a failing `git` there is not a clean result. The script
+    itself now reports this as a failure and says the inventory was not
+    checked (rather than raising), and the hook must still refuse the
+    commit for it - before it ever looks at `companion.denylist`, which
+    this test leaves unconfigured to prove the ordering."""
+    result = _run_pre_commit_hook(tmp_path, ls_files_status=2, ls_files_stdout="")
+
+    assert result.returncode != 0, (
+        f"a failed `git ls-files` must refuse the commit, "
+        f"got returncode {result.returncode}; "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    combined = result.stdout + result.stderr
+    assert "companion.denylist is not configured" not in combined, (
+        "the shipped-inventory gate must fail before the denylist lookup is "
+        f"ever reached; got {combined!r}"
+    )
+    assert "has not been checked" in combined, (
+        f"a failed `ls-files` must say the inventory was not checked, "
+        f"not merely that the commit was refused; got {combined!r}"
+    )
 
 
 def test_an_unset_denylist_is_the_existing_failure_not_a_git_failure(tmp_path):

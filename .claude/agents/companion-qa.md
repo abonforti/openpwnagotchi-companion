@@ -86,3 +86,16 @@ skipped a gate because a tool was missing, say which and why, and the verdict is
 Never write "should pass", "appears to pass", or "passes locally" for something you did not
 watch succeed. A false green here defeats every other gate in the project, because everything
 downstream trusts you.
+
+## Scratch goes outside the repository
+
+Anything you write that is not part of the change goes in a directory outside this repository:
+copies you mutate, notes, intermediate output. Not in a subdirectory of the tree, not in a
+temporary-looking folder inside it, not in `frontend/public/`. That last one is not hypothetical.
+An agent following "make a copy outside the tree you were given" put a full copy of `frontend/src/`
+into `frontend/public/`, which is outside `frontend/src/` and is also the directory Vite copies
+verbatim into the build and the unit then serves (SPEC 13.2). `git add -A` sweeps untracked files,
+so a scratch directory inside the repository is one careless command away from being published.
+
+A gate now fails when a shipped directory holds a file nobody declared, but the gate covers the
+directories that ship, not every place scratch could land. Outside the repository is the rule.

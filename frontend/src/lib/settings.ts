@@ -87,171 +87,40 @@ function isPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= MIN_PORT && value <= MAX_PORT
 }
 
-// Lenient on purpose: this only has to tell an IPv6 literal apart from a
-// hostname or a "host:port" typo, not validate every RFC 4291 shorthand.
-// Two or more colons is the signal; a single colon is what "host:port"
-// looks like, and that is exactly the shape SPEC 4.7 rejects. isBareHost
-// below is what actually rejects a malformed literal such as "1:2:3" --
-// this only decides whether to bracket for that round trip.
-const IPV6_CHARS_RE = /^[0-9a-fA-F:]+$/
+// SPEC 4.7: an address is an IPv4 literal, four dot-separated decimal
+// octets in 0-255, none of them written with a leading zero -- not a
+// hostname, not an IPv6 literal in any spelling, and not octal. SPEC
+// 4.5.1 is why an IPv4 literal is required at all, and it is two reasons
+// rather than one: the plugin binds IPv4 literals only (D5.1) and
+// gen-cert.sh wants a dotted quad, which rules out IPv6; and a
+// certificate carrying a DNS name is not matched by iOS against the
+// address the app connects to, which rules out a hostname. The leading-zero exclusion is why the
+// grammar cares about spelling and not only about value: the WHATWG URL
+// parser reads an octet written with a leading zero as octal ("010"
+// becomes 8), so "010.0.0.2" would silently reach new URL() as
+// "8.0.0.2", and "08.0.0.2" -- 8 and 9 not being octal digits -- would
+// make new URL() throw instead. Refusing the spelling here closes both
+// outcomes before any address is handed to a URL parser.
+const IPV4_RE = /^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/
 
-function isIPv6(address: string): boolean {
-  if (!IPV6_CHARS_RE.test(address)) return false
-  return (address.match(/:/g)?.length ?? 0) >= 2
-}
-
-// SPEC 4.7 refuses the unspecified IPv6 address, whatever shorthand it is
-// spelled in -- "::", "::0" and "0:0:0:0:0:0:0:0" all name the same 128
-// zero bits, and "::ffff:0:0" names it again through the IPv4-mapped
-// form, the IPv6 spelling of the IPv4 wildcard "0.0.0.0". Enumerating
-// spellings is the thing this rule keeps having to re-close, so this
-// expands `address` (already confirmed by isIPv6 to be colon-hex only)
-// to its full eight 16-bit groups and asks what the value is rather than
-// how it was written. `address` is never bracketed here; the caller
-// still owns bracketing for the URL round trip.
-// Depth behind the serializer rather than the thing that catches the odd
-// spellings: `new URL` renormalises `::0` and `0:0:0:0:0:0:0:0` on its own, so
-// the round-trip comparison refuses those before this runs, and only `::` and
-// `::ffff:0:0` reach it. It exists so the rule is decided by what an address
-// means rather than by how it happens to be written, which is the mistake the
-// leading-zero rule made twice (SPEC 4.7).
-function ipv6Groups(address: string): number[] | null {
-  const halves = address.split('::')
-  if (halves.length > 2) return null
-  const first = halves[0] ?? ''
-  const second = halves[1] ?? ''
-  let head: string[]
-  let tail: string[]
-  if (halves.length === 2) {
-    head = first === '' ? [] : first.split(':')
-    tail = second === '' ? [] : second.split(':')
-  } else {
-    head = first.split(':')
-    tail = []
-  }
-  const missing = 8 - head.length - tail.length
-  if (missing < 0 || (halves.length === 1 && missing !== 0)) return null
-  const groups = [...head, ...Array(missing).fill('0'), ...tail]
-  if (groups.length !== 8) return null
-  return groups.map((group) => Number.parseInt(group === '' ? '0' : group, 16))
-}
-
-function isUnspecifiedIPv6(address: string): boolean {
-  const groups = ipv6Groups(address)
-  if (groups === null) return false
-  if (groups.every((group) => group === 0)) return true
-  // ::ffff:0:0, the IPv4-mapped spelling of 0.0.0.0.
-  return (
-    groups[0] === 0 &&
-    groups[1] === 0 &&
-    groups[2] === 0 &&
-    groups[3] === 0 &&
-    groups[4] === 0 &&
-    groups[5] === 0xffff &&
-    groups[6] === 0 &&
-    groups[7] === 0
-  )
-}
-
-// SPEC 4.7: an address is ASCII. new URL() folds a hostname by IDNA, not
-// by Unicode case rules, and the two agree on almost everything except
-// U+212A, the Kelvin sign -- it lowercases in JavaScript to the same "k"
-// IDNA maps it to, so an address typed with it would round-trip through
-// candidate.toLowerCase() unchanged and then connect to a host other than
-// the one on screen. Refusing any non-ASCII code point up front closes
-// that off before the comparison ever runs; a punycode name is already
-// ASCII in its "xn--" form and passes unaffected, the shape a browser
-// would have produced anyway. This is one half of the Kelvin-sign defence:
-// isAscii states the refusal as a rule, before the parser ever sees the
-// character; asciiLowerCase below is what makes that refusal observable
-// by keeping the comparison itself out of Unicode case folding. Neither
-// closes the hazard alone.
-const ASCII_RE = /^[\x00-\x7f]*$/
-
-function isAscii(address: string): boolean {
-  return ASCII_RE.test(address)
-}
-
-// The other half of the Kelvin-sign defence started at isAscii above: the
-// comparison in bareHostRoundTrips only ever runs on an address isAscii
-// already accepted, so this only has to fold "A"-"Z" -- but it is kept
-// independent of toLowerCase() so nothing routes a non-ASCII input through
-// Unicode case folding again by accident. Either half alone looks like a
-// safe, removable refactor; together they are what keeps U+212A from
-// round-tripping to a host other than the one on screen.
-function asciiLowerCase(value: string): string {
-  return value.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32))
+function isIPv4Literal(address: string): boolean {
+  if (!IPV4_RE.test(address)) return false
+  return address.split('.').every((octet) => Number(octet) <= 255)
 }
 
 /**
- * SPEC 4.7: an address is accepted only if it round-trips through the same
- * parser wsUrlFor hands it to, bracketed the same way wsUrlFor brackets
- * it. This replaced a per-grammar hostname/IPv4 check that rejected a
- * leading zero ("010.0.0.2" reads as octal to new URL()) but missed the
- * identical hazard in hex -- "0x7f.1", "0x7f000001", "0xc0000201" and
- * "0x1.0x2.0x3.0x4" all pass the old all-digit guard and reach new URL()
- * as something else entirely. Closing the class rather than the instance:
- * anything the URL parser silently rewrites, whatever base or shorthand it
- * happens to read a label in, is by definition an address that displays
- * as one thing and connects to another, and there is no need to know the
- * name of the rewrite to refuse it. The comparison is case-insensitive
- * because new URL() lowercases a hostname on the way through.
+ * SPEC 4.7: an address is a bare IPv4 literal, with no scheme, no path,
+ * no credentials, no port and no extra syntax, and it names a host.
+ * isIPv4Literal decides the first part: the grammar and each octet's
+ * range. It cannot decide the second part on shape alone, because
+ * 0.0.0.0 and 255.255.255.255 are well-formed dotted quads that name no
+ * host to connect to -- the wildcard nothing in this project ever binds
+ * (SPEC 3), and the limited broadcast address -- so those two are
+ * refused here by name instead.
  */
-function bareHostRoundTrips(address: string): boolean {
-  if (!isAscii(address)) return false
-  const bracketed = isIPv6(address)
-  const candidate = bracketed ? `[${address}]` : address
-  let url: URL
-  try {
-    url = new URL(`wss://${candidate}:1`)
-  } catch {
-    return false
-  }
-  if (url.hostname !== asciiLowerCase(candidate)) return false
-  // The unspecified IPv6 address and the unspecified IPv4 address both
-  // round-trip to themselves, so nothing above catches either, but
-  // neither names a host to connect to -- SPEC 4.7 refuses both
-  // explicitly, on the same grounds SPEC 3 holds the plugin listeners
-  // to: nothing in this project ever binds a wildcard, so nothing here
-  // should be able to name one. The IPv6 side is decided by meaning
-  // (isUnspecifiedIPv6), not by one literal spelling of it.
-  if (bracketed && isUnspecifiedIPv6(address)) return false
-  if (!bracketed && url.hostname === '0.0.0.0') return false
-  return true
-}
-
-/**
- * SPEC 4.7: an address is a bare host, a name or an IPv4 or IPv6 literal,
- * with no scheme, no path, no credentials and no port. Ruling out "://",
- * "/" and "@" up front covers the scheme/path/credentials cases directly
- * and gives a clearer rejection than routing them through the URL parser
- * would. "[" and "]" are ruled out for the same reason and one more: a
- * bare host never carries the brackets an IPv6 literal needs inside a
- * URL, and bracketing is bareHostRoundTrips' own job below, done once,
- * consistently, from the unbracketed address -- accepting a pre-bracketed
- * literal here would let it reach the URL parser unbracketed instead
- * (isIPv6 does not recognise "[" or "]" as IPv6 characters), round-trip
- * to itself, and skip the IPv6 branch of every check downstream,
- * including the unspecified-address refusal. A trailing dot (a
- * root-labelled FQDN such as "example.test.") is also rejected up front:
- * new URL() accepts it unchanged, so the round trip below would not
- * catch it, but SPEC 4.7 asks for a bare host with no extra syntax and
- * there is nothing a root label buys an entry on this screen. Everything
- * else is decided by bareHostRoundTrips.
- */
-function isBareHost(address: string): boolean {
-  if (
-    address === '' ||
-    address.includes('://') ||
-    address.includes('/') ||
-    address.includes('@') ||
-    address.includes('[') ||
-    address.includes(']') ||
-    address.endsWith('.')
-  ) {
-    return false
-  }
-  return bareHostRoundTrips(address)
+function isUsableAddress(address: string): boolean {
+  if (!isIPv4Literal(address)) return false
+  return address !== '0.0.0.0' && address !== '255.255.255.255'
 }
 
 function sanitizeLabel(value: unknown, address: string): string {
@@ -280,7 +149,7 @@ function parseHost(value: unknown): Host | null {
   const id = ownField(value, 'id')
   const address = ownField(value, 'address')
   if (typeof id !== 'string' || id === '') return null
-  if (typeof address !== 'string' || !isBareHost(address)) return null
+  if (typeof address !== 'string' || !isUsableAddress(address)) return null
   const label = sanitizeLabel(ownField(value, 'label'), address)
   const wsPort = sanitizePort(ownField(value, 'wsPort'), DEFAULT_WS_PORT)
   const httpPort = sanitizePort(ownField(value, 'httpPort'), DEFAULT_HTTP_PORT)
@@ -400,13 +269,13 @@ function generateId(): string {
  * SPEC 4.7: the stored blob is validated on the way in and on the way out
  * -- a field the Settings screen writes is no more trustworthy than one
  * read from storage. `address` has no substitute, same as in parseHost, so
- * an address that is not a bare host refuses the call rather than being
+ * an address that fails isUsableAddress refuses the call rather than being
  * persisted for the next load to repair; every other field is sanitized
  * the same way parseHost repairs it.
  */
 export function addHost(host: Omit<Host, 'id'>): Host {
-  if (typeof host.address !== 'string' || !isBareHost(host.address)) {
-    throw new Error('settings: address must be a bare host (SPEC 4.7)')
+  if (typeof host.address !== 'string' || !isUsableAddress(host.address)) {
+    throw new Error('settings: address must be an IPv4 literal (SPEC 4.7)')
   }
   const created: Host = {
     id: generateId(),
@@ -451,8 +320,8 @@ export function updateHost(id: string, patch: Partial<Omit<Host, 'id'>>): void {
 
     const addressPatched = 'address' in patch
     const address = addressPatched ? patch.address : existing.address
-    if (typeof address !== 'string' || !isBareHost(address)) {
-      throw new Error('settings: address must be a bare host (SPEC 4.7)')
+    if (typeof address !== 'string' || !isUsableAddress(address)) {
+      throw new Error('settings: address must be an IPv4 literal (SPEC 4.7)')
     }
     const addressChanged = addressPatched && address !== existing.address
 
@@ -520,12 +389,10 @@ export function activateHost(id: string): void {
 /**
  * The wss:// URL lib/ws.ts's WsClientOptions.url wants, built from a
  * host's address and wsPort. TLS is mandatory (SPEC 3), so this is always
- * wss, never ws. SPEC 4.7: `host.address` is a bare host by construction
- * (parseHost, addHost and updateHost all refuse anything else), so the
- * only thing left to do here is bracket an IPv6 literal, which the URL
- * syntax requires and a plain address string does not carry.
+ * wss, never ws. SPEC 4.7: `host.address` is a bare IPv4 literal by
+ * construction (parseHost, addHost and updateHost all refuse anything
+ * else), so there is nothing left to normalise here.
  */
 export function wsUrlFor(host: Host): string {
-  const address = isIPv6(host.address) ? `[${host.address}]` : host.address
-  return `wss://${address}:${host.wsPort}`
+  return `wss://${host.address}:${host.wsPort}`
 }

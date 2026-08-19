@@ -2507,7 +2507,7 @@ direction.
 **The stored blob is validated on the way in and on the way out.** A field the Settings screen
 writes is no more trustworthy than one read from storage: both end up persisted, and only one
 of them is repaired by the next load. A port that is not an integer in range is repaired to its
-default wherever it arrives, and an address that is not a bare host is refused where it is
+default wherever it arrives, and an address that is not an IPv4 literal is refused where it is
 written rather than allowed to sit in storage until something else trips over it.
 
 The two refusals differ, and deliberately. **The parser repairs or drops**, because it is reading
@@ -2517,46 +2517,40 @@ front of it and a field to put a message next to, and because an address is the 
 substitute: a repaired port is still that host, a repaired address is a different unit. A throw reaching a user is a bug in that screen, not a path
 somebody walks: validate in the form, and the throw is the backstop that says the form forgot.
 
-**An address is a bare host**, a name or an IPv4 or IPv6 literal, with no scheme, no path, no
-credentials and no port. `wss://10.0.0.2:8082` as an *address* produces a URL with two schemes;
+**An address is an IPv4 literal**, and nothing else. §4.5.1 decided this before any of this
+section existed and gave the reason: the plugin binds IPv4 literals only (D5.1), and
+`gen-cert.sh` refuses IPv6 because a certificate carrying a DNS name is not matched by iOS
+against the address the app connects to. A hostname or an IPv6 literal offers a path that
+neither the binding nor the certificate can serve, and the failure it produces is the worst
+kind: the socket opens against something, TLS fails, and the app reports the unit as
+unreachable, which is true and useless. The field the address was typed into is the only
+place that could have said it can never work.
+
+No scheme, no path, no credentials and no port either. `wss://10.0.0.2:8082` as an *address* produces a URL with two schemes;
 `10.0.0.2@example.test` produces a URL whose authority is `example.test`, so the token would go
 somewhere other than the entry the owner is looking at. The CSP of §2.15.1 fails that closed
 rather than allowing it, which makes it a confusing failure rather than a leak, and it is still
-not a shape to accept. An IPv6 literal is bracketed when the URL is built.
+not a shape to accept.
 
-**An address is refused when the URL parser does not give back the host it was given.** That is
-the rule, and it is one rule rather than a list, because the list kept being incomplete: an
-IPv4 octet with a leading zero was refused while `0x7f.1` was not, and both are read by
-`new URL` as `127.0.0.1`. Anything the parser silently rewrites is by definition an address
-that displays as one thing and connects to another, which is the whole hazard, so the test is
-the rewrite itself rather than the notations that cause it.
+**The grammar is the whole rule: four decimal parts, each 0 to 255, none of them written with
+a leading zero.** That last clause is the one worth explaining, because it started as a round
+trip through `new URL` and ended as a regex.
 
-**An address is ASCII, and that is part of the same rule rather than a separate opinion.** The
-comparison that decides the round trip has to fold case, and JavaScript folds case by Unicode
-rules while the URL parser folds by IDNA, so the two agree on almost every character and the
-exception is enough: U+212A, the Kelvin sign, lowercases in JavaScript to the same `k` that IDNA
-maps it to, so an address written with it round-trips and then connects to a different host.
-A punycode name is already ASCII in its `xn--` form and passes unaffected, which is the shape a
-browser would have produced anyway.
+`new URL` reads a part with a leading zero as octal. `010.0.0.2` becomes `8.0.0.2`, so the entry
+displays one unit and the token goes to another, which is the hazard the round trip was built to
+catch. But `08.0.0.2` is worse: 8 is not an octal digit, so the parser **throws** rather than
+rewriting, and §4.7 promises this module repairs or drops rather than throwing. A persisted blob
+carrying that address would take `loadSettings` down with it.
 
-Cheap rejections stay in front of it, for the error message rather than for the outcome: an
-empty string, a scheme, a path, credentials, and **square brackets**, because a bare host does
-not carry URL syntax and a pre-bracketed literal would otherwise slip the IPv6 handling by not
-looking like IPv6 to it. Bracketing is this module's own business, applied when the URL is
-built. Two cases need their own rule because the round trip
-alone would let them through. A root-labelled FQDN such as `example.test.` comes back unchanged
-from the parser and is refused anyway, because being stricter than the parser is the safe
-direction when the parser's leniency is what produces the surprise. And the wildcards round-trip
-perfectly while naming no host to connect to: `::` and `0.0.0.0` are refused for the same reason
-nothing in this project ever binds them, and so is the IPv4-mapped form `::ffff:0:0`, which is
-the same address wearing a different notation. That last one is decided by expanding the
-groups and reading what they mean, not by listing spellings: listing spellings is the mistake
-the leading-zero rule made twice.
+Refusing the spelling in the grammar closes both at once, and closes them earlier, in the shape
+rather than in an exception. It also retires the round trip: with hex refused by the absence of
+`x`, leading zeros refused by the grammar and every part bounded, there is nothing left that the
+parser would give back differently from what it was given.
 
-A dotted-quad IPv6 form such as `::ffff:192.0.2.1` is refused outright, which is worth knowing
-because it is the shape an owner is most likely to paste for a mapped address. It is the safe
-direction and it costs nothing here: the unit is reached at its own address, and that address is
-an IPv4 literal or a name.
+**`0.0.0.0` and `255.255.255.255` are refused by name.** Both are well-formed and neither names a
+host to connect to: one is the wildcard nothing in this project ever binds, the other is the
+limited broadcast address. A grammar cannot tell either from an ordinary address, so they are the
+two values the shape rule cannot decide and the only ones that need naming.
 
 **A settings blob that will not parse is replaced by the defaults, and the app still starts.**
 `localStorage` survives every upgrade the app will ever ship, so a shape written by an older
@@ -3184,7 +3178,7 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   PASV control; §4.3.4, the mode and PASV indicators derived from `stats` and never from the tap,
   showing the request as pending in between and **not** reverting silently if the command fails;
   §4.6.1's GPS states resolved first-match-wins in the stated order.
-- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as a bare host so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable.
+- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as an IPv4 literal so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered

@@ -51,6 +51,14 @@ Locate the denylist with `git config --get companion.denylist`, the same mechani
 `.githooks/pre-commit` uses. One case-insensitive Python regular expression per line; `#`
 comments and blank lines ignored.
 
+**Match the denylist with Python, never with a shell `grep`.** The patterns are written in
+Python's dialect and need lookahead and lookbehind; `grep`, `egrep` and whatever `grep` is
+aliased to on this machine reject those patterns instead of applying them, and print nothing
+for a pattern they skipped. That output is identical to a clean scan. Read the file and run
+the patterns with `re`, one `re.compile` per line, and if a line does not compile the audit
+**fails**: report the line number, do not report a verdict. A scan missing one pattern is not
+a scan with one fewer pattern, it is a scan you cannot speak for.
+
 The path is read from local git config and is **never written down in this repository**. The
 file lives outside the repository on purpose: it names the very things that must not be
 published, so recording either its contents or its location here would be the leak it exists to

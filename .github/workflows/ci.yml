@@ -251,17 +251,23 @@ jobs:
       - name: Secret scan
         run: python .github/check_secrets.py
 
+      # Every ban scan below reads three outcomes, not two: `git grep` exits 0 on a
+      # match, 1 when nothing matched, and 128 when it cannot compile the pattern or
+      # read the tree. The `if git grep ...; then fail; fi` shape these used to have
+      # collapsed the last two, so a pattern that stopped compiling turned its own ban
+      # off and printed the clean line (SPEC 13). A gate that cannot run must fail.
+      #
       # SPEC 10.5 rules out screenshot baselines outright, so the assertion that
       # would create one is banned rather than discouraged. Without this, the
       # first `toHaveScreenshot` commits a baseline that CI can only fail on.
       - name: No screenshot baselines
         run: |
-          if git grep -n -E 'toHaveScreenshot|toMatchSnapshot' -- 'frontend/tests' > /dev/null 2>&1; then
-            echo "::error::screenshot baselines are banned (SPEC.md 10.5)."
-            git grep -n -E 'toHaveScreenshot|toMatchSnapshot' -- 'frontend/tests'
-            exit 1
-          fi
-          echo "no screenshot baselines found"
+          git grep -n -E 'toHaveScreenshot|toMatchSnapshot' -- 'frontend/tests' && status=0 || status=$?
+          case "$status" in
+            0) echo "::error::screenshot baselines are banned (SPEC.md 10.5)." ; exit 1 ;;
+            1) echo "no screenshot baselines found" ;;
+            *) echo "::error::the scan itself failed (git grep exit $status); this is not a clean result." ; exit 1 ;;
+          esac
 
       # The 85% branch-coverage floor is only meaningful if nobody can opt out of
       # it, so the opt-out is banned outright rather than discouraged. SPEC 10.7:
@@ -269,12 +275,12 @@ jobs:
       # opt-out plus a floor is a number that means nothing.
       - name: No coverage exclusions
         run: |
-          if git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py' > /dev/null 2>&1; then
-            echo "::error::'# pragma: no cover' is banned (SPEC.md 10.7)."
-            git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py'
-            exit 1
-          fi
-          echo "no coverage exclusions found"
+          git grep -n -E 'pragma:[[:space:]]*no cover' -- '*.py' && status=0 || status=$?
+          case "$status" in
+            0) echo "::error::'# pragma: no cover' is banned (SPEC.md 10.7)." ; exit 1 ;;
+            1) echo "no coverage exclusions found" ;;
+            *) echo "::error::the scan itself failed (git grep exit $status); this is not a clean result." ; exit 1 ;;
+          esac
 
       # Svelte escapes {...} by default, so the safe path is the default one and
       # {@html} is the only way to leave it. Every string this app renders that a
@@ -293,9 +299,9 @@ jobs:
       # enforced, it is one sink closed.
       - name: No unescaped markup
         run: |
-          if git grep -n -E '@html' -- 'frontend/src/*' > /dev/null 2>&1; then
-            echo "::error::'{@html}' is banned (SPEC.md 4.5.3)."
-            git grep -n -E '@html' -- 'frontend/src/*'
-            exit 1
-          fi
-          echo "no unescaped markup found"
+          git grep -n -E '@html' -- 'frontend/src/*' && status=0 || status=$?
+          case "$status" in
+            0) echo "::error::'{@html}' is banned (SPEC.md 4.5.3)." ; exit 1 ;;
+            1) echo "no unescaped markup found" ;;
+            *) echo "::error::the scan itself failed (git grep exit $status); this is not a clean result." ; exit 1 ;;
+          esac

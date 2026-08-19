@@ -2087,7 +2087,105 @@ for the screen.
 ### 4.4 Stores (`lib/stores.ts`)
 
 Svelte writable/derived stores: `connection`, `stats`, `accessPoints`, `handshakes`, `peers`,
-`log`, `gps`, `face`, `capabilities`. Views subscribe; pushes from the plugin update them live.
+`log`, `gps`, `face`, `capabilities`, `channel`. Views subscribe; pushes from the plugin update them live.
+
+**The stores subscribe to the client, never the reverse.** `lib/ws.ts` knows nothing about
+Svelte and nothing about this file: it is handed to an adapter here, which subscribes to its
+state and its messages and writes the stores. That keeps the connection layer testable without a
+store and the stores testable without a socket, and it is why §4.3 could be built and reviewed
+before this section existed.
+
+#### 4.4.1 What each store holds, and what writes it
+
+| store | written by | rule |
+|---|---|---|
+| `connection` | the client's state and its unauthorized reason | a mirror, not a second opinion. §4.3.1 owns the state machine |
+| `stats` | the last `stats` message | **the payload as it arrived, never patched.** See below |
+| `capabilities` | derived from `stats` | not a store of its own with its own writer: it arrives inside `stats` and having two sources for one fact is how they disagree |
+| `accessPoints` | `wifi_update`, and the `access_points` reply | **replaced whole, never merged** |
+| `handshakes` | the `handshakes_list` reply only | **the whole payload**, `entries` with `truncated` and `total` beside them, not the entries alone: §4.5.2 renders the truncation notice and a `500+` badge, and a view subscribes to stores rather than to the client, so a fact dropped here is a fact no view can reach. A push asks for the list rather than writing one, see below |
+| `peers` | the `peers_list` reply, and each `peer_detected` push | list replaces; a push upserts on `fingerprint`, which is the identity in `common.json#/$defs/Peer`, not `name`, which two units can share. **The default identity `'???'` (§2.8) is not an identity and never matches**: those peers are appended, because collapsing every unadvertised unit into one row would show one peer where there are several. Order in the list is the view's business (§4.5.2 sorts by signal and last seen), so this file promises none |
+| `log` | the `log_lines` reply | **replaces, never appends.** The plugin owns the tail and the clamp (§2.9); appending would grow a second, divergent buffer in the app |
+| `gps` | `gps_update`, and the `gps` field of `stats` | whichever arrived later. Both are the same resolved shape (§2.12), so there is nothing to reconcile |
+| `face` | `face_status`, and the status half of `status_change` | §2.13. `status_change` also carries a `mood`, which is deliberately dropped: `FaceStatus` has no field for it and no view in §4.5 renders one |
+| `channel` | `channel_hop`, and the `channel` field of `stats` | the later of the two sources, see below. Exported because the hop is worth showing before the next broadcast, which on this link is up to 20 s away |
+
+**`stats` is never patched, and that is the decision this table exists for.** `channel_hop`
+carries a channel and `stats` carries one too, arriving up to 20 s apart. Writing the hop into
+the last `stats` object would produce a payload that never left the unit, whose `sessionAge`
+claims a freshness the patched field does not have, and staleness is read from that field
+(§4.3.1). So the hop goes to a `channel` store of its own: the `channel_hop` value when it arrived
+after the last `stats`, and `stats.channel` otherwise, whichever came later. A view that wants the current channel
+reads that store; a view that wants the unit's own snapshot reads `stats`.
+
+**A `handshake` push does not write the list, it asks for it.** The push carries `{filename,
+ap, station, gps}` (§2.13); an entry in the list carries `ssid`, `bssid`, `mtime` and `size`,
+which the plugin gets from parsing the capture name and stat-ing the file (§2.7). The three
+ways to close that gap are to invent the missing fields, to reimplement the plugin's filename
+parsing in the client, or to ask. Inventing puts fabricated data on a screen, and a `size` of
+zero or a `ssid` holding a filename is worse than a row that appears a moment later.
+Reimplementing duplicates a rule that lives in §2.7 and will drift from it. So the push is a
+**signal**, not a payload: it tells the client the list changed, and the client issues
+`get_handshakes` and takes the reply. **At most one such refresh is in flight**, so a unit that
+captures several handshakes in a burst produces one round trip and not one per capture, on a
+link where the round trip is the expensive part.
+
+**That refresh belongs to the client that asked for it**, and a remount is not a reason to ask
+again: the same client attaching a second time finds its own refresh still outstanding and
+coalesces into it, because the reply will arrive and write the store either way. A refresh owned
+by a client that is no longer attached is a different thing and counts as not in flight: its
+reply can no longer reach a store, so treating it as outstanding would let a new host's first
+capture disappear into a previous host's request. Nothing wedges in either case, because every
+read settles, if not by a reply then by the 15 s timeout that §4.3.8 arms at the call.
+
+The push is still worth having for what it carries directly, which is that a capture *just
+happened*: that is a notification, and it does not need the row to be on screen yet.
+
+**`accessPoints` is replaced rather than merged**, and the reason is the failure merging causes:
+bettercap's list is what is visible now, so an access point that dropped out of range is absent
+from the next one. A merge keeps it on the screen for ever, and the app's whole claim is that it
+shows what the unit sees.
+
+#### 4.4.2 What survives a reconnect
+
+**One client at a time.** The stores are module singletons, so a second `connectStores` while
+one is still attached would have two adapters writing the same stores, and either one's
+`unauthorized` would blank the other's data. It is refused rather than tolerated: calling it
+twice is a bug in the caller, and a loud failure at mount is cheaper than two units' data
+interleaved on one screen. **Switching hosts is therefore teardown, then `resetStores()`, then
+attach** (§4.5.2 gives Settings a host list, so this is a real flow and not a hypothetical): without
+the reset, the previous unit's access points, peers and handshakes stay on screen under the new
+one, which is the same disclosure the clearing rule below forbids on `unauthorized`.
+
+**The data stores keep their last values across a drop.** The link goes down often by design
+(D1), and blanking every screen each time would make an ordinary tether hiccup look like a
+failure. The connection state says what is happening and §4.3.1 already decides how staleness is
+shown; the data does not need to vanish to make that point.
+
+**They are cleared on `unauthorized`,** where the data belongs to a session the unit refused:
+leaving it on screen behind a token prompt shows somebody the contents of a unit that has just
+declined to talk to them. **After an explicit `close()` they are cleared too, but by the
+caller**, for the reason given below.
+
+Nothing is cleared on `offline`, which is the one people will be tempted to add.
+
+**That is the caller's because the client cannot tell it apart.** An explicit `close()` and a
+dropped tether both end in `offline` and nothing on the client's surface distinguishes them, so
+the adapter clears on `unauthorized`, which it can see, and the screen that asked to disconnect
+calls the reset itself. `resetStores()` clears the data and leaves `connection` alone: it is a
+mirror of the client (§4.4.1), and reporting `offline` while the client is connected is exactly
+the second opinion that row forbids. Discriminating them inside the
+adapter would mean adding a signal to §4.3 for the benefit of this file, which is the wrong
+way round.
+
+**The adapter seeds from the client when it attaches**, reading the current state and the
+last `stats` rather than waiting for the next push. A view mounted while the connection is
+already live would otherwise show an empty screen for up to a broadcast interval, which on
+this link is 20 s of blank for data the client already holds.
+
+**A `status_change` arriving before any `face_status` is dropped.** It carries the status
+half only (§2.13), and there is nothing to merge it into; filling the other fields with
+placeholders would put a face on screen that the unit never drew.
 
 ### 4.5 Navigation model
 

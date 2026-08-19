@@ -1855,8 +1855,8 @@ spends its life reconnecting a link that was merely slow.
 | reconnect backoff | 1, 2, 4, 8, 16, 30, 30, … s | capped at 30, **full jitter**: each delay is drawn uniformly from `[0, cap]` where `cap` is the value in the sequence, so the cap applies before the jitter and the sequence is an upper bound rather than a schedule. Two phones reconnecting to one unit must not do it in lockstep |
 | auth window | 10 s | not ours to choose; the plugin closes the socket (§2.3.3) |
 
-The jitter is specified as a form and not as a mood because §10.5 requires `ws.spec.ts` to assert
-it, and "with jitter" cannot be asserted. Full jitter over `[0, cap]` can be: the delay is never
+The jitter is specified as a form and not as a mood because "with jitter" is not a claim anything
+can check, and a rule nobody can check is a preference. Full jitter over `[0, cap]` can be: the delay is never
 above the cap, and over many draws it is not always at it.
 
 **Reconnection is never given up on**, with the two exceptions already named: `unauthorized`,
@@ -2357,6 +2357,13 @@ any row of adjacent controls, carry a gap.
 18.66px at weight >= 700) and for icons and other non-text indicators (1.4.11). AAA is not
 adopted: 7:1 is not reachable on a dark palette without flattening it, and a level nobody can
 meet gets waived case by case until it means nothing.
+
+**A map never owns the whole views area.** The map view scrolls the page under a drag as well
+as panning the map itself, and those two gestures start the same way. If the map filled the
+area in both directions there would be nowhere to begin a drag that means "scroll the page", and
+on a phone that is the only way out of the view. So the map is always narrower or shorter than
+the views area, in both orientations, and the leftover strip is the part of the rule that does
+the work rather than an aesthetic margin. Asserted as geometry rather than as pixels (§10.5).
 
 **No `background-image` behind text.** A gradient has a different contrast ratio at every point,
 so text over it can be legible at one end and not the other, and no automated check can return
@@ -3205,10 +3212,10 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   orientations at 402x874 and 874x402. WebKit is not Safari, but it is the same engine family,
   and the class of defect that hurt here (viewport units, nested contexts, safe areas) is that
   family's.
-- Geometry invariants rather than pixels: nothing painted below the content area in either
-  orientation, the map never owning the full width or height of the views area so a drag always
-  has somewhere to scroll the app, touch targets at 44px, contrast computed for every token
-  against every surface it can land on.
+- Geometry invariants rather than pixels, for the rules §4.5.1 states: nothing painted below the
+  content area in either orientation, the map never owning the full width or height of the views
+  area so a drag always has somewhere to scroll the app, touch targets at 44px, contrast computed
+  for every token against every surface it can land on.
 - `charset.spec.ts` (SPEC 4.2): the built `dist/index.html` declares `utf-8` within the first
   1024 bytes, checked once against the raw response bytes rather than once per project since the
   rule has no engine dependency; and `document.characterSet` is `UTF-8` in every project, which

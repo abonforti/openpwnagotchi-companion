@@ -107,9 +107,10 @@
   </header>
 
   <!-- data-region="views" is a declared DOM hook, like data-view, data-nav,
-       data-layout and data-sheet. SPEC 10.5's map invariant and SPEC 4.5's
-       drag-to-scroll rule are phrased against the views area, and a test cannot
-       derive that region from the view roots: a view keeps a reading measure
+       data-layout and data-sheet. SPEC 4.5.1's map rule, that the map never
+       owns the whole views area so a drag always has somewhere to scroll the
+       app, is phrased against that area, and a test cannot derive that region
+       from the view roots: a view keeps a reading measure
        and is deliberately shorter than the area that scrolls it. -->
   <main data-region="views" use:inertWhen={sheetOpen}>
     <!-- Every view stays mounted. The Map keeps its viewport and zoom and the

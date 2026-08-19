@@ -2099,7 +2099,7 @@ before this section existed.
 
 | store | written by | rule |
 |---|---|---|
-| `connection` | the client's state and its unauthorized reason | a mirror, not a second opinion. §4.3.1 owns the state machine |
+| `connection` | the client's state and its unauthorized reason | a mirror, not a second opinion. §4.3.1 owns the state machine. **With no client attached it reads `offline`**, which is the same rule rather than an exception to it: a mirror of nothing shows nothing connected, and leaving the last client's final state standing would have the app claim a connection that no longer exists |
 | `stats` | the last `stats` message | **the payload as it arrived, never patched.** See below |
 | `capabilities` | derived from `stats` | not a store of its own with its own writer: it arrives inside `stats` and having two sources for one fact is how they disagree |
 | `accessPoints` | `wifi_update`, and the `access_points` reply | **replaced whole, never merged** |
@@ -2168,6 +2168,11 @@ declined to talk to them. **After an explicit `close()` they are cleared too, bu
 caller**, for the reason given below.
 
 Nothing is cleared on `offline`, which is the one people will be tempted to add.
+
+Detaching sets `connection` to `offline` for the same reason: the adapter is what reflects a
+client, and after a teardown there is none. This matters most where it is least visible, when a
+client could not be built at all (§4.8): there is no client to emit a state, so without this the
+banner would still show whatever the last one said before it went away.
 
 **That is the caller's because the client cannot tell it apart.** An explicit `close()` and a
 dropped tether both end in `offline` and nothing on the client's surface distinguishes them, so
@@ -2637,6 +2642,90 @@ connect to and no prefilled one to start from, on the screen that is their only 
 two have no substitute: a host with no address is not a host. A missing label falls back to the
 address, a bad port to its default, which is the difference between losing one field and
 losing the entry.
+
+### 4.8 The session (`lib/session.ts`)
+
+Three layers exist and nothing joins them. §4.3 holds a connection and asks no questions about
+which unit; §4.4 writes stores and never touches a client; §4.7 decides which unit and cannot
+attach one. The join is small, and it is written down because it is where the ordering rules
+each of those sections states become somebody's actual responsibility.
+
+**Nothing it does may throw out of a store subscriber.** It reacts to `activeHost` from inside
+a Svelte subscription, and building a client can fail: `new WebSocket` throws on a port the
+browser refuses to open and on a URL its parser rejects, and §4.7 validates the address rather
+than the browser's opinion of the port. An exception there does not merely lose the connection.
+It escapes the `settingsWritable.update` that produced the notification, so the settings write
+aborts half done, and it leaves Svelte's subscriber queue non-empty, after which **every later
+store notification in the app is silently dropped**. The whole app stops updating and nothing
+says why. So the build, the attach and the connect are wrapped, and a failure becomes
+connection state rather than an exception.
+
+**It owns the switch.** §4.4.2 requires teardown, then `resetStores()`, then attach, in that
+order, and says the module that performs it is whoever holds the client. That is this one. Doing
+it in the wrong order leaves the previous unit's access points, peers and handshakes on screen
+under the new unit's name, which is the disclosure §4.4.2 refuses on `unauthorized` arriving by
+a different road.
+
+**It subscribes to `activeHost` and reacts.** A host change is the event; the session tears the
+old client down, resets the stores, builds a client for the new host with `wsUrlFor`, and
+attaches, in that order, and calls `connect()` last so nothing the client emits during the
+handshake arrives before the stores are listening.
+
+**The token is not passed to the client.** It could be: the session holds the host record the
+key was written from. But §4.3.9 makes the client re-read `companion.token` on every attempt
+precisely so a corrected token takes effect, and an explicit `options.token` wins for that
+client's whole life. Passing it would put a second source of truth beside the one §4.7 spent a
+whole section making authoritative, and the two would agree only for as long as nobody
+changes the code that keeps them in step. §4.7 guarantees the new host's token is in place before that
+subscriber runs, which is what makes the rebuild safe rather than racy.
+
+**It survives a Settings screen that changes nothing.** A host edited without changing its
+address or its token is the same connection, and rebuilding it would drop a working socket to
+produce an identical one. The trigger is the identity of what the connection is made of, which is
+the address, the **ws** port and the token, and not the fact that the record was written.
+
+`httpPort` is not part of it, and the distinction is the whole point of the rule rather than a
+detail: that port is where the app was served from, and the app is already running. Editing it
+changes nothing about the socket, so rebuilding on it would drop a working connection to produce
+an identical one, which is the regression this paragraph exists to refuse.
+
+**A host list with nothing active is a state to arrive at, not a case to skip.** Removing the
+active host, or emptying the list, tears down and resets exactly as a switch does and then
+attaches nothing. §4.7 already says an empty list is a state rather than a corruption; this is
+what that means for the connection.
+
+**It calls `loadSettings()`, because nothing else does.** The stores hold the defaults until it
+runs (§4.7), so without this a returning owner's chosen host would be read by the tests and by
+nobody else. It runs before the subscription, so the first firing already reflects what was
+persisted rather than a default followed by a correction.
+
+**The identity that decides a rebuild does not include the host id.** Activating a different
+entry that carries the same address, ws port and token keeps the socket, which is right: the
+connection is made of those three things and of nothing else, and two entries that agree on all
+three are two names for one connection.
+
+**Nothing else creates a client.** A view that wants to send a command asks the session for the
+one that exists. Two clients means two sockets, two auth attempts and two sets of pushes into
+stores that were built for one, and §4.4 already refuses the second attach loudly rather than
+letting it happen quietly.
+
+**The stop is idempotent, and it belongs to the session that handed it out.** Calling it twice
+does nothing the second time, and a stop kept from an earlier session cannot close the client
+of a later one: the release is tracked per closure rather than per module, because the client
+is module state and a stale stop reaching it would tear down a session it never started. A
+setup that throws releases the guard on its way out, so a failed start does not make every
+later start fail.
+
+**It is started once, by the app shell, and starting it twice is refused.** Not refused by
+accident, downstream, where `connectStores` throws on the second attach: by then a second
+client exists and a second socket is opening, and the failure names the store layer for a
+mistake made here. The same answer as §4.4.2, given in the same place the mistake is: calling
+it twice is a bug in the caller, and the caller is the app shell.
+
+**It is stopped when the shell unmounts**, which is what the app shell can actually observe.
+On a phone the app is backgrounded rather than closed, and backgrounding does not unmount
+anything, so releasing the socket then is a separate piece of work with its own lifecycle
+listener rather than something this sentence can claim.
 
 ## 5. CI/CD (`.github/workflows/`)
 

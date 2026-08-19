@@ -13,6 +13,7 @@
   import { onMount, type Component } from 'svelte'
 
   import { currentRoute, routes, startRouter, type ViewId } from './lib/router'
+  import { startSession } from './lib/session'
   import MoreSheet, { inertWhen } from './shell/MoreSheet.svelte'
   import Nav, { type NavLayout } from './shell/Nav.svelte'
   import Dashboard from './views/Dashboard.svelte'
@@ -47,10 +48,26 @@
   let nav: ReturnType<typeof Nav> | undefined = $state()
 
   onMount(() => {
+    // SPEC 4.8: started once here, by the app shell, and stopped when this
+    // component unmounts, which is what a shell can observe. Backgrounding
+    // the app on a phone unmounts nothing, so releasing the socket then is
+    // separate work with its own lifecycle listener (issue #120).
+    //
+    // startSession() runs first because it is the one of the two that can
+    // throw; startRouter() cannot. Starting the fallible call first means
+    // a throw from it leaves nothing behind to clean up. The reverse order
+    // is the actual leak: with the router started first, a throw from
+    // startSession() would abort onMount before its `popstate` listener is
+    // ever registered for cleanup, leaking both it and the session that
+    // startSession() may have partly built before throwing.
+    const stopSession = startSession()
     const stopRouter = startRouter()
 
     if (typeof window.matchMedia !== 'function') {
-      return stopRouter
+      return () => {
+        stopRouter()
+        stopSession()
+      }
     }
     const query = window.matchMedia(RAIL_MEDIA_QUERY)
     const onChange = (event: MediaQueryListEvent): void => {
@@ -61,6 +78,7 @@
     return () => {
       query.removeEventListener('change', onChange)
       stopRouter()
+      stopSession()
     }
   })
 

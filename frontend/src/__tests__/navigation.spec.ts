@@ -1,5 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// --- storage stub -------------------------------------------------------
+
+// SPEC 4.8: App.svelte starts the real session, which reads and writes
+// window.localStorage through lib/settings.ts and lib/ws.ts. Real storage is
+// never touched here, the same rule session.spec.ts and settings.spec.ts
+// hold to: without a stub, this suite would persist an active host into
+// whatever storage jsdom happens to provide and, the day something in here
+// starts doing that, open a real socket against a fake address.
+class FakeStorage implements Storage {
+  private readonly data = new Map<string, string>()
+
+  get length(): number {
+    return this.data.size
+  }
+
+  clear(): void {
+    this.data.clear()
+  }
+
+  getItem(key: string): string | null {
+    return this.data.has(key) ? (this.data.get(key) as string) : null
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.data.keys())[index] ?? null
+  }
+
+  removeItem(key: string): void {
+    this.data.delete(key)
+  }
+
+  setItem(key: string, value: string): void {
+    this.data.set(key, String(value))
+  }
+}
+
+let fakeStorage: FakeStorage
+
 // The navigation shell of SPEC 4.5, tested from the specification only.
 //
 // SPEC 10.5 asks this file to exist because 10.7 excuses view components from
@@ -334,6 +372,8 @@ function currentEntryNames(): string[] {
 // --- lifecycle --------------------------------------------------------------
 
 beforeEach(() => {
+  fakeStorage = new FakeStorage()
+  vi.stubGlobal('localStorage', fakeStorage)
   railMatches = false
   installMatchMedia()
   window.history.pushState({}, '', '/')
@@ -348,6 +388,7 @@ afterEach(() => {
   container?.remove()
   container = null
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 // --- routes -----------------------------------------------------------------

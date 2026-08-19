@@ -22,3 +22,7 @@ websockets
 # pin is how we decide to see the new rules, and that is a change with a diff
 # rather than a surprise on a Tuesday.
 ruff~=0.16.0
+# Reads .github/workflows/ci.yml in tests/test_ci_gates.py, where the subject
+# under test is the workflow's own shell. Parsing YAML with a regular expression
+# is how a gate ends up asserting something the runner never executes.
+pyyaml>=6.0

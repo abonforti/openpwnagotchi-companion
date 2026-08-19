@@ -91,7 +91,26 @@ jobs:
           # docs/schemas is the authoritative wire format from which
           # protocol.ts is generated, so neither is documentation however much
           # it looks like configuration or notes.
-          not_docs=$(echo "$files" | grep -vP '^(docs/(?!schemas/).*|[^/]*\.md|\.github/ISSUE_TEMPLATE/.*)$' || true)
+          # `|| true` here would be the bug this job exists to avoid. grep exits 1
+          # when it selects no lines, which is the interesting answer, and 2 when
+          # it could not run the pattern at all: no PCRE support in the runner's
+          # grep, a pattern that stops compiling. Collapsing those two makes an
+          # unrun scan look like "every file is documentation" and auto-merges a
+          # pull request full of code. Read the status and fail on anything else
+          # (SPEC 13).
+          # A here-string rather than `echo | grep`, so that $status below is grep's
+          # own and not the pipeline's. With `pipefail` set they coincide today
+          # only because grep without -q drains its input and the echo never takes
+          # SIGPIPE; that is an accident of this pattern, not a property of the
+          # code, and it would flip silently the day someone adds -q or a head.
+          not_docs=$(grep -vP '^(docs/(?!schemas/).*|[^/]*\.md|\.github/ISSUE_TEMPLATE/.*)$' <<< "$files") && status=0 || status=$?
+          case "$status" in
+            0 | 1) ;;
+            *)
+              echo "::error::the documentation-only scan did not run (grep exit $status); refusing to decide."
+              exit 1
+              ;;
+          esac
 
           if [ -n "$not_docs" ]; then
             echo "Not a documentation-only pull request. Leaving it to a human."

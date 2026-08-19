@@ -19,10 +19,25 @@ import subprocess
 import sys
 
 
-def git(*args):
-    return subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=False
-    ).stdout
+def git(*args, tolerate=()):
+    """Runs git and returns stdout, refusing to treat a failed call as no output.
+
+    Every caller here reads the result as evidence: an empty answer means "nothing
+    is staged" and the hook exits 0. A git that could not run returns an empty
+    stdout too, so swallowing the status turns a check that did not happen into a
+    clean result, which is the one thing a leak gate must never do (SPEC 13).
+
+    `tolerate` names exit statuses that carry meaning rather than failure, so the
+    caller can act on them: `config --get` exits 1 for a key that is not set.
+    """
+    result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+    if result.returncode and result.returncode not in tolerate:
+        fail(
+            f"pre-commit: `git {' '.join(args)}` failed with status {result.returncode}.",
+            "  The leak gate could not read the staged diff, so it has not run.",
+            "  Refusing to commit rather than reporting a scan that did not happen.",
+        )
+    return result.stdout
 
 
 def fail(*lines):
@@ -31,7 +46,7 @@ def fail(*lines):
     sys.exit(1)
 
 
-denylist_path = git("config", "--get", "companion.denylist").strip()
+denylist_path = git("config", "--get", "companion.denylist", tolerate=(1,)).strip()
 if not denylist_path:
     fail(
         "pre-commit: companion.denylist is not configured.",

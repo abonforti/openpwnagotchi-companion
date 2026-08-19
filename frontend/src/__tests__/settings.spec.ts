@@ -21,8 +21,31 @@ import type { Host, Settings } from '../lib/settings'
 // and seven smaller ones: the USB default label lost its "desktop only"
 // note (moved to the Settings view, which is the only thing with a field
 // to put it next to - a Host has no such field), addresses are now
-// validated as a bare host on both read and write, and the parser/mutator
-// split is deliberate (repair-or-drop on read, throw on write).
+// validated against an IPv4 grammar on both read and write, and the
+// parser/mutator split is deliberate (repair-or-drop on read, throw on
+// write).
+//
+// Third round (issue #124): the address grammar narrowed to IPv4 literals
+// only. This corrects a contradiction rather than a change of mind - 4.5.1
+// decided IPv4-only before 4.7 existed, because the plugin binds IPv4
+// literals only (D5.1), so gen-cert.sh wants a dotted quad and refuses an
+// IPv6 literal outright for not being one; a hostname is refused for a
+// separate reason, the iOS certificate trap, since a certificate carrying
+// a DNS name is not matched by iOS against the address the app connects
+// to. Both are refused outright now, on top of the round-trip rule that
+// was already there.
+//
+// Fourth round: the round trip is gone, replaced by a pure grammar - four
+// decimal parts, each 0-255, none with a leading zero - because the round
+// trip left one path uncovered: "08.0.0.2" has a leading zero new URL()
+// reads as octal, and 8 is not a valid octal digit, so new URL() throws
+// instead of renormalising, which took loadSettings down on a persisted
+// blob instead of dropping the entry as 4.7 promises. Every rejection
+// assertion in the address-grammar suite below now matches the actual
+// refusal message rather than a bare toThrow(), because a bare toThrow()
+// is exactly what let that defect through three rounds of review: it
+// cannot tell a deliberate refusal from an Invalid URL exception escaping
+// new URL() uncaught.
 
 // ---------------------------------------------------------------------------
 // A fake localStorage. Real storage is never touched: the persisted blob is
@@ -793,8 +816,8 @@ describe('parseHost does not adopt an inherited property (4.7)', () => {
 
 describe('mutators throw on an invalid field rather than repairing it (4.7)', () => {
   // Address-shape cases (which strings are accepted vs refused, on all
-  // three isBareHost call sites: the parser, addHost and updateHost) live
-  // in one place, the round-trip table below, rather than here as well -
+  // three isUsableAddress call sites: the parser, addHost and updateHost) live
+  // in one place, the address-grammar table below, rather than here as well -
   // see that describe block.
 
   it('addHost repairs an out-of-range wsPort by falling back to the default, same as the parser, rather than throwing', async () => {
@@ -821,61 +844,121 @@ describe('mutators throw on an invalid field rather than repairing it (4.7)', ()
 })
 
 // ---------------------------------------------------------------------------
-// 4.7: an address is accepted only if the URL parser gives back the host it
-// was given, case-folded ASCII-only. This is the one place every address
-// case in the suite lives, rejected and accepted alike, for all three
-// isBareHost call sites (the parser, addHost and updateHost), rather than
-// the same shapes sitting hand-written elsewhere with a second list to
-// keep in sync: a hex-encoded octet or a whole hex-encoded IPv4 value
-// survives a naive shape check but `new URL()` still resolves it to a
-// different dotted address, the same display-one-connect-to-another
-// hazard an octal leading zero causes; an IPv6 shape like "1:2:3" is not a
-// real literal even though a lenient regex would accept it; "::" and
-// "0.0.0.0" round-trip perfectly while naming no host to connect to, and
-// so do their spellings "[::]", "[::1]", "::ffff:0:0", "0:0:0:0:0:0:0:0"
-// and "::0" - a bracketed literal is refused outright, since a bare host
-// carries no URL syntax, rather than relying on the wildcard checks to
-// catch every spelling incidentally; and U+212A, the Kelvin sign, is the
-// one character where JavaScript's Unicode case folding and the URL
-// parser's IDNA folding agree by accident, so it round-trips even though
-// it is not ASCII - ASCII is checked on its own rather than left to that
-// accident. An uppercase address (a mixed-case hostname, an uppercase
-// IPv6 literal) is accepted and stored verbatim, with the fold confined
-// to the comparison, which is what makes the
-// ASCII-only fold observably load-bearing rather than a line no accepted
-// address ever reaches. A punycode name is already ASCII in its "xn--"
-// form and passes unaffected, the shape a browser would have produced for
-// a real IDN. Written against the behaviour (accepted vs refused) rather
-// than against implementation shape, because a rule this easy to get
-// subtly wrong - as the Kelvin sign case shows - is exactly the kind
-// whose tests should describe the outcome and not the mechanism.
+// 4.7, final grammar (issue #124 -> the follow-up that closed it): an
+// address is accepted only if it matches four dot-separated decimal parts,
+// each 0-255, none of them written with a leading zero. There is no round
+// trip left to reason about: the grammar decides on shape alone, before
+// anything is handed to new URL(), which is the whole point of it. This is
+// the one place every address case in the suite lives, rejected and
+// accepted alike, for all three isUsableAddress call sites (the parser, addHost
+// and updateHost), rather than the same shapes sitting hand-written
+// elsewhere with a second list to keep in sync.
+//
+// Every rejection below is asserted against the actual message
+// ("address must be an IPv4 literal"), not a bare toThrow(). A bare
+// toThrow() cannot tell a deliberate refusal from new URL() throwing
+// "Invalid URL" out of a code path the grammar was supposed to make
+// unreachable, and that gap is exactly what let a real defect through
+// undetected for three rounds: "08.0.0.2" has a leading zero, so new URL()
+// reads the part as octal, and 8 is not an octal digit, so it throws
+// instead of renormalising. The grammar refuses any leading zero outright,
+// so "08.0.0.2" and its siblings below never reach new URL() at all once
+// the rule holds - the test that pins that is the one with a matcher, not
+// the one that merely counts a throw.
+//
+// A hostname or an IPv6 literal is refused outright, because 4.5.1 decided
+// this before 4.7 existed: the plugin binds IPv4 literals only (D5.1), so
+// gen-cert.sh wants a dotted quad and refuses an IPv6 literal for not being
+// one, and a hostname trips the separate iOS certificate DNS-name trap -
+// neither has anywhere to connect to even once the address has parsed
+// cleanly. example.test, the all-hex name beef
+// (no dots, so it is a name and not a malformed octet), the punycode form
+// xn--m3h.test, and the IPv6 literals fe80::1, 2001:db8::1 and
+// 2001:db8:1:0:2:3:4:5 (written out in full), plus the bracketed and
+// unspecified-address spellings "[::]", "[::1]", "::ffff:0:0",
+// "0:0:0:0:0:0:0:0" and "::0", are refused for the same reason as any
+// other non-IPv4 string: none of them is four dot-separated decimal parts.
+// There used to be a separate by-meaning check for the unspecified address
+// and a bracket rejection; both are gone, because a grammar that only
+// accepts a dotted decimal quad refuses all of these on shape without
+// needing to know what any of them mean.
+//
+// The four hex rows (0x7f.1, 0x7f000001, 0xc0000201, 0x1.0x2.0x3.0x4) are
+// refused for the same reason: "x" is not a decimal digit, so the grammar
+// refuses them before anything resolves them to an address. What they
+// would resolve to is no longer relevant; the round trip that used to
+// catch it by comparing the resolved host is gone. "09" is refused for
+// having one part rather than four, not for being "malformed" in some
+// other sense. "256.0.0.1" is refused for an octet outside 0-255.
+//
+// "0.0.0.0" and "255.255.255.255" are both well-formed by the grammar and
+// both refused by name (SPEC 4.7): the wildcard nothing in this project
+// binds, and the limited broadcast address, are the only two values a
+// grammar cannot tell from an ordinary address. "255.254.253.252" is used
+// instead to exercise the top of the per-octet range without asserting
+// that the broadcast address is a usable host.
+//
+// Written against the behaviour (accepted vs refused, and which message)
+// rather than against implementation shape, because a rule this easy to
+// get subtly wrong - as both the Kelvin sign case and the octal-throw
+// defect show - is exactly the kind whose tests should describe the
+// outcome and not the mechanism.
 // ---------------------------------------------------------------------------
 
-describe('address grammar decided by URL round-trip, not by a shape rule (4.7)', () => {
+describe('address grammar: four decimal parts, 0-255, no leading zero (4.7)', () => {
+  const ADDRESS_ERROR = /address must be an IPv4 literal/
+
   const REJECTED_ADDRESSES: Array<[address: string, reason: string]> = [
     ['wss://172.20.10.9', 'carries a scheme'],
     ['10.0.0.2@example.test', 'carries credentials, SPEC own example'],
     ['172.20.10.9:9999', 'carries an inline port'],
-    ['010.0.0.2', 'an IPv4 leading zero octet, which new URL() renormalises'],
-    ['09', 'all-numeric, a malformed IPv4 rather than a name'],
-    ['0x7f.1', 'a hex octet the URL parser resolves to 127.0.0.1'],
-    ['0x7f000001', 'a single hex-encoded IPv4 value resolving to 127.0.0.1'],
-    ['0xc0000201', 'a single hex-encoded IPv4 value resolving to 192.0.2.1'],
-    ['0x1.0x2.0x3.0x4', 'every octet hex-encoded'],
-    ['1:2:3', 'a shape a lenient IPv6 regex would accept but is not a real literal'],
-    ['::', 'the unspecified IPv6 address, naming no host to connect to'],
-    ['0.0.0.0', 'the unspecified IPv4 address, naming no host to connect to'],
-    ['[::]', 'the unspecified IPv6 address, pre-bracketed - a bare host carries no URL syntax'],
-    ['[::1]', 'the IPv6 loopback, pre-bracketed - a bare host carries no URL syntax'],
-    ['::ffff:0:0', 'the IPv4-mapped wildcard, another spelling of "names no host"'],
-    ['0:0:0:0:0:0:0:0', 'the unspecified IPv6 address written out in full rather than shortened'],
-    ['::0', 'the unspecified IPv6 address, a third spelling of "::"'],
-    ['\u212A.test', 'the Kelvin sign, which JS lowercases to the same k IDNA folds it to'],
+    ['010.0.0.2', 'a leading zero in the first part, refused by the grammar on shape'],
+    [
+      '08.0.0.2',
+      'a leading zero followed by a non-octal digit; the historical reason the grammar refuses any leading zero at all, since a URL parser used to throw on this shape rather than rewrite it',
+    ],
+    [
+      '09.0.0.1',
+      'the same leading-zero shape as 08.0.0.2, refused for the same historical reason',
+    ],
+    ['1.2.3.08', 'a leading zero in the last part, not only the first'],
+    ['0.0.0.09', 'a leading zero in the last part combined with a non-octal digit, same hazard as 08.0.0.2'],
+    ['256.0.0.1', 'an octet above 255, outside the grammar range'],
+    ['09', 'one part rather than four'],
+    ['', 'the empty string, zero parts'],
+    ['1.2.3', 'three parts, not four'],
+    ['1.2.3.4.5', 'five parts, not four'],
+    ['1.2.3.4.', 'a trailing dot, which the grammar refuses rather than tolerating an empty fifth part'],
+    [' 10.0.0.2', 'a leading space, which the grammar has no room for'],
+    ['10.0.0.2\n', 'a trailing newline, which the grammar has no room for'],
+    ['0x7f.1', 'contains "x", not a decimal digit; the grammar refuses it before anything would resolve it'],
+    ['0x7f000001', 'a single hex-encoded value, refused for the same reason as 0x7f.1'],
+    ['0xc0000201', 'a single hex-encoded value, refused for the same reason as 0x7f.1'],
+    ['0x1.0x2.0x3.0x4', 'every part hex-encoded, refused for the same reason as 0x7f.1'],
+    ['example.test', 'a hostname, refused now that the address grammar accepts IPv4 literals only'],
+    ['beef', 'an all-hex hostname with no dots, refused now that the address grammar accepts IPv4 literals only'],
+    ['xn--m3h.test', 'a punycode hostname, refused now that the address grammar accepts IPv4 literals only'],
+    ['fe80::1', 'an IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['2001:db8::1', 'an IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    [
+      '2001:db8:1:0:2:3:4:5',
+      'an IPv6 literal written out in full, refused now that the address grammar accepts IPv4 literals only',
+    ],
+    ['1:2:3', 'not four dot-separated decimal parts, refused on shape like any other non-IPv4 string'],
+    ['::', 'not four dot-separated decimal parts, refused on shape like any other non-IPv4 string'],
+    ['0.0.0.0', 'the unspecified IPv4 address, well-formed but refused by name (SPEC 4.7)'],
+    ['255.255.255.255', 'the limited broadcast address, well-formed but refused by name beside 0.0.0.0 (SPEC 4.7)'],
+    ['[::]', 'a bracketed IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['[::1]', 'a bracketed IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['::ffff:0:0', 'an IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['0:0:0:0:0:0:0:0', 'an IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['::0', 'an IPv6 literal, refused now that the address grammar accepts IPv4 literals only'],
+    ['\u212A.test', 'contains U+212A, the Kelvin sign, which is not a decimal digit, refused on shape like any other non-IPv4 string'],
   ]
 
   it.each(REJECTED_ADDRESSES)('addHost throws on %s, %s', async (address) => {
     const { addHost } = await loadModule()
-    expect(() => addHost(newHost({ address }))).toThrow()
+    expect(() => addHost(newHost({ address }))).toThrow(ADDRESS_ERROR)
   })
 
   it.each(REJECTED_ADDRESSES)('the parser drops a host whose address is %s, %s', async (address) => {
@@ -898,26 +981,13 @@ describe('address grammar decided by URL round-trip, not by a shape rule (4.7)',
       const { addHost, updateHost, settings } = await loadModule()
       const host = addHost(newHost({}))
       const originalAddress = host.address
-      expect(() => updateHost(host.id, { address })).toThrow()
+      expect(() => updateHost(host.id, { address })).toThrow(ADDRESS_ERROR)
       const stillThere = get(settings).hosts.find((h) => h.id === host.id)
       expect(stillThere?.address).toBe(originalAddress)
     },
   )
 
-  const ACCEPTED_ADDRESSES = [
-    '10.0.0.2',
-    'example.test',
-    'beef',
-    'fe80::1',
-    '2001:db8::1',
-    'xn--m3h.test',
-    'Example.test',
-    '2001:DB8::1',
-    // Written out in full: WHATWG compresses only zero runs longer than
-    // one, so this round-trips verbatim and is the accept path for every
-    // literal the serializer leaves alone.
-    '2001:db8:1:0:2:3:4:5',
-  ]
+  const ACCEPTED_ADDRESSES = ['10.0.0.2', '255.254.253.252']
 
   it.each(ACCEPTED_ADDRESSES)('addHost accepts %s unchanged', async (address) => {
     const { addHost } = await loadModule()
@@ -941,9 +1011,6 @@ describe('address grammar decided by URL round-trip, not by a shape rule (4.7)',
 })
 
 // ---------------------------------------------------------------------------
-// 4.5.2 + 4.7: prefilled rather than discovered. The desktop-only note now
-// belongs to the Settings view, not the default label.
-// ---------------------------------------------------------------------------
 
 describe('defaultHosts (4.5.2, 4.7)', () => {
   it('prefills the Bluetooth tether address', async () => {
@@ -961,8 +1028,10 @@ describe('defaultHosts (4.5.2, 4.7)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// wsUrlFor: wss with the ws port, never the http port, never the token, and
-// an IPv6 literal is bracketed.
+// wsUrlFor: wss with the ws port, never the http port, never the token.
+// IPv6 bracketing was removed here along with IPv6 acceptance in 4.7
+// (issue #124): a Host.address can never be IPv6 once isUsableAddress only
+// accepts IPv4 literals, so there is nothing left for wsUrlFor to bracket.
 // ---------------------------------------------------------------------------
 
 describe('wsUrlFor (4.7)', () => {
@@ -995,22 +1064,6 @@ describe('wsUrlFor (4.7)', () => {
     }
     const url = wsUrlFor(host)
     expect(url).not.toContain('super-secret-token-value')
-  })
-
-  it('brackets an IPv6 literal address exactly once', async () => {
-    const { wsUrlFor } = await loadModule()
-    const host: Host = { id: 'x', label: 'Unit', address: 'fe80::1', wsPort: 8082, httpPort: 8443, token: null }
-    const url = wsUrlFor(host)
-    expect(url).toBe('wss://[fe80::1]:8082')
-    expect(url.match(/\[/g)?.length).toBe(1)
-    expect(url.match(/\]/g)?.length).toBe(1)
-  })
-
-  it('does not bracket an all-hex hostname with no colons, which parses as a name rather than as IPv6', async () => {
-    const { wsUrlFor } = await loadModule()
-    const host: Host = { id: 'x', label: 'Unit', address: 'beef', wsPort: 8082, httpPort: 8443, token: null }
-    const url = wsUrlFor(host)
-    expect(url).toBe('wss://beef:8082')
   })
 })
 

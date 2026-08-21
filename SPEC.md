@@ -1703,7 +1703,7 @@ there, or is ignored.
 | `connecting` | `restarting` message | `restarting` |
 | `connecting` | `error` with `code: "unauthorized"`, then close | `unauthorized` (*rejected*) |
 | `connecting` | bare 1008, **no `auth` frame was sent** | `unauthorized` (*required*) |
-| `connecting` | third consecutive close before any `stats`, no token stored | `unauthorized` (*required*), by inference — see below |
+| `connecting` | third consecutive close **of a socket that opened**, before any `stats`, no token stored | `unauthorized` (*required*), by inference — see below |
 | `connecting` | bare 1008, an `auth` frame **was** sent | `offline` |
 | `connecting` | any other close, or the socket fails to open | `offline` |
 | `connected` | a `stats` whose `sessionAge` is under 55 s and not `null` | `connected` |
@@ -1784,7 +1784,27 @@ ever — the failure the *required* reason exists to remove, reached by a differ
 
 The fallback is a counter rather than a cleverer reading of one close. **After three consecutive
 connections closed before any `stats` arrived, while no token is stored, the client presents
-*required* anyway.** Three because a slow tether plausibly loses one handshake and implausibly
+*required* anyway.**
+
+**The counter counts closes, and a socket that never opened is not one.** This is the boundary
+the first implementation missed, and it cost the app everything: it counted a failure to connect
+alongside a close, so three refused connections were read as three lost 1008s. A unit restarting
+produces far more than three of those in the ten to twenty seconds it is down, and `unauthorized`
+is the one state that suspends reconnection - so any restart the app did not itself order left it
+telling the owner to add a token to a unit that requires none, and never retrying (issue #139).
+The argument above is entirely about a socket that **opened**, was refused, and was closed by a
+frame that did not arrive. A connection refused never reached the plugin at all, and says only
+that nothing is listening, which is `offline` and is retried for ever. The browser separates the
+two plainly: an opened socket fires `onopen` first, and a transport failure closes with
+1006.
+
+**A refusal in between does not interrupt the run**, and "consecutive" is about the closes
+rather than about wall-clock order. A socket that never opened neither increments the counter
+nor resets it, so two opened closes, fifty refusals and a third opened close still infer
+*required*. Only events that carry evidence count, and the event that genuinely says the unit
+is answering is a `stats`, which resets the counter wherever it arrives.
+
+Three because a slow tether plausibly loses one handshake and implausibly
 loses three, and because being wrong costs an offer to set a token rather than a lockout: the
 user dismisses it and the reconnection loop carries on. This is the one transition in §4.3.1
 entered by inference rather than by an observed event, and it is labelled as such so that nobody
@@ -2608,6 +2628,14 @@ anything else. Deciding by the string hands a stranger the ability to make a rea
 as `data-empty="true"` with the accessible *unavailable* beside it, which is a remote party
 choosing what the screen says about the unit's own state (§4.5.3). Those fields are `face`,
 `status`, `lastHandshake`, `lastPeer` and `gpsSource`.
+
+**A remote string that is empty is empty.** `face`, `status` and `gpsSource` are absent when
+their string is `null` **or** `''`, and the first implementation checked only the first, so a
+unit that sent an empty face produced a row with a label and nothing beside it: no dash, no
+`data-empty`, and silence where a screen reader should have heard *unavailable* (issue #142).
+That is not trimming or normalising the value, which §4.5.3 forbids: a name of `-`, or of a
+single space, is a real reading and renders as one. The claim is only that a string with nothing
+in it is nothing to show.
 
 For `lastHandshake` and `lastPeer` the value is the pair, so the field is empty when the object
 is absent **or** when it carries neither half: an empty name and no timestamp. Without that

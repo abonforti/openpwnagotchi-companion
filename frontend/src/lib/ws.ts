@@ -252,11 +252,21 @@ export function createWsClient(options: WsClientOptions): WsClient {
   let hasSentAuth = false
   let connectionReady = false
   let firstStatsReceivedThisConnection = false
+  let socketOpenedThisConnection = false
   let lastErrorWasUnauthorized = false
 
   // SPEC 4.3.1: the fallback for a transport that swallows the server's 1008
   // close along with everything else. Counted only while no token is stored,
-  // and only across connections that never saw a `stats` message.
+  // only across connections that never saw a `stats` message, and only for a
+  // socket that actually opened -- a connection refused never reached the
+  // plugin at all and says nothing about authentication.
+  //
+  // close() does not reset this counter, so a client stopped mid-count and
+  // later resumed through connect() would carry the old count into the new
+  // run of attempts. Unreachable today -- lib/session.ts builds a fresh
+  // client per host switch and never reconnects a closed one -- but the
+  // next reconnect() has to meet this note before it meets the bug: a
+  // counter that outlives what it counts.
   let closesBeforeAnyStats = 0
 
   let restartReason: RestartReason | null = null
@@ -658,7 +668,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     }
 
     // Any other close, or the socket failed to open.
-    if (!effectiveToken(options) && !firstStatsReceivedThisConnection) {
+    if (!effectiveToken(options) && !firstStatsReceivedThisConnection && socketOpenedThisConnection) {
       closesBeforeAnyStats += 1
       if (closesBeforeAnyStats >= 3) {
         closesBeforeAnyStats = 0
@@ -677,6 +687,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     hasSentAuth = false
     connectionReady = false
     firstStatsReceivedThisConnection = false
+    socketOpenedThisConnection = false
     lastErrorWasUnauthorized = false
     unauthorizedReasonValue = null
 
@@ -701,6 +712,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     const socket = deps.createSocket(options.url)
     currentSocket = socket
     socket.onopen = () => {
+      socketOpenedThisConnection = true
       const token = effectiveToken(options)
       if (token) {
         hasSentAuth = true

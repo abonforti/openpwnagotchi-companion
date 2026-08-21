@@ -27,7 +27,6 @@ covered by the integration test.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import hmac
 import ipaddress
 import json
@@ -720,7 +719,6 @@ class ProtocolError(Exception):
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass
 class Deps:
     """Every external effect, as a replaceable callable.
 
@@ -731,25 +729,46 @@ class Deps:
 
     Keep these narrow. A seam is a callable someone can replace, not an
     abstraction layer with its own vocabulary.
+
+    Hand-written rather than @dataclasses.dataclass: pwnagotchi's own loader
+    (pwnagotchi/plugins/__init__.py, load_from_file) builds this module with
+    importlib.util.module_from_spec and exec_module without ever registering
+    it in sys.modules. `from __future__ import annotations` makes every
+    annotation in this file a string, and dataclasses resolves string
+    annotations by looking the defining module up in sys.modules to find a
+    possible KW_ONLY sentinel. With the module absent from sys.modules that
+    lookup returns None and the decorator raises AttributeError at import
+    time, so the plugin never loads on a real unit. A plain __init__ needs no
+    annotation resolution and has no such dependency.
     """
 
-    now: Callable[[], float] = time.time
-    restart_pwnagotchi: Callable[[str], None] = None  # type: ignore[assignment]
-    reboot_device: Callable[[], None] = None  # type: ignore[assignment]
-    shutdown_device: Callable[[], None] = None  # type: ignore[assignment]
-    run_command: Callable[[Sequence[str]], int] = None  # type: ignore[assignment]
-    read_gpsd: Callable[[str, int, float], dict | None] = None  # type: ignore[assignment]
-    read_pisugar_i2c: Callable[[], tuple[float | None, bool | None]] = None  # type: ignore[assignment]
-    list_local_ipv4: Callable[[], list[str]] = None  # type: ignore[assignment]
-    spawn: Callable[[Callable[[], None]], None] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        now: Callable[[], float] = time.time,
+        restart_pwnagotchi: Callable[[str], None] = None,  # type: ignore[assignment]
+        reboot_device: Callable[[], None] = None,  # type: ignore[assignment]
+        shutdown_device: Callable[[], None] = None,  # type: ignore[assignment]
+        run_command: Callable[[Sequence[str]], int] = None,  # type: ignore[assignment]
+        read_gpsd: Callable[[str, int, float], dict | None] = None,  # type: ignore[assignment]
+        read_pisugar_i2c: Callable[[], tuple[float | None, bool | None]] = None,  # type: ignore[assignment]
+        list_local_ipv4: Callable[[], list[str]] = None,  # type: ignore[assignment]
+        spawn: Callable[[Callable[[], None]], None] = None,  # type: ignore[assignment]
+    ) -> None:
         """Fills unset seams with the real implementation.
 
-        Bound late rather than as dataclass defaults so that importing this
+        Bound late rather than as fixed defaults so that importing this
         module does not require a working pwnagotchi, which is what lets the
         test suite run without one installed.
         """
+        self.now = now
+        self.restart_pwnagotchi = restart_pwnagotchi
+        self.reboot_device = reboot_device
+        self.shutdown_device = shutdown_device
+        self.run_command = run_command
+        self.read_gpsd = read_gpsd
+        self.read_pisugar_i2c = read_pisugar_i2c
+        self.list_local_ipv4 = list_local_ipv4
+        self.spawn = spawn
         if self.restart_pwnagotchi is None:
             self.restart_pwnagotchi = default_restart
         if self.reboot_device is None:

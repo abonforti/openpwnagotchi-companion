@@ -308,6 +308,131 @@ def test_pasv_mode_is_never_imported():
 
 
 # ---------------------------------------------------------------------------
+# With no agent (SPEC 2.6.0, issue #147)
+#
+# A unit in manual mode never hands the plugin an agent at all (F31): `on_ready`
+# never fires on that path. The first implementation guarded all three of these
+# controls with the same `_require_agent()` check and answered `internal_error`
+# with "agent is not ready yet" forever - unavailable exactly on the unit that
+# needed them, and `set_mode` is the one that could have rescued it.
+#
+# `router_factory(None)` is the established stand-in for "no agent" (see
+# test_stats.py's issue #140 section and the router_factory docstring); it is
+# not a hand-rolled substitute.
+# ---------------------------------------------------------------------------
+
+
+def test_set_mode_to_manual_with_no_agent_is_the_no_op_it_always_was(
+    router_factory, harness
+):
+    # SPEC 2.6.0: with no agent the current mode "is" manual (F31), so a
+    # request for manual is a no-op exactly as it is when an agent reports
+    # mode == "manual" already.
+    router = router_factory(None)
+
+    messages = router.handle(
+        {"type": "set_mode", "mode": "manual", "message_id": "c7f1"}, authenticated=True
+    )
+
+    assert types_of(messages) == ["acknowledgment"]
+    assert "spawn" not in harness.names()
+    harness.run_spawned()
+    assert "restart_pwnagotchi" not in harness.names()
+
+
+def test_set_mode_to_auto_with_no_agent_restarts_the_unit_back_to_auto(
+    router_factory, harness
+):
+    # This is the point of issue #147: a unit stuck in manual, with no agent,
+    # can be sent back to auto from the app. Before the fix this path answered
+    # internal_error and the restart never happened.
+    router = router_factory(None)
+
+    messages = router.handle(
+        {"type": "set_mode", "mode": "auto", "message_id": "c7f1"}, authenticated=True
+    )
+
+    assert types_of(messages) == ["acknowledgment", "restarting"]
+    assert only(messages, "restarting")["data"] == {"reason": "mode_change", "mode": "AUTO"}
+    # Scheduled, not performed, before the caller flushes the socket - same
+    # ordering guarantee as the with-agent case (SPEC 2.6.1), and it must
+    # survive with no agent since that is exactly the state a client needs to
+    # hear about a restart from.
+    assert "spawn" in harness.names()
+    assert "restart_pwnagotchi" not in harness.names()
+
+    harness.run_spawned()
+
+    assert harness.args_for("restart_pwnagotchi") == [("AUTO",)]
+
+
+def test_set_mode_to_manual_with_no_agent_never_restarts_either_direction(
+    router_factory, harness
+):
+    # Guards against a mutant that restarts for both values rather than only
+    # for auto: manual must stay a no-op even once anything spawn() recorded
+    # has been run.
+    router = router_factory(None)
+
+    router.handle({"type": "set_mode", "mode": "manual"}, authenticated=True)
+    harness.run_spawned()
+
+    assert "restart_pwnagotchi" not in harness.names()
+
+
+def test_pasv_with_no_agent_and_the_plugin_loaded_requires_auto(
+    router_factory, stub_plugins, load_pasv
+):
+    # SPEC 2.6.0: with no agent, set_pasv used the agent only to check the mode
+    # is auto. With no agent it is not auto, so the contract's existing code
+    # applies rather than a new one - and rather than internal_error.
+    load_pasv()
+    router = router_factory(None)
+
+    messages = router.handle({"type": "set_pasv", "on": True}, authenticated=True)
+
+    assert only(messages, "error")["data"]["code"] == "pasv_requires_auto"
+    assert stub_plugins._events() == []
+
+
+def test_pasv_precedence_holds_with_no_agent(router_factory, stub_plugins):
+    # SPEC 2.6.2's ordering (missing plugin wins over wrong mode) must not
+    # depend on having an agent to consult for the mode.
+    router = router_factory(None)
+
+    messages = router.handle({"type": "set_pasv", "on": True}, authenticated=True)
+
+    assert only(messages, "error")["data"]["code"] == "pasv_unavailable"
+
+
+def test_get_log_with_no_agent_is_log_unavailable_not_internal_error(router_factory):
+    # SPEC 2.6.0: log_lines is genuinely unavailable with no agent. This pins
+    # the observable behaviour, not the guard that names the case: the
+    # pre-existing broad except around agent._config already produces this
+    # same code and message when agent is None, so a deleted guard would not
+    # make this fail - the point is that the answer stays right regardless of
+    # which line is responsible for it.
+    router = router_factory(None)
+
+    messages = router.handle({"type": "get_log"}, authenticated=True)
+
+    assert only(messages, "error")["data"]["code"] == "log_unavailable"
+
+
+def test_get_log_with_no_agent_does_not_promise_a_wait(router_factory):
+    # Same caveat as above: this pins that the reply never implies a wait,
+    # not which code path produces that reply. Nothing about a missing
+    # agent's config is going to resolve itself if the client retries.
+    router = router_factory(None)
+
+    messages = router.handle({"type": "get_log"}, authenticated=True)
+
+    message = only(messages, "error")["data"]["message"].lower()
+    assert "ready" not in message
+    assert "wait" not in message
+
+
+# ---------------------------------------------------------------------------
 # reboot and shutdown
 # ---------------------------------------------------------------------------
 

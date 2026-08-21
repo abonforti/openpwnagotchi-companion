@@ -647,9 +647,12 @@ a cached session snapshot every `session_poll_interval` seconds, guarded by a lo
 try/except; all readers use the cache and expose its age.
 
 **The plugin runs without an agent, and says so rather than guessing.** In manual mode
-pwnagotchi never calls `on_ready`, so the agent never arrives: observed on a real unit, where
-another plugin logs `on_ready() not called - using fallback initialization` in the same journal.
-Two consequences, and both were defects (issue #140).
+pwnagotchi never calls `on_ready` **on the boot path**, so a plugin loaded at boot never gets an
+agent there. Not an omission upstream could fix by remembering: the manual path does not run the
+code that fires the event (F31). The plugin must therefore work with no agent for the whole life
+of the process, and must also cope with one arriving late, since F31's second route hands an
+agent to a plugin enabled from the web UI in any mode. Two consequences, and both were defects
+(issue #140).
 
 **The threads start in `on_loaded`, not in `on_ready`.** Only one of the three things `on_ready`
 used to do needs an agent. The background pass also polls gpsd and reconciles the listeners, and
@@ -733,6 +736,54 @@ AP object, mapped from `agent._access_points` (bettercap AP dicts — **the key 
 `ap.get('clients')` may be `None` as well as absent; the `or []` is required.
 
 ### 2.6 Controls
+
+#### 2.6.0 What each control does with no agent (issue #147)
+
+A unit in manual mode never hands the plugin an agent (F31, §2.5). The first implementation
+guarded all three of these with the same check and answered `internal_error`, "agent is not ready
+yet", for the life of the process. So the controls were unavailable exactly on the units that
+needed them, and `set_mode` is the one that would have taken such a unit back to auto: the app
+offered a button that could not work, on the one screen from which the unit could have been
+rescued.
+
+The message was wrong as well as the behaviour. "not ready yet" describes a wait. Nothing is
+being waited for: the event never fires on that path, so a client retrying is retrying something
+that cannot change without a restart.
+
+**None of the three needs an agent as much as it looked.**
+
+| control | what it used the agent for | with no agent |
+|---|---|---|
+| `set_mode` | reading the current mode, to refuse a restart into the mode already in effect | the current mode **is** manual (F31). A request for `manual` is the no-op it always was; a request for `auto` restarts, which is the whole point |
+| `set_pasv` | checking that the mode is auto | it is not auto, so the answer is the one the contract already has: `pasv_requires_auto` |
+| `log_lines` | the log path, which comes from `agent._config` (F17) | genuinely unavailable, and answered as `log_unavailable` rather than as an internal error. Tracked with the same class of problem in issue #146 |
+
+**The inference "no agent means manual" has a window, and it is named rather than hidden.** In
+auto mode the agent arrives when `agent.start()` fires `ready`, and that is the **last** statement
+of `start()`, after it has waited for bettercap, brought up monitor mode and started its pollers.
+So the window is not a fixed few seconds: it lasts until bettercap is answering and monitor mode
+has come up, and on a unit where either is struggling it lasts as long as that does. An earlier
+draft of this paragraph said seven seconds, measured between the plugin loading and `cli.py`
+logging `entering auto mode ...`, a line printed **before** `start()` is called. It measured the
+wrong endpoint and stopped where the window begins.
+
+Inside that window the plugin has no agent and the unit is not manual, and all three controls
+behave as though it were: `set_mode` to `auto` restarts a unit that was already going to be auto,
+`set_pasv` answers `pasv_requires_auto` on a unit that will be auto shortly, and `log_lines`
+answers `log_unavailable` on a unit whose log is perfectly readable. The last of those is the one
+that stings, because a stuck boot is exactly when somebody wants the log.
+
+**It is accepted anyway, and the comparison is what settles it.** Two of the three are benign and
+retriable: nothing is lost by asking again once the unit is up. The one with a cost, `set_mode`,
+trades an unnecessary restart of a unit that is already failing to finish its own startup against
+a control that otherwise **never** works on a manual unit. Somebody looking at a unit wedged
+waiting for bettercap is somebody for whom a restart is a reasonable next move rather than a
+punishment.
+
+The alternative is a timer that waits to see whether an agent turns up, which is the timed
+fallback another plugin resorts to for the same reason. It would make every mode switch wait for
+a deadline chosen to second-guess a fact §11 pins, and it would still be wrong on the unit where
+bettercap takes longer than the deadline.
 
 #### 2.6.1 `set_mode` — service restart, not an attribute write (D12)
 
@@ -872,8 +923,9 @@ conformant client respects; the plugin additionally clamps to `[1, 1000]` with a
 because a client asking for more should get a bounded answer rather than an error. Absent or
 unparseable means the default.
 
-`tail_lines` propagates `OSError` for a missing or unreadable file; the Router turns that, and a
-missing log path in the configuration, into `error` code `log_unavailable`.
+`tail_lines` propagates `OSError` for a missing or unreadable file; the Router turns that, a
+missing log path in the configuration, and having no agent to read that configuration from
+(§2.6.0), into `error` code `log_unavailable`.
 
 ### 2.10 Screen mirror (`screen_image`)
 
@@ -2744,7 +2796,12 @@ and lays out what those functions return.
   handshakes / peers), the last handshake and the last peer, each named as well as timed
   (§4.5.1.1), GPS source and fix indicator, connection banner. Controls: mode switch, PASV toggle (rendered only when
   `capabilities.pasv`), reboot, shutdown. **Mode switch, reboot and shutdown all use the
-  two-step confirm** (D9 + D12) and all show the `restarting` state afterwards.
+  two-step confirm** (D9 + D12) and all show the `restarting` state afterwards. **A null `mode`
+  does not disable the mode switch**, which is the one place a dash means something other than
+  "nothing to do here": a null mode is a unit with no agent, which is a unit in manual mode
+  (§2.6.0), and the switch is the control that takes it back to auto. Greying it out there would
+  disable the rescue on exactly the unit that needs rescuing, which is the defect issue #147
+  removed from the plugin and which the client is equally able to reintroduce.
 - **Wi-Fi**: one view, two segments (§4.5).
   - *Nearby*: live AP list, sortable by RSSI/channel, with client counts, encryption, vendor.
   - *Captured*: directory-backed handshake list (SSID, BSSID, time, size, GPS pin when tagged),
@@ -3823,6 +3880,7 @@ two allowlists drifting apart is the failure the checker exists to prevent, one 
 | F22 | Upstream `pwnios.py` binds `websockets.serve(self._handle_client, "0.0.0.0", 8082, ...)` and reads `self.agent.access_points` before falling back to `_access_points` — both are bugs this fork fixes | `BraedenP232/PwnIOS/pwnios.py:292-293,653-656,678-680` |
 | F23 | Custom plugins are loaded from `config['main']['custom_plugins']`, whose default is `/usr/local/share/pwnagotchi/custom-plugins/`. The key is optional: `load_from_path` is called only `if 'custom_plugins' in config['main']`. **Machine-checked entries**: F23, F23b pin the literal default custom-plugins path in `defaults.toml` and the `'custom_plugins' in` guard in `plugins/__init__.py`. | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
 | F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |
+| F31 | **On the boot path, `ready` is fired only in auto mode**, because the manual path does not reach the code that fires it. `automata.py` emits `plugins.on('ready', self)` and is reached through `agent.start()`; `cli.py` has two entry points, and `do_auto_mode` calls `agent.start()` while `do_manual_mode` sets the mode, parses the last session and enters a loop that sleeps and emits `internet_available`. **There is a second route and it is not on the boot path**: `toggle_plugin` in `plugins/__init__.py` fires `ready` at the single plugin it is enabling, handing it `view.ROOT._agent`, so a plugin switched on from the web UI receives an agent in any mode. So the rule is about how a unit boots, not about the event: a plugin loaded at boot into manual mode gets no agent, ever (§2.5, §2.6.0, issue #140), and the same plugin enabled by hand afterwards gets one. Manual mode is not hookless either, since that loop emits `internet_available` every five seconds. **Machine-checked entries**: F31a, F31b, F31c pin where the boot path emits `ready`, that `cli.py` never emits it itself, and that the toggle path exists. That `do_manual_mode` does not call `agent.start()` is read from the two function bodies and is not machine-checked. | `pwnagotchi/automata.py`; `pwnagotchi/cli.py`, `do_manual_mode` and `do_auto_mode`; `pwnagotchi/plugins/__init__.py`, `toggle_plugin`, observed on 2.9.5.8 |
 | F30 | **A plugin is executed but never registered in `sys.modules`.** `load_from_file` is `spec_from_file_location`, `module_from_spec`, `exec_module`, and no assignment to `sys.modules[plugin_name]`. So during import `sys.modules.get(__name__)` is `None`, and **any module-scope construct that resolves its own module through `sys.modules` fails at import**: with `from __future__ import annotations` in force, that includes `@dataclasses.dataclass`, which looks the module up to resolve string annotations while searching for `KW_ONLY` (CPython `dataclasses.py`, `_is_type`). It equally includes `typing.get_type_hints`, and anything else that resolves annotations by name. The plugin was unloadable on every unit for this reason (issue #136), while 925 tests passed, because pytest imports it the ordinary way and an ordinary import registers it. `tests/test_plugin_loads.py` pins the contract. **Machine-checked entries**: F30a, F30b pin that the three calls `load_from_file` is made of are still in that file, and that the file never names `sys.modules` at all. The second is the fact itself rather than a proxy for it; the first only reports that the three calls are present, since it is not scoped to one function and cannot see a fourth call added beside them. | `pwnagotchi/plugins/__init__.py`, `load_from_file`, observed on 2.9.5.8 |
 | F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`, which is **not** the `defaults.toml` value. The two disagree, so the directory must be resolved from the running configuration and never hardcoded | `stage3/06-patches/files/profile` vs `pwnagotchi/defaults.toml:27` |
 | F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked entries**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `v2.9.5.6` or `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |

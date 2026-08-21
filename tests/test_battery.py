@@ -12,13 +12,36 @@ a null on the wire, never an exception into the asyncio loop.
 
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
 
 from plugin import companion
 
 NO_BATTERY = {"percent": None, "charging": None}
+
+
+# The nine seams of SPEC 10.7, in the order conftest injects them. A `Deps` is
+# built by constructor injection - SPEC 10.7 forbids monkeypatching module
+# internals - so replacing one seam means naming the other eight. Mirrors
+# tests/test_binding.py's DEPS_SEAMS/deps_with_enumeration, which is where this
+# pattern is proven; every use here only ever overrides read_pisugar_i2c.
+DEPS_SEAMS = (
+    "now",
+    "restart_pwnagotchi",
+    "reboot_device",
+    "shutdown_device",
+    "run_command",
+    "read_gpsd",
+    "read_pisugar_i2c",
+    "list_local_ipv4",
+    "spawn",
+)
+
+
+def deps_with_pisugar(base, read_pisugar_i2c):
+    """`base` with its I2C read replaced and every other seam kept."""
+    seams = {name: getattr(base, name) for name in DEPS_SEAMS}
+    seams["read_pisugar_i2c"] = read_pisugar_i2c
+    return companion.Deps(**seams)
 
 
 class FakeProvider:
@@ -148,7 +171,7 @@ def test_an_i2c_read_that_raises_yields_nulls(options, harness):
     def exploding():
         raise OSError("no such device on bus 1")
 
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=exploding)
+    deps = deps_with_pisugar(harness.deps, exploding)
 
     assert companion.BatteryReader(options, deps).read() == NO_BATTERY
 
@@ -291,7 +314,7 @@ def test_an_i2c_read_that_raises_leaves_the_provider_unanswered(options, harness
     def exploding():
         raise OSError("no such device on bus 1")
 
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=exploding)
+    deps = deps_with_pisugar(harness.deps, exploding)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == NO_BATTERY
@@ -441,7 +464,7 @@ def test_a_charge_state_alone_no_longer_hides_the_level(options, harness, stub_p
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(charging=True)
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
     assert seam.calls == 1, "the missing percentage is worth exactly one bus transaction"
@@ -455,7 +478,7 @@ def test_a_level_alone_takes_the_charge_state_from_the_tier_below(
     overwritten by the I2C one is visible."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=88.0)
     seam = CountingSeam((11.0, True))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 88.0, "charging": True}
     assert seam.calls == 1
@@ -472,7 +495,7 @@ def test_a_complete_tier_one_never_touches_the_i2c_bus(options, harness, stub_pl
         battery_level=64.0, power_plugged=False
     )
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": 64.0, "charging": False}
@@ -496,7 +519,7 @@ def test_the_second_plugin_supplies_only_what_the_first_left_missing(
     second = SpyProvider(battery_level=30.0, charging=False)
     stub_plugins.loaded["pisugarx"] = second
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 30.0, "charging": True}
     assert seam.calls == 0
@@ -518,7 +541,7 @@ def test_a_percentage_that_is_not_a_number_still_descends_for_the_level(
         percentage="not a number", charging=True
     )
     seam = CountingSeam((50.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 50.0, "charging": True}
 
@@ -534,7 +557,7 @@ def test_a_bus_that_raises_leaves_the_tier_one_field_standing(
     def exploding():
         raise OSError("no such device on bus 1")
 
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=exploding)
+    deps = deps_with_pisugar(harness.deps, exploding)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": None, "charging": True}
@@ -547,7 +570,7 @@ def test_a_field_no_tier_supplies_is_null(options, harness, stub_plugins):
     `available` is still true because a charging-only reading is a reading."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(charging=False)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": None, "charging": False}
@@ -558,7 +581,7 @@ def test_a_field_no_tier_supplies_is_null(options, harness, stub_plugins):
 def test_nothing_anywhere_is_two_nulls_and_no_capability(options, harness):
     """Tier 3 of SPEC 2.11, reached with every tier above it empty."""
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == NO_BATTERY
@@ -573,7 +596,7 @@ def test_pisugar_false_consults_no_tier_at_all(options, harness, stub_plugins):
     provider = SpyProvider(battery_level=64.0, power_plugged=True, charging=True)
     stub_plugins.loaded["pisugarx_ext"] = provider
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     options["pisugar"] = False
     reader = companion.BatteryReader(options, deps)
 
@@ -683,7 +706,7 @@ def test_a_tier_one_percentage_is_bounded_to_0_100(
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=wrap(value))
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == expected
 
@@ -698,7 +721,7 @@ def test_an_out_of_range_percentage_does_not_stop_the_tier_below(
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=255.0, charging=True)
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
     assert seam.calls == 1
@@ -713,7 +736,7 @@ def test_an_out_of_range_percentage_does_not_stop_the_candidate_below(
     which leaves `percentage` to answer."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=255.0, percentage=64.0)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == 64.0
 
@@ -725,7 +748,7 @@ def test_an_out_of_range_percentage_with_nothing_below_is_null(
     rather than shown a plausible-looking lie."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=255.0, charging=True)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": None, "charging": True}
 
@@ -742,7 +765,7 @@ def test_a_callable_candidate_is_called(options, harness, stub_plugins):
         battery_level=as_callable(64.0), power_plugged=as_callable(True)
     )
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": 64.0, "charging": True}
@@ -758,7 +781,7 @@ def test_a_callable_candidate_that_raises_is_a_miss(options, harness, stub_plugi
         battery_level=raising_callable(), charging=True
     )
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
 
@@ -772,7 +795,7 @@ def test_a_callable_charging_candidate_that_raises_is_a_miss(
         battery_level=88.0, power_plugged=raising_callable(OSError("bus gone"))
     )
     seam = CountingSeam((11.0, True))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 88.0, "charging": True}
 
@@ -784,7 +807,7 @@ def test_battery_level_outranks_percentage(options, harness, stub_plugins):
     The values differ so the loser is visible."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=64.0, percentage=7.0)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == 64.0
 
@@ -849,7 +872,7 @@ def test_a_refused_percentage_is_never_reported(options, harness, stub_plugins, 
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=wrap(value))
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] is None
 
@@ -866,7 +889,7 @@ def test_a_refused_percentage_still_lets_the_tier_below_answer(
         battery_level=wrap(value), charging=True
     )
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
     assert seam.calls == 1
@@ -883,7 +906,7 @@ def test_a_refused_percentage_still_lets_the_next_candidate_answer(
         battery_level=wrap(value), percentage=64.0
     )
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == 64.0
 
@@ -900,7 +923,7 @@ def test_a_refusal_is_not_an_answer(options, harness, stub_plugins, value):
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=value)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == NO_BATTERY
@@ -918,7 +941,7 @@ def test_a_refusal_alongside_a_charge_state_is_still_an_answer(
         battery_level=value, power_plugged=False
     )
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": None, "charging": False}
@@ -933,7 +956,7 @@ def test_a_refusal_rescued_by_the_tier_below_is_an_answer(
     tier 1 supplied nothing, the bus supplied a level, so a provider answered."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=value)
     seam = CountingSeam((42.0, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": 42.0, "charging": None}
@@ -985,7 +1008,7 @@ def test_a_numeric_string_percentage_is_accepted(
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=wrap(value))
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read()["percent"] == expected
@@ -1001,7 +1024,7 @@ def test_a_numeric_string_settles_the_field_and_stops_the_descent(
         battery_level="87", percentage=7.0, power_plugged=True
     )
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 87.0, "charging": True}
     assert seam.calls == 0
@@ -1015,7 +1038,7 @@ def test_a_string_that_will_not_convert_is_still_a_miss(options, harness, stub_p
         battery_level="eighty-seven", charging=True
     )
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
 
@@ -1043,7 +1066,7 @@ def test_available_does_not_un_latch_when_a_later_read_is_refused(
     provider = FakeProvider(battery_level=64.0)
     stub_plugins.loaded["pisugarx_ext"] = provider
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read()["percent"] == 64.0
@@ -1095,7 +1118,7 @@ def test_the_second_plugin_is_not_probed_for_the_level_the_first_supplied(
     second = SpyProvider(battery_level=7.0, charging=True)
     stub_plugins.loaded["pisugarx"] = second
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 88.0, "charging": True}
     assert seam.calls == 0
@@ -1212,7 +1235,7 @@ def test_a_client_that_is_not_ready_is_not_traversed(
     client = make_client()
     stub_plugins.loaded["pisugarx_ext"] = FakePluginWithClient(client)
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": False}
     assert seam.calls == 1
@@ -1230,7 +1253,7 @@ def test_the_plugin_itself_is_still_probed_when_its_client_is_not_ready(
         client, battery_level=88.0, power_plugged=True
     )
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 88.0, "charging": True}
     assert seam.calls == 0
@@ -1255,7 +1278,7 @@ def test_the_reference_unit_shape_is_read_through_the_nested_client(
     )
     stub_plugins.loaded["pisugarx_ext"] = FakePluginWithClient(client)
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == {"percent": 64.0, "charging": True}
@@ -1270,7 +1293,7 @@ def test_the_nested_client_is_read_as_plain_attributes_too(options, harness, stu
     client = FakeClient(ready=True, battery_level=64.0, power_plugged=True)
     stub_plugins.loaded["pisugarx_ext"] = FakePluginWithClient(client)
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 64.0, "charging": True}
     assert seam.calls == 0
@@ -1287,7 +1310,7 @@ def test_upstream_pisugarx_has_the_same_shape(options, harness, stub_plugins):
     )
     stub_plugins.loaded["pisugarx"] = FakePluginWithClient(client)
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 41.0, "charging": False}
     assert seam.calls == 0
@@ -1304,7 +1327,7 @@ def test_an_attribute_on_the_plugin_wins_over_the_same_one_on_the_client(
         client, battery_level=88.0, power_plugged=True
     )
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 88.0, "charging": True}
     assert seam.calls == 0
@@ -1315,7 +1338,7 @@ def test_a_flat_plugin_with_no_client_still_works(options, harness, stub_plugins
     values and no `.ps` at all is read exactly as before."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=64.0, power_plugged=True)
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 64.0, "charging": True}
     assert seam.calls == 0
@@ -1334,7 +1357,7 @@ def test_a_client_that_answers_nothing_is_a_miss_and_not_an_error(
     nothing raises into the asyncio loop."""
     stub_plugins.loaded["pisugarx_ext"] = FakePluginWithClient(client)
     seam = CountingSeam((42.0, True))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
 
@@ -1350,7 +1373,7 @@ def test_a_plugin_whose_client_attribute_raises_is_a_miss(options, harness, stub
 
     stub_plugins.loaded["pisugarx_ext"] = PluginWithExplodingClient()
     seam = CountingSeam((42.0, True))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
 
@@ -1400,7 +1423,7 @@ def test_a_dead_battery_charging_alone_is_not_an_answer(options, harness, stub_p
     `False`."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_charging=0)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
     reader = companion.BatteryReader(options, deps)
 
     assert reader.read() == NO_BATTERY
@@ -1421,7 +1444,7 @@ def test_an_integer_too_large_for_a_float_does_not_escape(options, harness, stub
     """
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=10 ** 400, charging=True)
     seam = CountingSeam((42.0, False))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 42.0, "charging": True}
 
@@ -1444,7 +1467,7 @@ def test_a_candidate_present_and_none_is_a_miss(
     looking."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(**attributes)
     seam = CountingSeam((42.0, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == expected
 
@@ -1455,7 +1478,7 @@ def test_a_client_attribute_present_and_none_is_a_miss(options, harness, stub_pl
     client = FakeClient(ready=True, battery_level=None, get_battery_level=lambda: 64.0)
     stub_plugins.loaded["pisugarx_ext"] = FakePluginWithClient(client)
     seam = CountingSeam((None, None))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps)["percent"] == 64.0
 
@@ -1591,7 +1614,7 @@ def test_a_charging_value_from_the_enumerated_spellings_is_accepted_end_to_end(
     and the I2C tier is never touched because the field is already in hand."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=64.0, charging="yes")
     seam = ForbiddenSeam()
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 64.0, "charging": True}
     assert seam.calls == 0
@@ -1604,7 +1627,7 @@ def test_an_unrecognised_charging_string_is_a_miss_end_to_end(
     below still gets to answer the charging field."""
     stub_plugins.loaded["pisugarx_ext"] = FakeProvider(battery_level=64.0, charging="maybe")
     seam = CountingSeam((None, True))
-    deps = dataclasses.replace(harness.deps, read_pisugar_i2c=seam)
+    deps = deps_with_pisugar(harness.deps, seam)
 
     assert read_with(options, deps) == {"percent": 64.0, "charging": True}
     assert seam.calls == 1

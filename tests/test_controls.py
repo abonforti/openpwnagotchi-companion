@@ -15,8 +15,6 @@ broadcast to every client, then a flush, and only then the effect.
 
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
 
 from conftest import FakeAgent
@@ -378,7 +376,7 @@ def test_the_default_deps_bind_reboot_and_shutdown_to_the_module(stub_pwnagotchi
 
 def test_the_default_deps_keep_an_explicitly_passed_seam(stub_pwnagotchi):
     recorded = []
-    deps = dataclasses.replace(companion.Deps(), restart_pwnagotchi=recorded.append)
+    deps = companion.Deps(restart_pwnagotchi=recorded.append)
 
     deps.restart_pwnagotchi("AUTO")
 

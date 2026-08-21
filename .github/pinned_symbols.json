@@ -365,6 +365,26 @@
         "def get"
       ],
       "why": "agent.view() returns a Display, not a bare View, so the delegation chain F28b and F28c pin only holds while Display adds no get of its own. An override here would intercept every read before View.get is reached, and the plugin would never know"
+    },
+    {
+      "id": "F30a",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "importlib.util.spec_from_file_location",
+        "importlib.util.module_from_spec",
+        "spec.loader.exec_module"
+      ],
+      "why": "the three calls that make up load_from_file. It checks that all three are still present in the file, which is what it can check: contains_all is not scoped to one function and cannot see a fourth call added beside them. The half that carries the fact is F30b"
+    },
+    {
+      "id": "F30b",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "absent",
+      "text": [
+        "sys.modules"
+      ],
+      "why": "the loader never registers the plugin module, so during import sys.modules.get(__name__) is None and any module-scope construct that resolves its own module by name dies. That made the plugin unloadable on every unit (issue #136) while the suite stayed green, because pytest imports it the ordinary way. Pinned as an absence because the absence is the fact: the day upstream adds a registration this constraint lifts, and we should hear about it rather than keep working around something that no longer applies"
     }
   ]
 }

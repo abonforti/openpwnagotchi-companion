@@ -1373,9 +1373,40 @@ does not exist yet** and cannot be written until there is a service worker to re
 **`script-src 'self'` holds against today's build output, which is a property of the
 configuration and not of the tools.** `vite-plugin-pwa` with `injectRegister: 'auto'` emits an
 external `registerSW.js` today and could emit an inline one tomorrow. The setting is pinned, and
-the build **must** assert that `dist/index.html` contains no inline `<script>`, because the
-alternative is a policy that breaks the first time somebody changes a build option. **That
-assertion does not exist yet**: issue #91 carries it too.
+the build asserts that `dist/index.html` carries no inline `<script>`, because the alternative is
+a policy that breaks the first time somebody changes a build option.
+
+**The assertion now exists** (issue #141), and what it would have cost to keep deferring it is
+worth recording, because the answer is not "an outage". Two CSP violations in a browser console
+on a working unit were read as this regression having happened, and produced a high-priority
+ticket with a wrong mechanism and a wrong consequence before anybody looked at the built file,
+which was one grep away and said the opposite. A gate that cannot fail is also a gate that cannot
+tell you it did not fail. The check runs in CI after the build, so the answer to "did an inline
+script get in" is a job result rather than an argument.
+
+It fails on any `<script>` element with no `src`, which is the whole rule: an external script is
+covered by `'self'`, an inline one is not, and nothing in this app has a reason to inline one.
+**An empty or whitespace-only `src` counts as no `src`.** It names no file, so it is a mistake
+in every case it could arise from, and refusing it costs nothing because nothing legitimate emits
+one. The check is about every script on the page being a real file the policy can cover, not
+about the presence of an attribute.
+
+**A `src` that points at another origin fails as well**, and for the same reason rather than for
+a new one. `script-src 'self'` covers a file this unit serves; it does not cover
+`https://cdn.example.com/index.js`, which the browser refuses exactly as it refuses an inline
+block. A check that accepted it would be reading the wrong property of the attribute: not "is
+there a value" but "is this a file the policy can cover". A `base` pointed elsewhere, or a plugin
+emitting an absolute URL, produces one, and it fails on the unit rather than in CI, which is the
+shape of failure this whole gate exists to move earlier. So the value must be relative or
+root-relative: no scheme, and no leading `//`.
+
+**A page with no `<script>` at all fails too**, and that is the rule that keeps this check from
+being decoration. The build emits two, so a file with none is a wrong file, an empty file, or a
+build that did not run, and every one of those is a reason to stop rather than a clean result. It
+is the same rule §13 states for a scan that could not run (issues #112, #126): a gate that reports
+success when it had nothing to look at is worse than no gate, because it also reports success on
+the day something is wrong. The failure says which of the two cases it is, since "no scripts
+found" and "could not read the file" want different next actions.
 
 **`style-src 'self'` also forbids inline `style="..."` attributes**, not only `<style>` blocks.
 No component uses one today, and Leaflet mutates `element.style.*` through the CSSOM, which CSP
@@ -1388,8 +1419,8 @@ alone.
 **No reporting, and the reason rather than the silence.** `report-to` needs a collector, and a
 unit on a personal hotspot has nowhere to send reports that the owner could read; adding an
 endpoint to the plugin would be new attack surface for a diagnostic. The most likely violation is
-the build regressing to an inline script, and that is caught by the build assertion above rather
-than in production. Revisit if the app ever has a place to report to.
+the build regressing to an inline script, and that is caught by the assertion above rather than
+in production. Revisit if the app ever has a place to report to.
 
 **Trusted Types are not required here.** `require-trusted-types-for 'script'` blocks the sink
 where `script-src` blocks the payload, which is what issue #32 is about; it belongs to that
@@ -1703,7 +1734,7 @@ there, or is ignored.
 | `connecting` | `restarting` message | `restarting` |
 | `connecting` | `error` with `code: "unauthorized"`, then close | `unauthorized` (*rejected*) |
 | `connecting` | bare 1008, **no `auth` frame was sent** | `unauthorized` (*required*) |
-| `connecting` | third consecutive close before any `stats`, no token stored | `unauthorized` (*required*), by inference — see below |
+| `connecting` | third consecutive close **of a socket that opened**, before any `stats`, no token stored | `unauthorized` (*required*), by inference — see below |
 | `connecting` | bare 1008, an `auth` frame **was** sent | `offline` |
 | `connecting` | any other close, or the socket fails to open | `offline` |
 | `connected` | a `stats` whose `sessionAge` is under 55 s and not `null` | `connected` |
@@ -1784,7 +1815,27 @@ ever — the failure the *required* reason exists to remove, reached by a differ
 
 The fallback is a counter rather than a cleverer reading of one close. **After three consecutive
 connections closed before any `stats` arrived, while no token is stored, the client presents
-*required* anyway.** Three because a slow tether plausibly loses one handshake and implausibly
+*required* anyway.**
+
+**The counter counts closes, and a socket that never opened is not one.** This is the boundary
+the first implementation missed, and it cost the app everything: it counted a failure to connect
+alongside a close, so three refused connections were read as three lost 1008s. A unit restarting
+produces far more than three of those in the ten to twenty seconds it is down, and `unauthorized`
+is the one state that suspends reconnection - so any restart the app did not itself order left it
+telling the owner to add a token to a unit that requires none, and never retrying (issue #139).
+The argument above is entirely about a socket that **opened**, was refused, and was closed by a
+frame that did not arrive. A connection refused never reached the plugin at all, and says only
+that nothing is listening, which is `offline` and is retried for ever. The browser separates the
+two plainly: an opened socket fires `onopen` first, and a transport failure closes with
+1006.
+
+**A refusal in between does not interrupt the run**, and "consecutive" is about the closes
+rather than about wall-clock order. A socket that never opened neither increments the counter
+nor resets it, so two opened closes, fifty refusals and a third opened close still infer
+*required*. Only events that carry evidence count, and the event that genuinely says the unit
+is answering is a `stats`, which resets the counter wherever it arrives.
+
+Three because a slow tether plausibly loses one handshake and implausibly
 loses three, and because being wrong costs an offer to set a token rather than a lockout: the
 user dismisses it and the reconnection loop carries on. This is the one transition in §4.3.1
 entered by inference rather than by an observed event, and it is labelled as such so that nobody
@@ -2609,6 +2660,14 @@ as `data-empty="true"` with the accessible *unavailable* beside it, which is a r
 choosing what the screen says about the unit's own state (§4.5.3). Those fields are `face`,
 `status`, `lastHandshake`, `lastPeer` and `gpsSource`.
 
+**A remote string that is empty is empty.** `face`, `status` and `gpsSource` are absent when
+their string is `null` **or** `''`, and the first implementation checked only the first, so a
+unit that sent an empty face produced a row with a label and nothing beside it: no dash, no
+`data-empty`, and silence where a screen reader should have heard *unavailable* (issue #142).
+That is not trimming or normalising the value, which §4.5.3 forbids: a name of `-`, or of a
+single space, is a real reading and renders as one. The claim is only that a string with nothing
+in it is nothing to show.
+
 For `lastHandshake` and `lastPeer` the value is the pair, so the field is empty when the object
 is absent **or** when it carries neither half: an empty name and no timestamp. Without that
 second clause a peer with an empty name and no `lastSeen` renders a dash that nothing declares
@@ -3018,7 +3077,9 @@ listener rather than something this sentence can claim.
   rule people follow into a rule people route around. **D16 still holds** — the repository is
   English only — but it is enforced by review (`companion-reviewer`), where a human or an agent
   can tell the difference. Do not reintroduce a word-list gate.
-- **frontend**: `npm ci`, `svelte-check`, `tsc --noEmit`, `vitest run`, `npm run build`.
+- **frontend**: `npm ci`, `svelte-check`, `tsc --noEmit`, `vitest run`,
+  `check_coverage.py frontend`, `npm run build`, and last `check_no_inline_script.py` over
+  the built page (§2.15.1), which is last because it reads what the build produced.
 - **schemas**: `.github/check_schemas.py` — every schema is valid draft 2020-12, each message's
   `type` const matches its filename, incoming messages are flat while outgoing ones wrap their
   payload under `data` with a `timestamp`, `additionalProperties: false` throughout, every `$ref`
@@ -3391,6 +3452,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_ci_gates.py` | every step under `.github/workflows/` that scans through `grep` or `git grep`, driven as real shell with stubbed `git`, `grep` and `gh` exiting with a status the test chooses: a match fails the job and prints the ban's own message, exit 1 is the clean result, and 128 fails without printing the clean line; the auto-merge job enables the merge with `--auto --squash` on a documentation-only file list, leaves a list containing code to a human, refuses to decide when the scan could not run, and reports rather than fails when `gh pr merge` does; a step whose shape cannot be driven has to be named in an explicit registry, and a guard test fails when an uncovered one appears, so the next scan added cannot fall silently outside the parametrization; the stubs exit loudly on any invocation they do not recognise rather than reaching the real binary, and nothing touches the network |
 | `test_shipped_files.py` | the inventory of every directory copied verbatim into the build (§13.2), in both directions: an undeclared file fails and is named, a declared file that is gone fails as missing rather than as unexpected, and the real repository passes as it stands so a wrong inventory is caught here rather than in CI; the index and the disk are each proven to be read, with a file tracked but deleted locally and a file present but untracked; `.githooks/pre-commit` refuses on an undeclared file before it needs a denylist at all; and the hygiene job in `ci.yml` actually invokes the script, because a gate nobody runs is not a gate |
+| `test_no_inline_script.py` | the no-inline-script gate, `.github/check_no_inline_script.py` (§2.15.1, issue #141): every element shape that must fail — a `<script>` with a body, an empty `<script></script>`, one with other attributes but no `src`, and one whose `src` is present but empty — each failing and naming the offending `dist/index.html`; an external `<script src="...">` passes, and so does the real, built `dist/index.html` when it is present; a missing `dist/`, a missing `index.html` inside it, and an unreadable one each fail rather than pass quietly, the same rule §13 states for the shipped-inventory gate (issues #112, #126); and the `frontend` job of `ci.yml` actually invokes the script, after `Build` and on a pull request |
 | `test_pre_commit_hook.py` | the leak gate's own exit-status rule (§13): a `git diff --cached` that fails refuses the commit instead of reading an empty staged list as nothing to scan, on both the file list and the unified diff; an unset `companion.denylist` still gives the existing "not configured" failure rather than the new one, so the two stay distinguishable and `tolerate=(1,)` is real; a `git config` failing with any other status is a failure; a clean staged diff exits 0, a matching one exits 1, and the matching line is never printed because it is the secret; and the shipped-inventory gate the hook now runs first refuses when its `git ls-files` fails, before the denylist is looked up at all |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |

@@ -142,13 +142,29 @@
   const gpsFixEmpty = $derived(gpsFixValue === DASH)
   const gpsSourceValue = $derived(gpsReading === null ? DASH : formatGpsSource(gpsReading))
   // gpsSource decides emptiness from the value, not the string (see the
-  // comment above lastHandshakeEmpty): a null source and a formatted DASH
-  // happen to coincide here, but the rule is which one this view asks.
-  const gpsSourceEmpty = $derived(gpsReading === null || gpsReading.source === null)
+  // comment above lastHandshakeEmpty): a null or empty source and a
+  // formatted DASH happen to coincide here, but the rule is which one this
+  // view asks. SPEC 4.5.1.1: a remote string is empty when it is null or ''.
+  // The `''` arm is unreachable from a conformant payload but not
+  // validated at the boundary (see the comment on formatGpsSource, issue
+  // #109), and cast to string for the same reason.
+  const gpsSourceEmpty = $derived(
+    gpsReading === null ||
+      gpsReading.source === null ||
+      (gpsReading.source as string) === '',
+  )
 
-  const faceValue = $derived(faceStatus === null ? DASH : faceStatus.face)
-  const statusValue = $derived(faceStatus === null ? DASH : faceStatus.status)
-  const faceEmpty = $derived(faceStatus === null)
+  // SPEC 4.5.1.1: a remote string is empty when it is null or '', so face
+  // and status each decide emptiness from their own string rather than
+  // sharing a single flag that only asked whether the object arrived.
+  const faceValue = $derived(
+    faceStatus === null || faceStatus.face === '' ? DASH : faceStatus.face,
+  )
+  const faceEmpty = $derived(faceStatus === null || faceStatus.face === '')
+  const statusValue = $derived(
+    faceStatus === null || faceStatus.status === '' ? DASH : faceStatus.status,
+  )
+  const statusEmpty = $derived(faceStatus === null || faceStatus.status === '')
 
   const primaryFields = $derived.by(
     (): FieldRow[] => [
@@ -267,7 +283,7 @@
 
     <div class="face-card">
       {@render field({ id: 'face', label: 'Face', value: faceValue, empty: faceEmpty })}
-      {@render field({ id: 'status', label: 'Status', value: statusValue, empty: faceEmpty })}
+      {@render field({ id: 'status', label: 'Status', value: statusValue, empty: statusEmpty })}
     </div>
   </div>
 

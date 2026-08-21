@@ -309,6 +309,18 @@ function isEmpty(name: string): boolean {
   return field(name).getAttribute('data-empty') === 'true'
 }
 
+// Same reach as the "carries an accessible unavailable" test above: the
+// label can be an aria-label, an aria-describedby target, or plain (e.g.
+// visually-hidden) text, and SPEC pins the string rather than its placement.
+function accessibleText(name: string): string {
+  const el = field(name)
+  const ariaLabel = el.getAttribute('aria-label') ?? ''
+  const describedBy = el.getAttribute('aria-describedby')
+  const describedText = describedBy ? (document.getElementById(describedBy)?.textContent ?? '') : ''
+  const ownText = el.textContent ?? ''
+  return `${ariaLabel} ${describedText} ${ownText}`.toLowerCase()
+}
+
 // The smallest ancestor of a field's value element that contains no *other*
 // [data-field] element. That scopes the search to just this field's own
 // row rather than to the whole Dashboard section: `el.closest('[data-view]')`
@@ -355,18 +367,15 @@ describe('before the first frame, every field is a dash', () => {
     client.emitState('connecting')
     await mountDashboard(client)
 
+    // The accessible text can be the element's own aria-label, or that of
+    // a labelled/described element, or plain text carried in the DOM (e.g.
+    // visually-hidden). SPEC pins the string, not its exact placement, so
+    // accessibleText() accepts all three - shared with the empty-string
+    // (§4.5.1.1, issue #142) tests below so the two cannot drift apart.
     for (const name of FIELD_NAMES) {
-      const el = field(name)
-      // The accessible text can be the element's own aria-label, or that of
-      // a labelled/described element, or plain text carried in the DOM
-      // (e.g. visually-hidden). SPEC pins the string, not its exact
-      // placement, so all three are accepted.
-      const ariaLabel = el.getAttribute('aria-label') ?? ''
-      const describedBy = el.getAttribute('aria-describedby')
-      const describedText = describedBy ? (document.getElementById(describedBy)?.textContent ?? '') : ''
-      const ownText = el.textContent ?? ''
-      const haystack = `${ariaLabel} ${describedText} ${ownText}`.toLowerCase()
-      expect(haystack, `field ${name} must carry "${EMPTY_LABEL}" accessibly`).toContain(EMPTY_LABEL.toLowerCase())
+      expect(accessibleText(name), `field ${name} must carry "${EMPTY_LABEL}" accessibly`).toContain(
+        EMPTY_LABEL.toLowerCase(),
+      )
     }
   })
 
@@ -1041,6 +1050,98 @@ describe('data-empty is decided by the value, not by the rendered string', () =>
 
     expect(fieldText('lastPeer')).toBe('-')
     expect(isEmpty('lastPeer')).toBe(false)
+  })
+
+  // §4.5.1.1: "this is not trimming... a name of '-', or of a single space,
+  // is a real reading and renders as one." These three pass against the
+  // pre-fix code too - a single space was never mistaken for absent before
+  // issue #142, only an empty string was - so they are not regression
+  // evidence for that fix. What they guard is a future one: a well-meaning
+  // `.trim()` added anywhere in this path would collapse a single space to
+  // '', and the null-or-'' rule the #142 fix introduces would then, wrongly,
+  // call it empty.
+  it('a face of a single space is a real reading, not an absent one', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(faceStatusEnvelope({ face: ' ', status: 'idle' }))
+    await settle()
+
+    expect(field('face').textContent).toBe(' ')
+    expect(isEmpty('face')).toBe(false)
+  })
+
+  it('a status of a single space is a real reading, not an absent one', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(faceStatusEnvelope({ face: '(-_-)', status: ' ' }))
+    await settle()
+
+    expect(field('status').textContent).toBe(' ')
+    expect(isEmpty('status')).toBe(false)
+  })
+
+  it('a peer named a single space with no lastSeen still reports a real reading, not an absent one', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: ' ', lastSeen: null }) }))
+    await settle()
+
+    expect(field('lastPeer').textContent).toBe(' ')
+    expect(isEmpty('lastPeer')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC.md amended 4.5.1.1: "A remote string that is empty is empty." face,
+// status and gpsSource are absent when their string is null OR '' - the
+// first implementation checked only the first, so a unit that sent an
+// empty face produced a row with a label and nothing beside it: no dash,
+// no data-empty, and no accessible *unavailable* (issue #142).
+// ---------------------------------------------------------------------------
+
+describe('a remote string that is empty is empty (§4.5.1.1, issue #142)', () => {
+  it('an empty face renders DASH, data-empty, and the accessible unavailable label - not a blank row', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(faceStatusEnvelope({ face: '', status: 'idle' }))
+    await settle()
+
+    expect(visibleFieldText('face')).toBe(DASH)
+    expect(isEmpty('face')).toBe(true)
+    expect(accessibleText('face')).toContain(EMPTY_LABEL.toLowerCase())
+  })
+
+  it('an empty status renders DASH, data-empty, and the accessible unavailable label - not a blank row', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(faceStatusEnvelope({ face: '(-_-)', status: '' }))
+    await settle()
+
+    expect(visibleFieldText('status')).toBe(DASH)
+    expect(isEmpty('status')).toBe(true)
+    expect(accessibleText('status')).toContain(EMPTY_LABEL.toLowerCase())
+  })
+
+  it('an empty gpsSource renders DASH and data-empty, the same as a null one', async () => {
+    // GpsSource's own wire type is the closed enum
+    // 'bettercap' | 'gpsd' | 'browser' | null, so '' cannot arrive from a
+    // conformant plugin - the same standing §4.5.1.1 gives every non-finite
+    // numeric field. Cast, as that section already does for those, to prove
+    // the defence rather than assume it.
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ gps: gpsReading({ source: '' as unknown as Gps['source'] }) }))
+    await settle()
+
+    expect(visibleFieldText('gpsSource')).toBe(DASH)
+    expect(isEmpty('gpsSource')).toBe(true)
+    expect(accessibleText('gpsSource')).toContain(EMPTY_LABEL.toLowerCase())
   })
 })
 

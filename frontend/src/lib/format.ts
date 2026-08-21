@@ -162,13 +162,22 @@ export function formatGpsFix(gps: Gps): string {
 }
 
 /**
- * The source name as it arrived; `DASH` when it is `null`, which is the
- * ordinary dash rule and not a fourth word. `off` belongs to
+ * The source name as it arrived; `DASH` when it is `null` or `''`, which is
+ * the ordinary dash rule and not a fourth word. `off` belongs to
  * `formatGpsFix`, the row that answers "is it looking": a source is a
  * name, and the absence of a name is the absence of a name (SPEC 4.5.1.1).
+ *
+ * The `''` arm is not reachable from a conformant payload -- `common.json`
+ * types `GpsSource` as a closed enum with no empty member, the same way the
+ * `null`-name arm of `formatNamedEvent` is not -- but `lib/stores.ts` writes
+ * `message.data` into the store with no runtime validation (issue #109), so
+ * that type is a compile-time claim about a remote payload, not a fact
+ * about one. Pinned anyway rather than left as defence in depth
+ * (SPEC 4.5.1.1, issue #142).
  */
 export function formatGpsSource(gps: Gps): string {
-  return gps.source ?? DASH
+  const source = gps.source as string | null
+  return source === null || source === '' ? DASH : source
 }
 
 const SHORT_MONTHS = [

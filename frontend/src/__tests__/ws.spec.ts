@@ -516,19 +516,26 @@ describe('state machine: connecting', () => {
     expect(client.state()).toBe('offline')
   })
 
-  it('connecting -> unauthorized (required), by inference: three consecutive closes before any stats, no token stored', () => {
+  it('connecting -> unauthorized (required), by inference: three consecutive closes OF SOCKETS THAT OPENED, before any stats, no token stored', () => {
+    // §4.3.1: "The counter counts closes, and a socket that never opened is
+    // not one." Each socket here fires onopen before its close, which is
+    // the shape a lost 1008 actually has - unlike the failure-to-open test
+    // below (issue #139), where onopen is never called at all.
     clearStoredToken()
     const { client, sockets } = setup() // no token option, none stored either
     client.connect()
-    nth(sockets, 0).serverClose(1006, '') // 1st: an ordinary drop
+    nth(sockets, 0).open()
+    nth(sockets, 0).serverClose(1006, '') // 1st: opened, then an ordinary drop
     expect(client.state()).toBe('offline')
 
     client.connect() // the user asks to reconnect
+    nth(sockets, 1).open()
     nth(sockets, 1).serverClose(1006, '') // 2nd
     expect(client.state()).toBe('offline')
 
     client.connect()
-    nth(sockets, 2).serverClose(1006, '') // 3rd consecutive, still nothing but drops
+    nth(sockets, 2).open()
+    nth(sockets, 2).serverClose(1006, '') // 3rd consecutive open-then-drop, still nothing but drops
     expect(client.state()).toBe('unauthorized')
     expect(client.unauthorizedReason()).toBe('required' satisfies UnauthorizedReason)
   })
@@ -536,12 +543,84 @@ describe('state machine: connecting', () => {
   it('does not infer unauthorized-required when a token IS stored - three drops just stay offline', () => {
     const { client, sockets } = setup({ token: 'configured-token-value' })
     client.connect()
+    nth(sockets, 0).open()
     nth(sockets, 0).serverClose(1006, '')
     client.connect()
+    nth(sockets, 1).open()
     nth(sockets, 1).serverClose(1006, '')
     client.connect()
+    nth(sockets, 2).open()
     nth(sockets, 2).serverClose(1006, '')
     expect(client.state()).toBe('offline')
+  })
+
+  it('three consecutive sockets that FAIL TO OPEN never infer unauthorized, and the backoff loop keeps trying a fourth time (issue #139)', () => {
+    // §4.3.1, "The counter counts closes, and a socket that never opened is
+    // not one." This is the regression that took down the app on hardware:
+    // a unit restarting produces many refused connections in a row, and
+    // reading those as lost 1008s landed the client in `unauthorized`,
+    // which is the one state that suspends reconnection - "the app gives up
+    // for ever after any unit restart" (issue #139). None of these sockets
+    // ever fires onopen, unlike the "opened" test above: that is the one
+    // fact this test exists to keep distinct from it.
+    clearStoredToken()
+    const { client, sockets } = setup() // no token option, none stored either
+    client.connect()
+    nth(sockets, 0).serverClose(1006, '') // never opened: a refused connection
+    expect(client.state()).toBe('offline')
+    expect(client.unauthorizedReason()).toBeNull()
+
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 0)) // the backoff loop, not a manual tap
+    expect(sockets.length).toBe(2)
+    nth(sockets, 1).serverClose(1006, '') // never opened, 2nd
+    expect(client.state()).toBe('offline')
+    expect(client.unauthorizedReason()).toBeNull()
+
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 1))
+    expect(sockets.length).toBe(3)
+    nth(sockets, 2).serverClose(1006, '') // never opened, 3rd - the count the old bug tripped on
+    expect(client.state()).toBe('offline') // NOT unauthorized
+    expect(client.unauthorizedReason()).toBeNull()
+
+    // The behaviour the old bug actually removed: the loop is still
+    // running underneath, so a fourth attempt happens on its own. "It
+    // stayed offline" is also true of a client that has given up - only a
+    // fourth socket proves it has not.
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 2))
+    expect(sockets.length).toBe(4)
+  })
+
+  it('a stale socketOpenedThisConnection left over from a socket that DID open must not let later failures-to-open count towards the inference (issue #139, the commonest sequence)', () => {
+    // The test above never precedes its failures with an opened socket, so
+    // it cannot see a flag that was set true once and then never reset.
+    // That is exactly the everyday sequence, though: the app is connected,
+    // the unit restarts, the live socket closes having opened - and if the
+    // per-connection reset of that flag is missing from beginConnect, every
+    // connection attempt after it inherits "opened" from the one that
+    // actually did, and a run of ordinary refused reconnections gets read
+    // as lost 1008s all over again.
+    clearStoredToken()
+    const { client, sockets } = setup() // no token option, none stored either
+    client.connect()
+    nth(sockets, 0).open() // a socket that DID open ...
+    nth(sockets, 0).serverClose(1006, '') // ... then closed, before any stats: 1 legitimate count
+    expect(client.state()).toBe('offline')
+
+    // Three subsequent connections that never open at all. If the flag from
+    // socket 0 survives uncleared, each of these is wrongly read as another
+    // close of a socket that opened, and the count reaches unauthorized
+    // well before a fourth attempt is ever made.
+    for (let i = 0; i < 3; i++) {
+      waitOutBackoff(nth(BACKOFF_CAPS_S, i))
+      const socket = nth(sockets, sockets.length - 1)
+      socket.serverClose(1006, '') // never opened
+      expect(client.state()).toBe('offline')
+      expect(client.unauthorizedReason()).toBeNull()
+    }
+
+    // The loop must still be running: a further attempt happens on its own.
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 3))
+    expect(sockets.length).toBe(5) // 1 opened + 3 failed-to-open + this one
   })
 })
 

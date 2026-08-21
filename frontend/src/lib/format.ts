@@ -142,8 +142,16 @@ export function formatChannel(channel: number | null): string {
   return `${channel}`
 }
 
-/** The mode as the unit's own display writes it: `AUTO`, `PASV`, and `MANU` for `MANUAL`. */
-export function formatMode(mode: Mode): string {
+/**
+ * The mode as the unit's own display writes it: `AUTO`, `PASV`, and `MANU`
+ * for `MANUAL`. `DASH` for `null`, the ordinary rule for a value the plugin
+ * has no agent to ask about, which is what a unit in manual mode gives it
+ * (SPEC 2.5, issue #140).
+ */
+export function formatMode(mode: Mode | null): string {
+  if (mode === null) {
+    return DASH
+  }
   return mode === 'MANUAL' ? 'MANU' : mode
 }
 

@@ -646,9 +646,44 @@ for up to 30 seconds. It MUST NOT be called on the request path. A background th
 a cached session snapshot every `session_poll_interval` seconds, guarded by a lock and a
 try/except; all readers use the cache and expose its age.
 
+**The plugin runs without an agent, and says so rather than guessing.** In manual mode
+pwnagotchi never calls `on_ready`, so the agent never arrives: observed on a real unit, where
+another plugin logs `on_ready() not called - using fallback initialization` in the same journal.
+Two consequences, and both were defects (issue #140).
+
+**The threads start in `on_loaded`, not in `on_ready`.** Only one of the three things `on_ready`
+used to do needs an agent. The background pass also polls gpsd and reconciles the listeners, and
+that reconcile is what binds a tether when it comes up, so a plugin that starts no threads in
+manual mode never notices one. `on_ready` now captures the agent and nothing else; every loop
+tolerates the agent being absent, which they already had to do for the window before `on_ready`
+fires in auto mode.
+
+**`mode` is null when there is no agent**, rather than `AUTO`. The first implementation defaulted
+to `AUTO`, and on a unit whose display read MANU the app confidently read AUTO: not missing, but
+wrong, which is the worse of the two. It is the one field where the plugin asserted something it
+had no basis for, on a screen whose whole presentation rule (§4.5.1.1) is that an unknown value
+renders as a dash. Nothing else in `stats` needed changing, because everything else agent-derived
+was already reporting a real zero or a real null.
+
+That makes `Mode` nullable at both its use sites, `Stats` and `FaceStatus`, which is a re-shaped
+message and therefore a MINOR bump under §12: **0.1.0**.
+
+**The handshake counts are the same defect and are not fixed here, issue #146.** The capture
+directory is read from `agent._config['bettercap']['handshakes']` (F14), which with no agent
+raises and leaves the directory empty, so `handshakes` and `handshakesTotal` report **zero** on a
+unit that may have hundreds of captures on disk. That is a confident zero of exactly the kind
+this section is about, in a field nobody had looked at, and it is separated out because the fix
+is a decision rather than a substitution: the schema types both as non-nullable integers, so
+being honest means either widening them, adding a configured directory the plugin can read
+without an agent, or pinning pwnagotchi's default path as a fact with its evidence. Naming it
+here rather than leaving the reader to infer that these two fields were considered and found
+correct. The alternative, a separate "the agent
+is not here" flag beside a mode that keeps lying, spends a field to avoid fixing the field.
+
 ```
 uptime          = pwnagotchi.uptime()               # int seconds        (F1)
-mode            = "MANUAL" if agent.mode == "manual" else pasv_or_auto() (F11)
+mode            = None if no agent yet, else                             (F11)
+                  "MANUAL" if agent.mode == "manual" else pasv_or_auto()
 channel         = agent._current_channel            # attribute, NOT session()  (F6)
 battery         = battery_info()                    # §2.11
 temperature     = pwnagotchi.temperature()          # int °C             (F2)
@@ -1188,10 +1223,14 @@ inferred again:
 - **An unreadable `mode` degrades to `"AUTO"`, not to an empty string**, unlike `face` and
   `status`. `common.json` `$defs.Mode` types it as an enum (`AUTO`, `PASV`, `MANUAL`), and an
   empty string is not a shape the contract allows there, so the empty-string rule above cannot
-  extend to this field. `"AUTO"` is already what an agent-less unit reports, so the fallback
-  costs nothing new to the schema, but it does cost precision: a client cannot tell an
+  extend to this field. It costs precision: a client cannot tell an
   `"AUTO"` that was actually read from an `"AUTO"` that was guessed because the mode could not
-  be determined. That is accepted deliberately; the alternative, a fourth enum member such as
+  be determined. **This is now the only case that falls back**, and it is a different case from
+  having no agent, which reports `null` (§2.5, issue #140). An earlier version of this paragraph
+  justified the fallback by saying `"AUTO"` was already what an agent-less unit reported; that
+  sentence stopped being true when the agent-less case was fixed, and it is removed rather than
+  reworded, because the two cases now differ in exactly the way it claimed they did not: an agent
+  that answers and lies about how, against no agent at all. That is accepted deliberately; the alternative, a fourth enum member such as
   `UNKNOWN`, changes the wire format for a path that is nearly unreachable (§11 pins `mode` as a
   plain attribute, not a property that is expected to raise), and it would leak into
   `stats.mode`, which shares the same `$ref`.
@@ -2483,7 +2522,10 @@ broadcast that carries it, and a third would mean the one-snapshot rule is not t
 The face and the status line come from the `face` store, which is a different
 message with a different cadence (§2.13) and makes no claim about the session snapshot's age.
 The mode badge is not read from `face.mode`: two sources for one fact is how they disagree, and
-`stats` is the one the banner speaks for. The badge renders `MANUAL` as **MANU**, matching the
+`stats` is the one the banner speaks for. A **null** mode renders as a dash like any other
+unknown value (issue #140): the plugin sends null when it has no agent to ask, which is what a
+unit in manual mode gives it, and a badge is not exempt from the rule the rest of the card
+follows. The badge renders `MANUAL` as **MANU**, matching the
 word on the unit's own display, which is what the operator is comparing it against, and it is a badge rather than another
 label-and-value row: §4.5.2 asks for one, and the mode is the single field on this screen that
 the two-step controls of §4.5.2 will change, so it is the one the eye should find without

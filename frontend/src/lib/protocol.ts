@@ -144,7 +144,8 @@ export type Mode = "AUTO" | "PASV" | "MANUAL";
 export interface Stats {
   /** pwnagotchi.uptime(), seconds. */
   "uptime": number;
-  "mode": Mode;
+  /** Null when there is no agent yet, which is what a unit in manual mode gives the plugin (on_ready never fires). Not a guess at the unit's mode. */
+  "mode": Mode | null;
   /** agent._current_channel. Never read from agent.session(). */
   "channel": number | null;
   "battery": Battery;
@@ -172,7 +173,8 @@ export interface Stats {
 export interface FaceStatus {
   "face": string;
   "status": string;
-  "mode": Mode;
+  /** Null when there is no agent yet, which is what a unit in manual mode gives the plugin (on_ready never fires). Not a guess at the unit's mode. */
+  "mode": Mode | null;
 }
 
 export type ErrorCode = "bad_request" | "unknown_command" | "unauthorized" | "pasv_unavailable" | "pasv_requires_auto" | "no_frame" | "log_unavailable" | "not_supported" | "internal_error";

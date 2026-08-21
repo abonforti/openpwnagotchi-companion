@@ -576,6 +576,23 @@ describe('mode badge', () => {
     // show MANU; the rule under test is that it does not.
     expect(fieldText('mode')).toBe('AUTO')
   })
+
+  it('renders a null stats.mode as DASH, with data-empty and the accessible unavailable label (issue #140)', async () => {
+    // The plugin sends null when it has no agent to ask, which is what a
+    // unit in manual mode gives it - the display read MANU while an earlier
+    // build of the app confidently said AUTO. A badge is not exempt from
+    // the same "not known renders as a dash" rule every other field on this
+    // card follows (SPEC 4.5.1.1).
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ mode: null }))
+    await settle()
+
+    expect(visibleFieldText('mode')).toBe(DASH)
+    expect(isEmpty('mode')).toBe(true)
+    expect(accessibleText('mode')).toContain(EMPTY_LABEL)
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,21 @@ against real hardware.
 
 ### Changed
 
+- **`mode` is null when the plugin has no agent**, on both `Stats` and `FaceStatus`, where it
+  used to be `AUTO`. This is a re-shaped message and therefore the project's first MINOR bump
+  under SPEC §12, to **0.1.0**. It was found on the first end-to-end run on real hardware
+  (issue #140): the unit's own display read MANU while the app read AUTO, which is worse than a
+  missing value because nothing about it looks wrong. A client that assumed `mode` was always a
+  string now has a null to handle; the app renders it as a dash, the same as every other value it
+  does not know.
+- **The plugin's threads start in `on_loaded` rather than in `on_ready`.** In manual mode
+  pwnagotchi never calls `on_ready`, so the background pass and the stats ticker never started:
+  no session refresh, no gpsd poll, and no listener reconcile, which is the pass that binds a
+  tether when it comes up. `on_ready` now captures the agent and nothing else. Its one-shot
+  session refresh is gone with it, which is a fix rather than a casualty: `agent.session()` is a
+  bettercap GET with a 30 second timeout, and it was being made inside a pwnagotchi lifecycle
+  hook.
+
 - **The two loop intervals are clamped: `keepalive_interval` to 5-20 s, `session_poll_interval`
   to 1-5 s.** `stats` now rides a ticker of its own at `keepalive_interval` (SPEC §2.4, §4.3.7,
   issue #65), so between

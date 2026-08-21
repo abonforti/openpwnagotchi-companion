@@ -394,6 +394,18 @@ def router_factory(options, deps):
     The handshake store is built from the agent's own config so that a test can
     move the capture directory without reaching past the agent, which is the
     only place the plugin is allowed to learn the path from (SPEC F14).
+
+    `agent` may be `None` - the no-agent window issue #140 documents (SPEC
+    2.5), which every reader downstream of `agent_getter` must already
+    tolerate - or it may answer to everything except `._config`, the shape
+    `test_face_status.py` uses to prove a broken agent still degrades rather
+    than crashing. Production does not distinguish those two failures:
+    `Companion._handshake_store()` wraps the read in one broad
+    `try/except Exception` and falls back to `HandshakeStore("")` either
+    way (issue #146). This factory mirrors that exactly - the same try, the
+    same broad except, the same fallback - rather than special-casing `None`
+    and leaving every other broken-agent shape to raise here before the code
+    under test is even reached.
     """
 
     def _make(agent, *, overrides: dict[str, Any] | None = None, plugin_version: str | None = None):
@@ -403,9 +415,14 @@ def router_factory(options, deps):
         session = companion.SessionCache(agent_getter, deps)
         gps = companion.GpsResolver(resolved, deps, session)
         battery = companion.BatteryReader(resolved, deps)
-        store = lambda: companion.HandshakeStore(  # noqa: E731
-            agent._config["bettercap"]["handshakes"]
-        )
+
+        def _handshakes_path() -> str:
+            try:
+                return agent._config["bettercap"]["handshakes"]
+            except Exception:
+                return ""
+
+        store = lambda: companion.HandshakeStore(_handshakes_path())  # noqa: E731
         return companion.Router(
             resolved,
             deps,

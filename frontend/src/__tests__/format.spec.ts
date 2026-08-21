@@ -212,6 +212,10 @@ describe('formatMode', () => {
   it('renders MANUAL as MANU, matching the word on the unit\'s own display', () => {
     expect(formatMode('MANUAL')).toBe('MANU')
   })
+
+  it('is DASH for null: the plugin has no agent to ask, which is what a unit in manual mode gives it (issue #140), and a badge is not exempt from the ordinary dash rule', () => {
+    expect(formatMode(null)).toBe(DASH)
+  })
 })
 
 // ---------------------------------------------------------------------------

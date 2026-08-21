@@ -46,6 +46,7 @@ depends on and cannot also be what proves that path works.
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 
@@ -161,9 +162,11 @@ def wired_plugin_factory(options, harness, agent, tls_material, tmp_path):
     into `plugin.options` afterwards has nothing left to read it.
 
     `harness.deps.spawn` only records its target and never runs it (see
-    `DepsHarness` in conftest.py), so `on_ready` never actually starts
-    `_background` or `_stats_ticker` as threads - each test drives the one it
-    is about directly, with `SteppingStop` standing in for `plugin._stop`.
+    `DepsHarness` in conftest.py), so neither `on_loaded` - which is what
+    actually spawns them now (SPEC 2.5, issue #140) - nor `on_ready` starts
+    `_background` or `_stats_ticker` as threads here; each test drives the
+    one it is about directly, with `SteppingStop` standing in for
+    `plugin._stop`.
 
     `plugin.broadcast` is replaced with a list-recording function by default,
     the same pattern `tests/test_keepalive.py` and `tests/test_hooks.py` use;
@@ -396,8 +399,10 @@ def test_the_ticker_never_calls_agent_session(wired_plugin):
     cache."""
     plugin, agent, sent = wired_plugin
     admit_a_client(plugin)
-    # on_ready() already seeded the cache with one refresh of its own; the
-    # ticker itself must add none on top of that.
+    # Baseline rather than an assumed zero: on_loaded's first background pass
+    # (SPEC 2.5, issue #140) may already have refreshed the cache once by the
+    # time this runs, and the claim under test is that the ticker itself
+    # adds none on top of whatever that baseline is.
     before = agent.session_calls
 
     run_ticker(plugin, passes=5)
@@ -754,3 +759,224 @@ def test_the_ticker_exits_promptly_when_stopped(wired_plugin_factory):
     thread.join(timeout=2.0)
 
     assert not thread.is_alive(), "the ticker ignored the stop event"
+
+
+# ---------------------------------------------------------------------------
+# on_loaded starts the loops; on_ready only captures the agent (issue #140)
+# ---------------------------------------------------------------------------
+#
+# In manual mode pwnagotchi never calls `on_ready` at all (SPEC 2.5). Before
+# the fix, both `_background` and `_stats_ticker` were spawned from
+# `on_ready`, so a unit that booted in manual sat inert for its whole
+# session: no session refresh, no gpsd poll, and - the part that matters
+# most, because it is silent rather than merely absent - no reconcile pass,
+# so a tether that came up after boot was never noticed and never bound.
+# These tests never call `on_ready` at all, the manual-mode shape exactly.
+
+
+def is_listening(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1.0)
+        return probe.connect_ex((host, port)) == 0
+
+
+@pytest.fixture
+def agentless_plugin_factory(options, harness, tls_material, tmp_path):
+    """Like `wired_plugin_factory`, but `on_ready` is never called.
+
+    No agent is ever supplied, at any point - the manual-mode shape issue
+    #140 is about, not merely the brief pre-`on_ready` window auto mode also
+    has. `harness.deps.spawn` still only records; nothing here starts a real
+    thread unless a test drives one by hand.
+    """
+    built: list[companion.Companion] = []
+
+    def _make(overrides: dict | None = None):
+        plugin = companion.Companion()
+        plugin.deps = harness.deps
+        plugin.options = {
+            **options,
+            "tls_cert": str(tls_material["cert"]),
+            "tls_key": str(tls_material["key"]),
+            "web_root": str(tmp_path),
+            **(overrides or {}),
+        }
+        plugin.on_loaded()
+        assert plugin._router is not None, "the fixture did not produce a wired plugin"
+
+        sent: list[dict] = []
+        plugin.broadcast = sent.append
+
+        built.append(plugin)
+        return plugin, sent
+
+    yield _make
+
+    for plugin in built:
+        plugin.on_unload()
+
+
+def test_on_loaded_alone_spawns_both_loops_with_no_agent_ever_supplied(
+    agentless_plugin_factory, harness
+):
+    """`deps.spawn` is the only seam a background loop can start through
+    (SPEC 10.7), and `DepsHarness` is built expressly to let a test assert
+    the ordering a protocol requires (conftest.py). Both loops spawned with
+    `on_ready` never having been called at all is that ordering claim: SPEC
+    2.5 says both the background pass and the stats ticker now start in
+    `on_loaded`, and `on_ready` captures the agent and nothing else.
+
+    Asserted by identity, not by count: a bare `len(...) >= 2` would still
+    pass if `on_loaded` spawned two copies of one loop and never the other,
+    or would stop meaning anything the day a third, unrelated spawn joins
+    it."""
+    plugin, sent = agentless_plugin_factory()
+
+    assert plugin._background in harness.spawned, (
+        "on_loaded must spawn the background pass without on_ready ever "
+        "being called"
+    )
+    assert plugin._stats_ticker in harness.spawned, (
+        "on_loaded must spawn the stats ticker without on_ready ever "
+        "being called"
+    )
+
+
+def test_a_driven_background_pass_binds_a_tether_with_no_agent(
+    options, harness, tls_material, tmp_path, free_ports
+):
+    """`_background`'s own tolerance of a missing agent, in isolation:
+    driven by hand with `SteppingStop` (the fast, deterministic technique
+    every other test in this file uses), on a plugin `on_ready` was never
+    called on. This says the loop body itself does not need an agent to
+    reconcile; it says nothing about who schedules that body, which is a
+    separate claim the next test makes with a real thread, because
+    `run_background` calls `_background()` directly and would pass exactly
+    the same way if `on_loaded` never spawned it at all.
+    """
+    ws_port, http_port = free_ports
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **options,
+        "bind_addresses": ["127.0.0.1"],
+        "ws_port": ws_port,
+        "http_port": http_port,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+    }
+    harness.local_ipv4 = []
+
+    plugin.on_loaded()
+
+    try:
+        assert not is_listening("127.0.0.1", ws_port), (
+            "nothing local matched bind_addresses yet; a bind here is the "
+            "control failing, not the tether test"
+        )
+        assert not is_listening("127.0.0.1", http_port)
+
+        harness.local_ipv4 = ["127.0.0.1"]
+        run_background(plugin, passes=1)
+
+        assert is_listening("127.0.0.1", ws_port)
+        assert is_listening("127.0.0.1", http_port)
+    finally:
+        plugin.on_unload()
+
+
+def wait_until(predicate, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_on_loaded_itself_schedules_the_reconcile_that_binds_a_tether(
+    options, tls_material, tmp_path, free_ports
+):
+    """The claim the isolated test above cannot make: that `on_loaded` is
+    what starts the loop doing this, with `on_ready` never called at all -
+    the manual-mode shape issue #140 is about. `run_background`/`SteppingStop`
+    bypass `deps.spawn` entirely and would pass this same way even if
+    `on_loaded` scheduled nothing, so this one uses a real `Deps()` and a
+    real background thread instead: `on_loaded` is the only call made, the
+    tether address is made to "come up" by mutating what `list_local_ipv4`
+    returns after the fact, and the assertion waits on the real kernel
+    socket rather than driving the loop body by hand.
+
+    This is the test the mutation described in the test-author's report -
+    moving the two `deps.spawn` calls from `on_loaded` back into `on_ready` -
+    is expected to kill: with no `on_ready` call anywhere in this test,
+    nothing would ever spawn `_background`, and the socket would never open
+    inside the timeout.
+    """
+    ws_port, http_port = free_ports
+    box = {"addrs": []}
+    real_deps = companion.Deps(list_local_ipv4=lambda: list(box["addrs"]))
+    plugin = companion.Companion()
+    plugin.deps = real_deps
+    plugin.options = {
+        **options,
+        "bind_addresses": ["127.0.0.1"],
+        "ws_port": ws_port,
+        "http_port": http_port,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+        # Short enough that the test does not have to wait out the 1-5 s
+        # clamp floor several times over, long enough that the first pass
+        # (still finding nothing) is clearly over before the address
+        # appears.
+        "session_poll_interval": 1,
+        "rebind_interval": 0,
+        # This test is about the reconcile, and everything else in it being
+        # real is deliberate - except gpsd. With the option default of
+        # "auto", every background pass would open a real TCP connection to
+        # gpsd_host:gpsd_port (127.0.0.1:2947 by default), which is refused
+        # at once only because nothing is listening on this host; on a host
+        # running gpsd, or a runner that blackholes rather than refuses, that
+        # 2 s connect timeout eats the 5 s wait_until budget below. "none"
+        # keeps this a test of the tether, not of the network it happens to
+        # run on.
+        "gps_source": "none",
+    }
+
+    plugin.on_loaded()  # on_ready is never called anywhere in this test.
+
+    try:
+        assert not is_listening("127.0.0.1", ws_port)
+        assert not is_listening("127.0.0.1", http_port)
+
+        box["addrs"] = ["127.0.0.1"]
+
+        assert wait_until(lambda: is_listening("127.0.0.1", ws_port), timeout=5.0), (
+            "on_loaded must itself schedule the pass that reconciles a "
+            "tether coming up, with no on_ready call anywhere in sight "
+            "(SPEC 2.5, issue #140)"
+        )
+        assert wait_until(lambda: is_listening("127.0.0.1", http_port), timeout=5.0)
+    finally:
+        plugin.on_unload()
+
+
+def test_the_stats_ticker_still_broadcasts_with_no_agent_and_mode_is_null(
+    agentless_plugin_factory, check_message
+):
+    """The second loop SPEC 2.5 names: `_stats_ticker` must not sit waiting
+    for an agent either. A `stats` still goes out on the tick, and its
+    `mode` is `None` rather than the plugin refusing to build the payload at
+    all - the same "say so rather than guessing" rule `get_stats` follows."""
+    plugin, sent = agentless_plugin_factory()
+    admit_a_client(plugin)
+
+    run_ticker(plugin, passes=1)
+
+    types = sorted(message["type"] for message in sent)
+    assert types == ["keepalive", "stats"], sent
+    stats_message = next(m for m in sent if m["type"] == "stats")
+    data = check_message(stats_message, "stats")
+    assert data["mode"] is None

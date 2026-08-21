@@ -321,6 +321,111 @@ def test_mode_survives_a_pasv_plugin_without_the_attribute(
 
 
 # ---------------------------------------------------------------------------
+# No agent (issue #140): every field, not the mode alone
+# ---------------------------------------------------------------------------
+#
+# In manual mode `on_ready` is never called (SPEC 2.5), so `router_factory`
+# is built with `agent=None` here to stand for that state directly, rather
+# than for the brief pre-`on_ready` window in auto mode the fixture already
+# covered incidentally. The acceptance criterion on issue #140 asks for every
+# field of `stats`, because the regression on hardware was a screen of
+# confident zeros nobody had decided were right - so each of the fields SPEC
+# 2.5 names as agent-derived gets its own assertion below, stated from what
+# SPEC says the value is, not from what the code happens to produce.
+
+
+def test_mode_is_null_with_no_agent_rather_than_a_guess(router_factory):
+    """SPEC 2.5: `mode` is `None` when there is no agent to ask, not `"AUTO"`.
+    The first implementation defaulted to AUTO, and on a unit whose display
+    read MANU the app confidently read AUTO - not missing, but wrong, which
+    is the regression this pins shut. `Mode` is nullable at this use site in
+    `common.json` precisely so the plugin never has to guess here again."""
+    assert router_factory(None).stats()["mode"] is None
+
+
+def test_channel_is_null_with_no_agent(router_factory):
+    """`channel` reads `agent._current_channel` (F6); with no agent there is
+    nothing to read it from. `channel` is already nullable in the schema for
+    the pre-first-frame case, and this is the same "not known" state."""
+    assert router_factory(None).stats()["channel"] is None
+
+
+def test_peers_and_access_points_are_a_real_zero_with_no_agent(router_factory):
+    """`peers`/`accessPoints` count `agent._peers`/`agent._access_points`
+    (F5/F3), neither of which is nullable in the schema. With no agent there
+    is nothing to count, and SPEC 2.5 calls that "a real zero" rather than a
+    guess - zero is the only answer the schema's plain `integer` type allows
+    that is also honest."""
+    data = router_factory(None).stats()
+
+    assert data["peers"] == 0
+    assert data["accessPoints"] == 0
+
+
+def test_last_peer_is_null_with_no_agent(router_factory):
+    """`lastPeer` reads `agent._peers` (F5); with no agent there is nothing
+    to have seen."""
+    assert router_factory(None).stats()["lastPeer"] is None
+
+
+def test_last_handshake_is_null_with_no_agent(router_factory):
+    """`lastHandshake` is not an agent attribute the way `lastPeer` is - it
+    comes from the handshake *directory* (F14), read through
+    `Companion._handshake_store()`, which catches the `agent._config`
+    failure with no agent and falls back to `HandshakeStore("")` rather than
+    inventing a path (issue #146). An empty path holds nothing, so this is
+    null the same honest way `lastPeer` is, not merely "does not raise"."""
+    assert router_factory(None).stats()["lastHandshake"] is None
+
+
+def test_session_age_is_null_with_no_agent(router_factory):
+    """Not a new rule on its own - `SessionCache.refresh()` already returns
+    `False` with no agent to call `.session()` on, so `sessionAge` was
+    already null in the pre-`on_ready` window before issue #140. Restated at
+    `stats()` level because the acceptance criterion asks for every field,
+    not only the ones the fix actually touched."""
+    assert router_factory(None).stats()["sessionAge"] is None
+
+
+def test_handshake_counts_are_zero_with_no_agent(router_factory):
+    """Neither `handshakes` nor `handshakesTotal` is nullable in the schema
+    (`docs/schemas/common.json`), so with no agent to supply
+    `agent._config['bettercap']['handshakes']` (F14) the plugin must still
+    answer with a real integer rather than raising - and production does not
+    invent a directory to count instead: `Companion._handshake_store()`
+    catches the failure and falls back to `HandshakeStore("")` (issue #146),
+    which holds nothing. Zero is therefore pinned, not merely typed."""
+    data = router_factory(None).stats()
+
+    assert data["handshakes"] == 0
+    assert data["handshakesTotal"] == 0
+
+
+def test_capabilities_gps_and_battery_survive_with_no_agent(router_factory):
+    """None of `capabilities`, `gps` or `battery` reads the agent at all
+    (SPEC 2.5, 2.11, 2.12) - the negative control that the no-agent path is
+    specifically `mode` and the agent-derived counters, not a blanket
+    failure of `stats()` when the agent is absent."""
+    data = router_factory(None).stats()
+
+    assert set(data["capabilities"]) == {"pasv", "pisugar", "gpsSource", "pluginVersion"}
+    assert set(data["battery"]) == {"percent", "charging"}
+    assert data["gps"]["enabled"] in (True, False)
+
+
+def test_stats_has_exactly_the_schema_fields_with_no_agent(router_factory):
+    """The same shape check as the agent-present case: no field goes missing
+    and none is added just because the agent is not there to ask."""
+    expected = {
+        "uptime", "mode", "channel", "battery", "temperature", "handshakes",
+        "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer",
+        "gps", "sessionAge", "capabilities",
+    }
+
+    assert set(router_factory(None).stats()) == expected
+
+
+# ---------------------------------------------------------------------------
 # Capabilities
 # ---------------------------------------------------------------------------
 

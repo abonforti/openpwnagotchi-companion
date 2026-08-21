@@ -87,8 +87,10 @@ openpwnagotchi-companion/
 │       │   ├── ws.ts                # WebSocket client: connect, reconnect, queue, heartbeat
 │       │   ├── protocol.ts          # GENERATED from docs/schemas — do not hand-edit
 │       │   ├── stores.ts            # Svelte stores
+│       │   ├── session.ts           # the one place a client is built and attached (§4.8)
 │       │   ├── settings.ts          # persisted connection settings (localStorage)
 │       │   ├── router.ts            # the seven routes of §4.5, and nothing more
+│       │   ├── format.ts            # value to string, the §4.5.1.1 rules a view must not hold
 │       │   └── geo.ts               # browser Geolocation acquisition + push to plugin
 │       ├── shell/                   # the navigation shell (§4.5), not a view
 │       │   ├── Nav.svelte           # bottom bar in portrait, leading rail in landscape
@@ -2370,11 +2372,275 @@ so text over it can be legible at one end and not the other, and no automated ch
 a verdict. Forbidding it is what keeps the contrast gate meaningful; the gate reports any it
 finds rather than silently passing them.
 
+#### 4.5.1.1 Dashboard presentation (issue #121)
+
+The rules below were decided before the view was written rather than during it, because each
+has a plausible wrong answer that the screen would then carry for ever. The section grew across
+two review passes and is no longer the five decisions it started as; what it is now is the whole
+contract for this view, and the tests for it are written from here rather than from the code.
+
+**A value that is not known renders as a dash, and its row stays.** `stats` is null before the
+first frame, and afterwards `channel`, `temperature`, `lastHandshake`, `lastPeer` and both
+`battery` fields are nullable by schema. Every one of them renders as `-` in the value slot with
+its label still beside it. Hiding the row instead would move everything else under the reader's
+thumb between two frames twenty seconds apart, and it would erase the difference between a unit
+with no temperature sensor and a value that has not arrived yet. Those are the same statement,
+"this is not known", and the screen makes it once, the same way, everywhere. Before the first
+frame every row is a dash and the banner says why: the same rule, not a special case for it. A
+dash is not readable aloud, so the value carries an accessible *unavailable* alongside it.
+
+**The staleness marker is the banner, not the fields.** In `degraded` the data stays at full
+contrast and is marked in one place, with its age (§4.3.1). Dimming the values would trade
+legibility for a signal in the one state where the app can still act, and against the AA floor
+this section already commits to. Marking each field would repeat a single fact once per row,
+when staleness is a property of the payload as a whole and of no field in it. The age is
+rendered in whole seconds below a minute and in whole minutes above it, and a `sessionAge` of
+`null` says the snapshot has never refreshed rather than showing an age of zero, which is what
+that field means (§2.5).
+
+**Outside `degraded`, the banner is still the marker, and the data stays.** In `offline`, and in
+the `connecting` a pong timeout re-enters, the last snapshot remains on screen with no age beside
+it. That is deliberate and it is not a hole in the rule above. §4.4.2 owns what survives a
+reconnect, and clearing the screen every time a phone walks out of range would empty the app
+several times an hour on this transport for no gain. The banner naming the disconnection is a
+stronger statement about the data than any age would be: `degraded` needs an age because the
+socket is alive and the reader would otherwise believe the numbers are current, while `offline`
+has already said the app is not connected to anything. `unauthorized` is the one state that
+clears the data instead, and it does so in `lib/stores.ts` rather than here (§4.4.2), because
+that data belongs to a session the unit refused.
+
+**The counters say what they count.** The handshake counter is `stats.handshakesTotal`, which
+§4.5.2 already names as the authoritative answer to "how many handshakes does this unit have".
+`stats.handshakes` is the narrower `*.pcapng` count that matches the unit's own display, and it
+appears **only when the two disagree**, as a second line naming what it is. That is the whole
+of the decision: when the numbers agree there is one number and no explanation to read, and
+when they disagree the screen explains the disagreement itself instead of leaving the reader to
+discover it against the Captured badge and conclude that one of the two is broken.
+
+**The card is one snapshot, with two named exceptions.** Mode, uptime, battery, temperature and
+the counters all come from the `stats` store, so the age the banner declares describes every
+one of them. The exception is the channel, which comes from the `channel` store: §4.4.1 exports
+that store precisely because a hop is worth showing before the next broadcast, up to 20 s away
+on this link. GPS is the second exception, and for the same reason: §4.4.1 gives the `gps` store the later of
+`stats.gps` and a `gps_update` push, so reading `stats.gps` here would leave a fix acquired
+between two broadcasts invisible for up to 20 s while a channel hop appeared at once. That
+asymmetry was in the first implementation of this view and nobody had decided it. Two exceptions
+and no more: both are stores §4.4 created precisely because their value moves faster than the
+broadcast that carries it, and a third would mean the one-snapshot rule is not the rule.
+
+The face and the status line come from the `face` store, which is a different
+message with a different cadence (§2.13) and makes no claim about the session snapshot's age.
+The mode badge is not read from `face.mode`: two sources for one fact is how they disagree, and
+`stats` is the one the banner speaks for. The badge renders `MANUAL` as **MANU**, matching the
+word on the unit's own display, which is what the operator is comparing it against, and it is a badge rather than another
+label-and-value row: §4.5.2 asks for one, and the mode is the single field on this screen that
+the two-step controls of §4.5.2 will change, so it is the one the eye should find without
+reading the column.
+
+**The battery is two rows, and that is a reversal.** A single row combining them was tried
+first, rendering `84%, charging`. It fails on the partial read, which is not hypothetical: the
+plugin returns a charging state with no percentage when a provider answers one and not the
+other. Combined, `{percent: null, charging: true}` had to become either a dash, discarding a
+fact the unit sent, or the bare word `charging` under a label reading `Battery`, which reads as
+the battery's whole answer while the percentage is silently missing. The mirror case,
+`{percent: null, charging: false}`, was worse still: it rendered as unavailable while the unit
+had in fact said something. Two rows have no such case. Each is one fact, each dashes on its own
+`null`, and the rule needs no exception.
+
+**`gpsSource` and `gpsFix` are two fields, not one.** §4.5.2 names "GPS source and fix
+indicator", and they answer different questions: which provider resolved the position, and
+whether there is currently a position at all.
+
+**The last handshake and the last peer are named, not merely timed.** `lastHandshake` renders
+its `ssid` beside its time of day, and `lastPeer` its `name` beside its `lastSeen`. A bare time
+answers "when" and leaves out the half of the row an operator is actually reading, which is what
+the unit caught and who it met. It is also the reason this view is where §4.5.3 first bites: an
+SSID is 32 bytes chosen by a stranger and a peer name arrives over the mesh from somebody else's
+unit, so those two strings are the hostile ones on this screen, next to the `face` and the
+`status` line. When the timestamp is absent but the name is not, the name still renders and the
+time is a dash; when the whole object is `null` the row is a dash by the rule above.
+
+**A GPS source that is switched off has not failed to get a fix.** When `gps.enabled` is false
+the fix indicator reads `off` rather than `no fix` (§2.12: `enabled` is false when `gps_source`
+is `none` or no provider answered). `no fix` says the unit is looking and has not found one,
+which is a thing to wait for; `off` says nobody is looking, which is a thing to change in
+`config.toml`. Reporting the second as the first sends the reader outdoors to wait for a fix
+that is never coming.
+
+**A timestamp from the unit renders as a time of day, never as a relative age.** The reference
+hardware has no real-time clock, so after a boot with no network its clock can be hours out.
+A relative age is computed against the phone's clock and would then read "in four hours" for
+something that has already happened, which is a lie the app manufactures out of two honest
+values. A time of day is the instant the unit stamped, rendered in the reader's own timezone,
+which is where the reader is; it is wrong exactly as far as the unit's clock is wrong, and not
+in a new way of the app's making. Uptime and `sessionAge` are unaffected: they are durations the
+unit measured, not instants it stamped.
+
+**It carries its date whenever it is not today, and its year whenever it is not this year.** A
+bare `09:14` on a handshake caught last Tuesday reads as this morning, which is a freshness the
+payload never claimed - the same defect as a relative age, arrived at by omission rather than by
+arithmetic. The last handshake and the last peer are routinely days old on a unit that has been
+out in a pocket, so this is the common case rather than the edge one. The year is the same
+omission one unit up, and it is not hypothetical on a device that keeps its captures until
+somebody clears them: `5 Aug 09:14` on a handshake from last August reads as three weeks ago.
+Today's events keep the bare time and this year's keep the bare date, because a date on every
+row, or a year on every date, is noise on the rows the reader is most likely to be looking at.
+
+The day is written without a leading zero. That is a real decision and not a detail: a test
+written against a padded day, matching on a word boundary, is green from the thirteenth of the
+month and red from the fourth to the twelfth, because `5` does not sit on a word boundary inside
+`05`. Found exactly that way, in this section's own tests, on a day of the month where it
+passed.
+
+**The banner is one element that always exists, carrying the state, and it has copy only where
+the state has something to say.** A live region, so a change is announced without the reader
+having to go back and look. Every sentence is pinned verbatim:
+
+| state | line |
+|---|---|
+| `connecting` | *(no copy)* |
+| `connected` | *(no copy)* |
+| `degraded`, `sessionAge` known | `Connected, and the data is <age> old.` |
+| `degraded`, `sessionAge` null | `Connected, and the data has never refreshed.` |
+| `offline` | `Not connected. Reconnecting automatically. Check that the Personal Hotspot is on.` |
+| `unauthorized` (*rejected*) | `The unit refused the stored token. Fix it in Settings.` |
+| `unauthorized` (*required*) | `The unit requires a token and none is stored. Add it in Settings.` |
+| `restarting` | `The unit is restarting.` for both reasons today, see below |
+
+**The two silent rows are §4.3.1's, not an omission here.** That section's own table says
+`connecting` shows "a quiet indicator, no copy - the normal first second" and `connected` shows
+"the data, unqualified". A first draft of this section gave both a sentence, which put two
+answers to the same question in one document; §4.3.1 is the one that wins, and it is right:
+a banner that says `Connected.` on every screen the user opens is a line they stop reading, and
+the day it says something else they will not notice. The element still carries its state, so a
+test can tell "connected, and deliberately silent" from "the banner is broken".
+
+**The copy is pinned verbatim rather than paraphrased**, and that is a reversal within this
+section's own life. The paraphrased version produced two defects in one review pass. A mutation
+that merged `degraded`'s two sentences into one template survived a test asserting the presence
+of `never refreshed`, because `Connected, and the data is never refreshed old.` contains it. And
+swapping the two `unauthorized` arms, so that a user whose token was refused is told to add one,
+survived a test asserting only that both sentences mention a token and differ from each other.
+Both mutations are invisible to any assertion weaker than equality, and a test cannot assert
+equality against wording that lives nowhere. So the wording lives here. The cost is real and
+accepted: an improvement to the copy is now a change to this document, which is the correct
+price for copy that is the only thing standing between a user and a wrong instruction in a
+field.
+
+**`degraded` is two sentences and not one sentence with a hole in it.** A `sessionAge` of `null`
+is not an age, so substituting `formatAge(null)` into the first row produces `the data is never
+refreshed old`. The two rows above are written out separately for that reason and neither is
+derived from the other.
+
+**Which sentence to use is decided by what `formatAge` returned, not by testing the field for
+`null`.** `formatAge` answers `never refreshed` for a non-finite value as well as for `null`, so
+a guard reading `sessionAge === null` lets exactly that string back into the first sentence and
+reconstructs the defect one layer up. `format.ts` exports the constant so the comparison is
+against the same string the formatter returns rather than against a copy of it.
+
+**`restarting` has one sentence today and should have two, issue #131.** `connection` mirrors
+the client's state and its unauthorized reason and nothing else (§4.4.1), and the reason a
+`restarting` message carried lives inside `lib/ws.ts`, where it drives the patience timer and is
+exposed to nobody. So a view can tell `restarting` from `connected` and cannot tell a reboot
+from a shutdown, and the row above is the one line it can honestly render.
+
+**The second sentence is not written here, and that is deliberate.** An earlier draft of this
+paragraph claimed the two were "specified", while the table held one row and the other wording
+appeared nowhere in the document - which is precisely the failure this section argues against
+two paragraphs above, copy that a test cannot assert equality against because it lives nowhere.
+The distinction is worth having and the reason is worth stating: `shutdown` is the one state in
+§4.3.1 where nothing happens next, and telling that user the unit is restarting is the opposite
+of what the app knows. Deciding the two sentences belongs to #131, together with the store
+change that makes either of them renderable. §4.3.1's own state table, which says `restarting`
+shows "the reason the plugin gave", is wrong for the same reason and is corrected there by the
+same ticket.
+
+**The functions, and what each returns.** Named here rather than left to the implementation,
+because the tests for this view are written from this document and not from the code (§10):
+
+| function | returns |
+|---|---|
+| `DASH` | the dash itself, `'-'`, exported so no caller writes the character |
+| `EMPTY_LABEL` | the accessible text carried beside a dash, `'unavailable'` |
+| `NEVER_REFRESHED` | what `formatAge` returns when there is no age, `'never refreshed'`, exported so the banner compares against the formatter's own answer rather than a copy of it |
+| `formatUptime(seconds)` | the two largest units that are not both zero: `45s`, `1m 30s`, `1h 0m`, `1d 1h`. The second unit is kept even at zero, so the string does not change shape as it counts down. Seconds alone below a minute |
+| `formatAge(seconds \| null)` | whole seconds below a minute (`40s`), whole minutes above it, floored (`4m`), and `never refreshed` for `null` |
+| `formatTemperature(celsius \| null)` | `48 °C`, rounded to the nearest degree; `DASH` for `null` |
+| `formatBatteryPercent(percent \| null)` | `84%`, rounded; `DASH` for `null` |
+| `formatCharging(charging \| null)` | `charging`, `on battery`, and `DASH` for `null` |
+| `formatChannel(channel \| null)` | the number as it arrived; `DASH` for `null` |
+| `formatMode(mode)` | the mode as the unit's own display writes it: `AUTO`, `PASV`, and `MANU` for `MANUAL` |
+| `formatGpsFix(gps)` | `off` when `enabled` is false, otherwise `fix` or `no fix` |
+| `formatGpsSource(gps)` | the source name as it arrived; `DASH` when it is `null`, which is the ordinary dash rule and not a fourth word. `off` belongs to the fix indicator, which is the row that answers "is it looking": a source is a name, and the absence of a name is the absence of a name |
+| `formatUnitTime(epochSeconds \| null)` | the time of day in the reader's timezone, hours and minutes, and in front of it the date whenever the instant is not today: `09:14` today, `5 Aug 09:14` earlier this year, `5 Aug 2025 09:14` in another year. The day is **not** zero-padded. `DASH` for `null`. A timestamp in the phone's future still renders, which is the whole point of the rule above |
+| `formatNamedEvent(name \| null, epochSeconds \| null)` | `<name> at <time>` for the last handshake and the last peer; the name alone when the timestamp is missing, the time alone when the name is absent **or empty**; `DASH` when both are. An empty name is a real capture, not a malformed one - a hidden network broadcasts no SSID - and it must not render as `` at 12:04`` with a leading space where a name should be. `common.json` makes `LastHandshake.ssid` and `Peer.name` required strings, so the `null` arms are unreachable from a conformant payload and are there because this function takes the two fields off an object that may itself be `null`. The name is passed through unchanged, hostile or not: escaping is the renderer's job and mangling it here would be a second, quieter answer to §4.5.3 |
+
+Rounding rather than truncating, for the temperature and the battery: 47.6 shown as 47 is a
+degree the unit never reported, and the direction of that error is always the same one. Ages and
+uptimes floor instead, and for the opposite reason: they are durations that are still running,
+so rounding `59.6 s` up to a minute would have the screen reach a threshold before the unit did.
+
+**A value that is not a finite number is not known.** Every function above returns `DASH` for
+`NaN`, for either infinity and for a negative duration, and `formatAge` returns its
+`never refreshed` for the same inputs, which is that function's own way of saying the same
+thing. None of this is reachable from a conformant plugin: the schemas make these numbers and
+the plugin is their only writer. It is stated because the alternative, which an implementation
+reached on its own, is a screen reading `NaN:NaN` or an uptime of `0s` on a unit that has been
+up for a week - a value nothing ever sent, which is the one thing §4.4.1 forbids everywhere
+else. It is stated *here* rather than left as defence in depth because §10.7 gates
+`src/lib/**` on branch coverage, and a guard nobody specified is a branch no independent test
+author knows to reach.
+
+**The DOM hooks.** `data-field` on the value element of every field: `uptime`, `mode`, `battery`,
+`temperature`, `charging`, `channel`, `accessPoints`, `handshakes`, `handshakesOnUnit`, `peers`,
+`lastHandshake`, `lastPeer`, `gpsSource`, `gpsFix`, `face`, `status`. Named for the field, which
+is usually a `Stats` member and is not always one: `face` and `status` come from `FaceStatus`,
+and `handshakesOnUnit` is a second rendering of `stats.handshakes` beside `handshakesTotal`.
+`data-empty="true"` on any field with no value, and `data-banner` on the banner carrying the
+connection state it is rendering.
+
+**`data-empty` is decided by the value, never by the string, on the fields that carry a remote
+string.** A field is empty when the value behind it is absent, not when the text it produced
+happens to equal a dash. The two come apart on exactly the strings this view exists to be
+careful with: a network named `-` is a legal SSID, and a peer may call itself `-` as easily as
+anything else. Deciding by the string hands a stranger the ability to make a real reading render
+as `data-empty="true"` with the accessible *unavailable* beside it, which is a remote party
+choosing what the screen says about the unit's own state (§4.5.3). Those fields are `face`,
+`status`, `lastHandshake`, `lastPeer` and `gpsSource`.
+
+For `lastHandshake` and `lastPeer` the value is the pair, so the field is empty when the object
+is absent **or** when it carries neither half: an empty name and no timestamp. Without that
+second clause a peer with an empty name and no `lastSeen` renders a dash that nothing declares
+empty and that carries no accessible *unavailable*, which is the one hole the value-decided rule
+would otherwise leave. Testing the formatted string instead would close that hole and reopen the
+other one, since a peer may legally call itself `-`.
+
+Everywhere else the comparison against `DASH` is the correct test and the safer one, because the
+value is a number and no number formats to a dash except by the rule that says it is unknown.
+It is also the only test that stays true: a first implementation re-derived emptiness in the
+view as `=== null`, which agreed with `format.ts` on `null` and disagreed with it on every
+non-finite value, so a dash appeared with nothing declaring it empty and no accessible
+*unavailable* beside it. Two expressions of one rule, in two files, one of them outside the
+coverage gate (§10.7). The formatter owns the rule; the view asks it. Every label also stays beside its value, which is half of the rule above and
+the half a test is most likely to leave unasserted. Declared hooks, the same way `data-view`
+and `data-region` are (§4.5), and for the same reason: a test that finds a value by walking the
+markup is a test that breaks when the markup is rearranged, which is the change this view will
+see most.
+
+**Every rule above that turns a value into a string lives in `lib/format.ts`, not in the
+component.** Rounding a temperature, choosing seconds or minutes for an age, cutting an uptime
+to its two largest units, deciding that `null` is a dash: that is logic, and §10.7 excuses
+`src/views/` from the coverage gate on the grounds that a view is markup. It is the right
+exclusion and this is how it stays right - a view that formats is a view that computes, and the
+part that computes belongs where the gate can see it. `Dashboard.svelte` subscribes to stores
+and lays out what those functions return.
+
 ### 4.5.2 Views
 
 - **Dashboard**: text face + status card, mode badge (AUTO / **PASV** / MANU), uptime, battery
-  (percentage, charging), temperature, channel, counters (APs / handshakes / peers), GPS source
-  and fix indicator, connection banner. Controls: mode switch, PASV toggle (rendered only when
+  (percentage and charging state, one row each), temperature, channel, counters (APs /
+  handshakes / peers), the last handshake and the last peer, each named as well as timed
+  (§4.5.1.1), GPS source and fix indicator, connection banner. Controls: mode switch, PASV toggle (rendered only when
   `capabilities.pasv`), reboot, shutdown. **Mode switch, reboot and shutdown all use the
   two-step confirm** (D9 + D12) and all show the `restarting` state afterwards.
 - **Wi-Fi**: one view, two segments (§4.5).
@@ -3195,6 +3461,31 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
 - `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as an IPv4 literal so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
+- `format.spec.ts`: every §4.5.1.1 rule that turns a value into a string, asserted on the
+  function rather than through the DOM: `null` to a dash for each nullable field of `Stats`;
+  an uptime cut to its two largest units at every boundary that changes which two those are;
+  a `sessionAge` in whole seconds below a minute and whole minutes above it, and `null` reading
+  as never refreshed rather than as zero; a temperature rounded, not truncated; a unit timestamp
+  as a time of day and never as a relative age, including one stamped in the phone's future,
+  which is the case the rule exists for.
+- `dashboard.spec.ts`: the view mounted against the stores directly, with no client and no
+  socket. Every field §4.5.2 names present with its label; the dash and the row that stays for
+  each nullable one, before the first frame and after a frame carrying nulls; the six connection
+  states each asserted for their own banner, per state rather than in one pass, with the two
+  `unauthorized` reasons carrying different sentences; the
+  handshake counter reading `handshakesTotal`, and the `*.pcapng` figure appearing only when the
+  two disagree; the channel following the `channel` store rather than the last `stats`, and the
+  mode badge following `stats` rather than `face`; the GPS rows following the `gps` store rather
+  than `stats.gps`; every banner sentence asserted by equality against §4.5.1.1, per state and
+  per reason, with `connecting` and `connected` asserted to carry their state and no copy, and
+  the two `restarting` reasons asserted to carry the **same** line, which is what the app can do
+  today and is tied to issue #131 in the test itself, so that the day the store carries the
+  reason the assertion fails and names the ticket that made it stale; a
+  hostile `face`, `status`, `lastPeer.name` **and `lastHandshake.ssid`** - a script tag, an
+  event-handler attribute, a quote-and-angle-bracket soup - rendering as text with no element
+  created, asserted on the DOM rather than assumed from Svelte's default, since §4.5.3 is the
+  reason this view is the first place it matters; and a hostile name of exactly `-`, which must
+  not make the field report itself as empty.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More
@@ -3216,6 +3507,16 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   content area in either orientation, the map never owning the full width or height of the views
   area so a drag always has somewhere to scroll the app, touch targets at 44px, contrast computed
   for every token against every surface it can land on.
+- **A view is allowed to be taller than the viewport, and the invariant is about where its
+  overflow goes, not about its height.** The first version of the geometry suite asserted that
+  every view root stayed inside the shell, which was true of seven placeholder views two lines
+  long and stopped being true of the first view with content on it: a `<section>` 897 px tall in
+  a 402 px viewport reports a bounding box below the shell, which is what a scroll container
+  looks like from the outside and not a defect. What must hold instead is that the overflow
+  belongs to the views area and to nothing else - the document itself still does not scroll, the
+  area's own `scrollHeight` accounts for the view, and no pixel of it is painted below the
+  navigation. The horizontal edges keep the original rule: a view that escapes sideways has
+  nowhere legitimate to go, because nothing scrolls that way.
 - `charset.spec.ts` (SPEC 4.2): the built `dist/index.html` declares `utf-8` within the first
   1024 bytes, checked once against the raw response bytes rather than once per project since the
   rule has no engine dependency; and `document.characterSet` is `UTF-8` in every project, which

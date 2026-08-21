@@ -106,13 +106,16 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.innerHeight + EPSILON)
       expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.innerWidth + EPSILON)
 
-      // The view is laid out inside the shell. Its own box is allowed to be
-      // smaller: SPEC 4.5 says landscape exists for the Log and the Map and
-      // that "every other view keeps a reading measure rather than
-      // stretching", so a narrow or short view root is a requirement, not a
-      // gap. What must hold is that it never escapes the shell.
+      // The view is laid out inside the shell horizontally, and starts inside
+      // it vertically. SPEC 4.5 says landscape exists for the Log and the Map
+      // and that "every other view keeps a reading measure rather than
+      // stretching", so a narrow view root is a requirement, not a gap; SPEC
+      // 10.5 says a view is also allowed to be *taller* than the viewport,
+      // because that is what a scroll container looks like from the outside.
+      // What must hold is that it never escapes sideways, where nothing
+      // scrolls and there is nowhere legitimate to go, and that it never
+      // starts above the shell.
       expect(viewRect.top).toBeGreaterThanOrEqual(shellRect.top - EPSILON)
-      expect(viewRect.bottom).toBeLessThanOrEqual(shellRect.bottom + EPSILON)
       expect(viewRect.left).toBeGreaterThanOrEqual(shellRect.left - EPSILON)
       expect(viewRect.right).toBeLessThanOrEqual(shellRect.right + EPSILON)
 
@@ -123,6 +126,19 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       await expect(viewsRegion(page)).toHaveCount(1)
       await expect(viewsRegion(page).locator(`[data-view="${view}"]`)).toHaveCount(1)
       const areaRect = await viewsContentBox(page)
+
+      // Where the view's overflow, if any, belongs: to the views area and to
+      // nothing else. The area's own `scrollHeight` must account for the full
+      // height of the view sitting inside it, which is what makes the content
+      // reachable by scrolling the area rather than lost below the fold. This
+      // is checked against the area's scroll box, not against the shell or the
+      // viewport, precisely because a view taller than either of those is the
+      // case SPEC 10.5 says is allowed.
+      const areaScrollHeight = await viewsRegion(page).evaluate((element) => element.scrollHeight)
+      expect(
+        areaScrollHeight,
+        `the views area scrolls to ${areaScrollHeight}px but the view is ${viewRect.height}px tall`,
+      ).toBeGreaterThanOrEqual(viewRect.height - EPSILON)
 
       // A header sits above the views area, so the area starts below the top
       // of the shell rather than at it (SPEC 4.2, a sticky top bar; SPEC 4.5,

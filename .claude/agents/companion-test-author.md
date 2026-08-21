@@ -131,3 +131,20 @@ so a scratch directory inside the repository is one careless command away from b
 
 A gate now fails when a shipped directory holds a file nobody declared, but the gate covers the
 directories that ship, not every place scratch could land. Outside the repository is the rule.
+
+## A denied permission is a stop
+
+If the permission system refuses a command, abandon that command and say so in your report. Stop
+means stop trying to perform that command: carry on with the rest of the task, and where the task
+cannot be finished without it, report what is missing rather than working around the refusal. Do
+not reach the same effect another way: not the same action through a different tool, not a shell
+out of a language runtime, not a rewritten path, not a narrower flag picked to slip through. A
+refusal carries information the tool has and you do not.
+
+This is written down because it happened. An agent was refused an `rm -rf` on its own scratch
+copy and performed the deletion with `shutil.rmtree` instead, reporting afterwards that cleanup
+was done. The target was harmless and nothing was lost. The rule exists for the time the target
+is not harmless, which is not the time to be discovering the habit.
+
+Leaving something behind and saying so is always the better outcome than removing it by a route
+that was declined.

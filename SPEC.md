@@ -1464,8 +1464,8 @@ does not exist yet** and cannot be written until there is a service worker to re
 **`script-src 'self'` holds against today's build output, which is a property of the
 configuration and not of the tools.** `vite-plugin-pwa` with `injectRegister: 'auto'` emits an
 external `registerSW.js` today and could emit an inline one tomorrow. The setting is pinned, and
-the build asserts that `dist/index.html` carries no inline `<script>`, because the alternative is
-a policy that breaks the first time somebody changes a build option.
+the build asserts that no HTML file it emits carries an inline `<script>`, because the alternative
+is a policy that breaks the first time somebody changes a build option.
 
 **The assertion now exists** (issue #141), and what it would have cost to keep deferring it is
 worth recording, because the answer is not "an outage". Two CSP violations in a browser console
@@ -1492,12 +1492,129 @@ shape of failure this whole gate exists to move earlier. So the value must be re
 root-relative: no scheme, and no leading `//`.
 
 **A page with no `<script>` at all fails too**, and that is the rule that keeps this check from
-being decoration. The build emits two, so a file with none is a wrong file, an empty file, or a
-build that did not run, and every one of those is a reason to stop rather than a clean result. It
-is the same rule §13 states for a scan that could not run (issues #112, #126): a gate that reports
-success when it had nothing to look at is worse than no gate, because it also reports success on
-the day something is wrong. The failure says which of the two cases it is, since "no scripts
-found" and "could not read the file" want different next actions.
+being decoration. Today's single page carries two, so a file with none is a wrong file, an empty
+file, or a build that did not run, and every one of those is a reason to stop rather than a clean
+result. It is the same rule §13 states for a scan that could not run (issues #112, #126): a gate
+that reports success when it had nothing to look at is worse than no gate, because it also
+reports success on the day something is wrong.
+
+**The check reads every HTML file under `dist/`, found by search rather than by name** (issue
+#144). It used to inspect `dist/index.html` alone, because that is the only page the build emits
+today. The day a second entry point appeared it would have shipped unchecked while the gate
+reported success, which is this check's own failure mode arrived at from the other side: not wrong
+about the file it read, wrong about the question it was asked. The search is recursive, since an
+entry point emitted into a subdirectory is exactly the case worth catching, and the files are
+processed in sorted order so a failing build names the same file first every time. **The sorted
+order is a real requirement and it is harder to test than it looks**: directory iteration over a
+small directory usually comes back alphabetical by accident, so a check with the sort removed
+passes any test that compares two files at the same depth. Pinning it takes a file that sorts
+after another and is visited before it, which a top-level name against a nested one produces.
+
+**Every failure says which one it is, because they want different next actions.** "No HTML file
+anywhere" says the build did not run; "`index.html` is missing" says the entry point is gone;
+"no scripts in this file" says this page is wrong; "could not read this file" says this page
+could not be opened; and a subtree that could not be read and one that was not followed each say
+the gate could not look there. They are not counted here: the count went stale twice while this
+section was being written, and the list is the code's to grow. Every one of them **names the file or directory
+it is about**, and that is the half a test forgets to pin: an assertion looking for `sub` in the
+output is satisfied by the word "subtree" in the sentence around it, and one looking for `linked`
+by the word "symlinked". Pin the path, not a fragment of the prose.
+
+**No two messages may be printed together when one contradicts the other.** This went wrong three
+times in one ticket, each time one level further down: a message saying the gate could not see
+into something must not be followed by one asserting no page exists, because the first says the
+second is not known. When a failure is about a place the gate could not look, the "no HTML
+anywhere" line is suppressed, whichever call discovered it and whether it was `dist/` itself or a
+subtree.
+
+The name must end in `.html`, matched case-sensitively, because that is what the build emits and a
+gate should say which files it claims to cover rather than implying all of them. A page arriving
+as `.htm` or `.HTML` would pass unexamined, which is a narrower version of the hole this ticket
+closed; it is named here so the next person to add one knows to widen the pattern with it.
+
+**`dist/index.html` must still exist by name.** Searching for every page removed the one thing the
+old check got for free: it read `index.html` directly, so a build that did not produce it failed.
+A search does not, and a `dist/` holding only some other page would have passed. That is the one
+way widening this gate could have narrowed it, so the named file is asserted separately from the
+search. The app has one entry point (§4.2 serves `index.html` as the SPA fallback); a build
+without it is broken whatever else it emitted.
+
+**A subtree the gate could not read is a failure, and so is one it declined to follow.** A
+directory that cannot be opened is skipped silently by an ordinary recursive search, which is the
+vacuous pass again wearing a permission error: the check would report success having examined
+fewer pages than exist. It fails instead, naming the directory. A **symlinked** subdirectory fails
+for the neighbouring reason: following one risks a loop that hangs the job, and not following it
+means the gate cannot vouch for what is inside, so it says which of the two it is rather than
+quietly choosing the second. The build emits neither today; both are failures because a gate is
+worth having only where it fails on what it could not see.
+
+**`dist/` being a symlink is followed, and that asymmetry is deliberate.** A walk follows its own
+root, so every page under a symlinked `dist/` is examined and none goes unchecked - which is the
+whole reason the subdirectory rule exists, and it does not apply here. Refusing a symlinked `dist/`
+would fail a legitimate build layout to guard against nothing.
+
+**"No HTML anywhere" always arrives with "`index.html` is missing", and they cannot be separated.**
+If `index.html` existed the search would have found it, so there is no reachable state where the
+search returns nothing and the named file is present. The two lines are printed together by
+construction, not by coincidence of how a fixture was built, and a test trying to produce one
+without the other is chasing a state the code cannot enter. Said here because it looks like a
+confound worth removing and is not one.
+
+**A failure that names `dist/` itself suppresses the "no HTML anywhere" line, and the test for it
+is decided by mode.** The first version keyed the suppression on which *call* had raised, so a
+`dist/` at mode `0111` - searchable but not readable - printed both the named failure and a
+sentence saying the build had not run, which was false: `index.html` had been stat'd successfully
+three lines earlier. The condition is what the error is **about**, not which call found it. Note
+how this repeats: mode `0`, mode `0444` and mode `0111` each take a different path through the
+same code, and a fixture at one mode passes while the others crash or lie.
+
+**`dist/` itself being unreadable is reported, not raised.** Checking for `index.html` by name
+touches the directory before the search does, and `Path.is_file()` propagates a permission error
+rather than swallowing it, so a `dist/` with no read permission ended the gate in a traceback: no
+annotation for the reader, and an absolute local path on stderr that every other message here
+avoids. It fails closed either way, which is the property that matters, but a gate that crashes
+while reporting what it could not see is the shape this whole section is against. It is caught and
+named, and kept distinct from "no HTML file anywhere", because a directory that will not open
+wants a different next action from one that is genuinely empty.
+
+**Every stat on the way down is a place this can raise, not only the first.** The unreadable-`dist/`
+rule above was fixed one level too high: a subdirectory that is readable but **not executable**
+lists its own entries, so the walk populates the directory names and never reaches the error
+callback, and the symlink test on each of those names raises the permission error instead. Same
+crash, same absolute path on stderr, one level down, and the test written with mode `0` missed it
+because mode `0` fails at the listing and takes the path that works. Any call that stats a child
+during the walk is treated as the walk failing on that directory: caught, recorded, and reported
+with the same named message.
+
+**No message the gate prints carries an absolute path, and one path out of it still does.** The
+rules below hold for every one of the messages; they do not hold for a `UnicodeDecodeError`, which
+is a `ValueError` rather than an `OSError`, escapes the handler, and ends the run in a traceback
+carrying this script's absolute path and a fragment of the offending page. That is issue #159, and
+it is named here because the paragraph would otherwise read as a guarantee it does not make.
+
+**No message prints an operating-system error object whole.** `str(OSError)` embeds the absolute
+filesystem path, and every message here is deliberately repo-relative, so the reason is printed
+from `strerror` and the path from the value this gate chose. The fallback when `strerror` is
+`None` prints the errno rather than the exception, because an `OSError` **can** carry a filename
+with no `strerror` - `OSError(13, None, '/abs/path')` stringifies with the path in it - even
+though CPython always sets `strerror` from errno on a real syscall failure, so no live path is
+disclosed today. An earlier draft of this paragraph asserted the opposite as the reason the
+fallback was safe. It was wrong, and the audit that caught it was reading the claim rather than
+the code. It is a small thing that went
+inconsistent twice in one file: one handler was written the careful way and its neighbour, added
+the same day, was not.
+
+**One narrow case stays open and is named rather than closed.** `os.walk` swallows an error raised
+while classifying an entry as a file or a directory, and reclassifies it as a file: on a
+filesystem that answers `DT_UNKNOWN`, or for an entry whose `stat` fails after its name was
+listed, a subdirectory can go undescended without reaching the error callback. Closing it means
+walking with `os.scandir` directly so the classification error is ours to record. It is named here
+for the same reason as the `.htm` gap: a known limit invites less doubt about the ones that are
+closed than a silent one does.
+
+Inside the walk a failure names **the directory the call was made on** rather than the child that
+raised: a subdirectory with the wrong mode makes the stat on its children fail, and naming a child
+says which call broke instead of what the reader has to change.
 
 **`style-src 'self'` also forbids inline `style="..."` attributes**, not only `<style>` blocks.
 No component uses one today, and Leaflet mutates `element.style.*` through the CSSOM, which CSP
@@ -3551,7 +3668,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_csp.py` | the three shapes that reject a request line before the path exists, a malformed line, an over-long one and an unsupported version, asserting that a response arrives at all and carries the headers wherever the HTTP version permits any; the three headers (Content-Security-Policy, X-Content-Type-Options: nosniff, Referrer-Policy: no-referrer) on every response the static server produces, not only a successful GET — the SPA fallback, the 400 for a traversal attempt, a directory request; every fixed directive of §2.15.1 asserted exactly; no `'unsafe-inline'` or `'unsafe-eval'` anywhere in the policy; `img-src` carries `'self' data: https://*.tile.openstreetmap.org` and no `blob:`, and the tile origin appears nowhere else; `connect-src` built per request as `'self'` plus one `wss://<address>:<ws_port>` per bound address, and follows a rebind between two requests to the same running server |
 | `test_ci_gates.py` | every step under `.github/workflows/` that scans through `grep` or `git grep`, driven as real shell with stubbed `git`, `grep` and `gh` exiting with a status the test chooses: a match fails the job and prints the ban's own message, exit 1 is the clean result, and 128 fails without printing the clean line; the auto-merge job enables the merge with `--auto --squash` on a documentation-only file list, leaves a list containing code to a human, refuses to decide when the scan could not run, and reports rather than fails when `gh pr merge` does; a step whose shape cannot be driven has to be named in an explicit registry, and a guard test fails when an uncovered one appears, so the next scan added cannot fall silently outside the parametrization; the stubs exit loudly on any invocation they do not recognise rather than reaching the real binary, and nothing touches the network |
 | `test_shipped_files.py` | the inventory of every directory copied verbatim into the build (§13.2), in both directions: an undeclared file fails and is named, a declared file that is gone fails as missing rather than as unexpected, and the real repository passes as it stands so a wrong inventory is caught here rather than in CI; the index and the disk are each proven to be read, with a file tracked but deleted locally and a file present but untracked; `.githooks/pre-commit` refuses on an undeclared file before it needs a denylist at all; and the hygiene job in `ci.yml` actually invokes the script, because a gate nobody runs is not a gate |
-| `test_no_inline_script.py` | the no-inline-script gate, `.github/check_no_inline_script.py` (§2.15.1, issue #141): every element shape that must fail — a `<script>` with a body, an empty `<script></script>`, one with other attributes but no `src`, and one whose `src` is present but empty — each failing and naming the offending `dist/index.html`; an external `<script src="...">` passes, and so does the real, built `dist/index.html` when it is present; a missing `dist/`, a missing `index.html` inside it, and an unreadable one each fail rather than pass quietly, the same rule §13 states for the shipped-inventory gate (issues #112, #126); and the `frontend` job of `ci.yml` actually invokes the script, after `Build` and on a pull request |
+| `test_no_inline_script.py` | the no-inline-script gate, `.github/check_no_inline_script.py` (§2.15.1, issue #141): every element shape that must fail — a `<script>` with a body, an empty `<script></script>`, one with other attributes but no `src`, and one whose `src` is present but empty — each failing and naming the offending file; an external `<script src="...">` passes, and so does the real, built `dist/index.html` when it is present; a missing `dist/` and an unreadable HTML file each fail rather than pass quietly, the same rule §13 states for the shipped-inventory gate (issues #112, #126); and the `frontend` job of `ci.yml` actually invokes the script, after `Build` and on a pull request. **Every page, found by search** (issue #144): a `dist/` holding two HTML files has both inspected, a violation in the second one alone fails and names that file rather than the first, one nested in a subdirectory is found too, a clean file beside a dirty one does not rescue it, every file is checked rather than the run stopping at the first failure, which is a different rule and is asserted with two dirty files both named in one run, and a `dist/` with no HTML at all fails instead of reporting a build that emitted nothing as clean. The sorted order is pinned by a top-level file that sorts **after** a nested one, because two files at the same depth do not pin it: directory iteration usually returns them alphabetical anyway, and the mutant with the sort removed survived that shape before this test was written. **Every way widening it could have narrowed it**: a `dist/` holding a clean page that is not `index.html` fails and names `index.html`; an unreadable subdirectory fails and names the directory, at **both** modes that produce it - `0` where the listing itself fails, and `0444` where the listing succeeds and the stat on a child raises, which is the mode that shipped a traceback because the `0` fixture takes the path that works - each asserted with a page inside it that *would* have failed the element rule so the gate is not merely missing a clean file, and skipped as root because root reads it anyway; `dist/` itself at mode `0111`, where the named failure must **not** be joined by the "no HTML anywhere" sentence, since the gate stat'd `index.html` successfully before the walk failed; the `.htm` and `.HTML` gap pinned as a **characterisation** test that says so in its docstring, so widening the pattern fails it and it gets rewritten rather than passing on quietly; a symlinked subdirectory fails and names it, with the linked page's content asserted never to surface, which catches a silent follow and a silent skip alike; and `dist/` itself at mode 0 failing with a named message and **no traceback**, asserted as the absence of one, since that is the half of it that is a fix rather than a rename. Every one of those pins the **path**, not a word from the sentence around it: `sub` matches "subtree" and `linked` matches "symlinked", and two assertions written that way passed against a gate that had stopped naming the directory at all |
 | `test_pre_commit_hook.py` | the leak gate's own exit-status rule (§13): a `git diff --cached` that fails refuses the commit instead of reading an empty staged list as nothing to scan, on both the file list and the unified diff; an unset `companion.denylist` still gives the existing "not configured" failure rather than the new one, so the two stay distinguishable and `tolerate=(1,)` is real; a `git config` failing with any other status is a failure; a clean staged diff exits 0, a matching one exits 1, and the matching line is never printed because it is the secret; and the shipped-inventory gate the hook now runs first refuses when its `git ls-files` fails, before the denylist is looked up at all |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |

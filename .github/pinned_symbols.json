@@ -367,6 +367,24 @@
       "why": "agent.view() returns a Display, not a bare View, so the delegation chain F28b and F28c pin only holds while Display adds no get of its own. An override here would intercept every read before View.get is reached, and the plugin would never know"
     },
     {
+      "id": "F31a",
+      "file": "pwnagotchi/automata.py",
+      "kind": "contains_all",
+      "text": [
+        "plugins.on('ready', self)"
+      ],
+      "why": "the one place the ready event is emitted. A plugin gets its agent from this line or from nowhere, which is what makes manual mode agent-less (issue #140)"
+    },
+    {
+      "id": "F31b",
+      "file": "pwnagotchi/cli.py",
+      "kind": "absent",
+      "text": [
+        "'ready'"
+      ],
+      "why": "neither entry point emits ready itself, so the only route to it is agent.start(), which do_auto_mode calls and do_manual_mode does not. Pinned as an absence because the absence is what makes the manual path agent-less; the day cli.py emits ready, this plugin can start its threads from on_ready again"
+    },
+    {
       "id": "F30a",
       "file": "pwnagotchi/plugins/__init__.py",
       "kind": "contains_all",

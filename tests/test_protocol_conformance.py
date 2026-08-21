@@ -379,6 +379,34 @@ def test_the_face_is_text_and_never_an_image(router_factory, agent_factory):
     assert face == {"face": "(⌐■_■)", "status": "Hi, I'm TestUnit", "mode": "AUTO"}
 
 
+# ---------------------------------------------------------------------------
+# No agent (issue #140): the null Mode branch, otherwise unreached
+# ---------------------------------------------------------------------------
+#
+# `produced` above always builds its router over `agent_factory(mode="auto",
+# ...)`, so every `stats`/`face_status` it collects has a real `mode` string
+# and the `oneOf [Mode, null]` schema addition for issue #140 is never
+# actually driven down its `null` branch by the parity check. This is the
+# case that closes that gap: `common.json` grew a second arm on this field,
+# and nothing above exercises it.
+
+
+def test_stats_with_no_agent_validates_with_a_null_mode(router_factory, validator_for):
+    data = router_factory(None).stats()
+    message = companion.envelope("stats", data, 1.0)
+
+    assert data["mode"] is None
+    validator_for("outgoing", "stats").validate(message)
+
+
+def test_face_status_with_no_agent_validates_with_a_null_mode(router_factory, validator_for):
+    data = router_factory(None).face_status()
+    message = companion.envelope("face_status", data, 1.0)
+
+    assert data["mode"] is None
+    validator_for("outgoing", "face_status").validate(message)
+
+
 def test_no_face_status_leaves_here_empty(produced):
     """Schema conformance cannot see this: `""` is a perfectly valid string.
 

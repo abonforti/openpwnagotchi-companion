@@ -45,7 +45,7 @@ import pwnagotchi
 import pwnagotchi.plugins as plugins
 
 __author__ = "https://github.com/abonforti"
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 __license__ = "GPL3"
 __description__ = (
     "Self-hosted companion backend: serves an installable PWA over HTTPS and "
@@ -723,8 +723,9 @@ class Deps:
     """Every external effect, as a replaceable callable.
 
     Constructor injection with real defaults. This is not architecture for its
-    own sake: the coverage gate is 100% of branches, and the I2C, gpsd,
-    subprocess and service-restart paths are unreachable in a test otherwise.
+    own sake: the coverage gate is an 85% floor of lines and branches (SPEC
+    10.7), and the I2C, gpsd, subprocess and service-restart paths are
+    unreachable in a test otherwise.
     Tests pass fakes; production passes nothing and gets the real thing.
 
     Keep these narrow. A seam is a callable someone can replace, not an
@@ -1000,15 +1001,17 @@ class SessionCache:
 
     The cadence is not here. `refresh()` fetches whenever it is called, and how
     often that happens is decided by `_background`, the only periodic caller,
-    which sleeps `session_poll_interval` between passes. `on_ready` calls it
-    once more, a one-shot so the first client does not wait a whole period for
-    the first snapshot.
+    which sleeps `session_poll_interval` between passes. That thread now
+    starts in `on_loaded`, before there is necessarily an agent to ask
+    (issue #140), so its first pass is a no-op returning False rather than a
+    genuine first snapshot; the real first fetch is whichever pass follows
+    `on_ready` handing the agent over, at most `session_poll_interval` later.
 
     This class used to take an `interval` and store it without ever reading it,
     which is worse than a dead field: on the #65 branch both a comment and a
     test assertion read it as a cache TTL and said so, and neither was true
     (#106). A TTL would not have changed either caller's behaviour anyway, since
-    the one-shot runs with nothing fetched yet. If the cache ever does have to
+    the one-shot ran with nothing fetched yet. If the cache ever does have to
     limit itself, that is a rule to write and test, not a number to store.
     """
 
@@ -1681,23 +1684,27 @@ class Router:
         except Exception:
             return None
 
-    def _mode(self) -> str:
-        """AUTO, PASV or MANUAL as the client should display it.
+    def _mode(self) -> str | None:
+        """AUTO, PASV or MANUAL as the client should display it, or None.
 
-        Never raises below the agent getter: face_status() depends on that to
-        always have a mode to report. `self._agent()` itself is trusted not to
-        raise - it is our own closure over `on_ready`'s argument, not a call
-        into third-party code - but everything read off what it returns is
-        guarded: `agent.mode`, in case a fork turns it into a property that
-        raises, and `pasv_mode.passive`, which is more exposed than either,
-        being a plugin we do not control and treat as a soft dependency
-        precisely because of that. `_pasv_plugin()` only guards the lookup in
-        `plugins.loaded`; reading `.passive` off what it returns is a separate
-        call into that plugin and needs its own guard.
+        None means there is no agent to ask, which is what a unit in manual
+        mode gives this plugin: pwnagotchi never calls on_ready in that mode
+        (issue #140), so guessing AUTO would assert something the plugin has
+        no basis for. Never raises below the agent getter: face_status()
+        depends on that to always have a mode to report. `self._agent()`
+        itself is trusted not to raise - it is our own closure over
+        `on_ready`'s argument, not a call into third-party code - but
+        everything read off what it returns is guarded: `agent.mode`, in case
+        a fork turns it into a property that raises, and `pasv_mode.passive`,
+        which is more exposed than either, being a plugin we do not control
+        and treat as a soft dependency precisely because of that.
+        `_pasv_plugin()` only guards the lookup in `plugins.loaded`; reading
+        `.passive` off what it returns is a separate call into that plugin
+        and needs its own guard.
         """
         agent = self._agent()
         if agent is None:
-            return "AUTO"
+            return None
         try:
             mode = getattr(agent, "mode", "auto")
         except Exception:
@@ -2986,6 +2993,14 @@ class Companion(plugins.Plugin):
         )
         self._listeners = Listeners(self.options, self.deps, context, handler)
         self._listeners.reconcile()
+        # Started here, not in on_ready: pwnagotchi never calls on_ready in
+        # manual mode (issue #140), and only the agent capture below needs
+        # one. Both loops already had to tolerate the agent being absent for
+        # the window before on_ready fires in auto mode, so nothing here is
+        # new - it just runs from the moment the plugin loads instead of
+        # waiting for an agent that manual mode never hands over.
+        self.deps.spawn(self._background)
+        self.deps.spawn(self._stats_ticker)
 
     # -- internals ---------------------------------------------------------
 
@@ -3079,26 +3094,27 @@ class Companion(plugins.Plugin):
                         self.broadcast(envelope("keepalive", {}, now))
                     except Exception:
                         log.exception("[companion] keepalive broadcast failed")
-                    # self._router is None only when on_loaded returned early
-                    # (e.g. missing TLS material) yet on_ready still spawned
-                    # this thread; there is no test that drives that path
-                    # (SPEC 2.4, issue #65 review).
-                    if self._router is not None:
-                        try:
-                            self.broadcast(envelope("stats", self._router.stats(), now))
-                        except Exception:
-                            log.exception("[companion] stats broadcast failed")
+                    # self._router is never None here: on_loaded builds it
+                    # before spawning this thread, so there is no path into
+                    # this loop without one (SPEC 2.4, issue #65 review).
+                    try:
+                        self.broadcast(envelope("stats", self._router.stats(), now))
+                    except Exception:
+                        log.exception("[companion] stats broadcast failed")
             except Exception:
                 log.exception("[companion] stats ticker pass failed")
             self._stop.wait(self._keepalive_interval)
 
     def on_ready(self, agent: Any) -> None:
-        """Captures the agent and starts the background refresh, rebind and stats threads."""
+        """Captures the agent. Not called at all in manual mode (issue #140).
+
+        Everything else this used to do - starting the background refresh and
+        stats threads - now happens in on_loaded, which is called regardless
+        of mode. The threads already tolerate the agent being None, so the
+        first pass after this fires simply starts finding one where it found
+        none before.
+        """
         self._agent = agent
-        if self._session is not None:
-            self._session.refresh()
-        self.deps.spawn(self._background)
-        self.deps.spawn(self._stats_ticker)
 
     def on_unload(self, ui: Any = None) -> None:
         """Stops the threads and closes every listener."""

@@ -616,6 +616,68 @@ def test_a_readable_face_still_pushes_when_only_the_mode_cannot_be_read(
     assert data["mode"] == "AUTO"
 
 
+# ---------------------------------------------------------------------------
+# on_ui_update with no agent at all (issue #140)
+# ---------------------------------------------------------------------------
+#
+# Distinct from the two tests above: `Collapsing`/`ModeBroken` both hand
+# `on_ready` an agent whose `mode` *raises* when read, and SPEC 2.13 (left
+# unedited by issue #140) says that degrades to `"AUTO"`. This section is the
+# other case entirely - no agent has ever arrived, because `on_ready` was
+# never called at all, the manual-mode shape #140 is about - and SPEC 2.5
+# says that one is `null`, not a guess. The two must not be conflated: an
+# implementation that reused the "unreadable" fallback for "absent" would
+# reintroduce the exact regression this issue closed.
+
+
+@pytest.fixture
+def loaded_without_ready(options, harness, tls_material, handshake_dir, tmp_path):
+    """A plugin taken through `on_loaded` only - `on_ready` is never called.
+
+    The manual-mode shape of issue #140: pwnagotchi never supplies an agent
+    at all. Mirrors `hooked` except for that one call.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **options,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+    }
+    plugin.on_loaded()
+    assert plugin._router is not None, "the fixture did not produce a wired plugin"
+
+    sent: list[dict] = []
+    plugin.broadcast = sent.append
+
+    yield plugin, sent
+
+    plugin.on_unload()
+
+
+def test_a_display_refresh_with_no_agent_still_pushes_a_null_mode(
+    loaded_without_ready, check_message
+):
+    """The regression issue #140 closed. `on_ready` never having fired must
+    not cost the display refresh its push - SPEC 2.13 already requires a
+    hook that cannot build part of the payload to still build the rest - and
+    the `mode` it carries must be `null`, not the `"AUTO"` the first
+    implementation guessed."""
+    plugin, sent = loaded_without_ready
+
+    plugin.on_ui_update(a_view("(⌐■_■)", "Hi, I'm TestUnit"))
+
+    matching = [m for m in sent if m["type"] == "face_status"]
+    assert len(matching) == 1, f"expected exactly one face_status, got {[m['type'] for m in sent]}"
+    data = check_message(matching[0], "face_status")
+    assert data["mode"] is None, (
+        "mode is null with no agent, not AUTO (SPEC 2.5, issue #140) - "
+        "AUTO is reserved for an agent that answered once and then went "
+        "unreadable (SPEC 2.13), a different case"
+    )
+
+
 class FlakyBroadcast:
     """A push that fails a set number of times and then works.
 

@@ -394,6 +394,15 @@ def router_factory(options, deps):
     The handshake store is built from the agent's own config so that a test can
     move the capture directory without reaching past the agent, which is the
     only place the plugin is allowed to learn the path from (SPEC F14).
+
+    `agent` may be `None` - the no-agent window issue #140 documents (SPEC
+    2.5), which every reader downstream of `agent_getter` must already
+    tolerate. There is then no config to read a handshake path from, and
+    production does not invent one: `Companion._handshake_store()` catches
+    the `agent._config` failure and falls back to `HandshakeStore("")`. This
+    factory matches that exactly rather than substituting a populated
+    fixture directory, which would let the no-agent tests pass against data
+    a real agentless unit never has (issue #146).
     """
 
     def _make(agent, *, overrides: dict[str, Any] | None = None, plugin_version: str | None = None):
@@ -403,9 +412,10 @@ def router_factory(options, deps):
         session = companion.SessionCache(agent_getter, deps)
         gps = companion.GpsResolver(resolved, deps, session)
         battery = companion.BatteryReader(resolved, deps)
-        store = lambda: companion.HandshakeStore(  # noqa: E731
-            agent._config["bettercap"]["handshakes"]
+        handshakes_path = (
+            agent._config["bettercap"]["handshakes"] if agent is not None else ""
         )
+        store = lambda: companion.HandshakeStore(handshakes_path)  # noqa: E731
         return companion.Router(
             resolved,
             deps,

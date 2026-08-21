@@ -197,7 +197,13 @@
       "type": "object",
       "properties": {
         "uptime": { "type": "integer", "description": "pwnagotchi.uptime(), seconds." },
-        "mode": { "$ref": "#/$defs/Mode" },
+        "mode": {
+          "oneOf": [
+            { "$ref": "#/$defs/Mode" },
+            { "type": "null" }
+          ],
+          "description": "Null when there is no agent yet, which is what a unit in manual mode gives the plugin (on_ready never fires). Not a guess at the unit's mode."
+        },
         "channel": { "type": ["integer", "null"], "description": "agent._current_channel. Never read from agent.session()." },
         "battery": { "$ref": "#/$defs/Battery" },
         "temperature": { "type": ["integer", "null"], "description": "pwnagotchi.temperature(), celsius." },
@@ -240,7 +246,13 @@
       "properties": {
         "face": { "type": "string" },
         "status": { "type": "string" },
-        "mode": { "$ref": "#/$defs/Mode" }
+        "mode": {
+          "oneOf": [
+            { "$ref": "#/$defs/Mode" },
+            { "type": "null" }
+          ],
+          "description": "Null when there is no agent yet, which is what a unit in manual mode gives the plugin (on_ready never fires). Not a guess at the unit's mode."
+        }
       },
       "required": ["face", "status", "mode"],
       "additionalProperties": false

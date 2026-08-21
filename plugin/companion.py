@@ -1669,13 +1669,6 @@ class Router:
         """The agent, or None before on_ready has fired."""
         return self._agent_getter()
 
-    def _require_agent(self) -> Any:
-        """The agent, or a ProtocolError if pwnagotchi has not handed it over yet."""
-        agent = self._agent()
-        if agent is None:
-            raise ProtocolError("internal_error", "agent is not ready yet")
-        return agent
-
     @staticmethod
     def _pasv_plugin() -> Any:
         """The loaded pasv_mode plugin, or None. Never imported (soft dependency)."""
@@ -1819,7 +1812,14 @@ class Router:
             requested = LOG_LINES_DEFAULT
         requested = max(1, min(requested, LOG_LINES_MAX))
 
-        agent = self._require_agent()
+        # The log path lives on agent._config (SPEC F17). With no agent the
+        # attribute access below raises and the except already answers
+        # log_unavailable, so this guard names the case rather than handling
+        # it - it exists for clarity, not because the except would not reach
+        # it too.
+        agent = self._agent()
+        if agent is None:
+            raise ProtocolError("log_unavailable", "agent is not available")
         try:
             path = agent._config["main"]["log"]["path"]
         except Exception:
@@ -1926,8 +1926,16 @@ class Router:
         if mode not in ("auto", "manual"):
             raise ProtocolError("bad_request", "mode must be 'auto' or 'manual'")
 
-        agent = self._require_agent()
-        current = "manual" if getattr(agent, "mode", "auto") == "manual" else "auto"
+        # A plugin loaded at boot into manual mode never gets an agent there
+        # (SPEC F31, §2.6.0), so with no agent the current mode is manual. A
+        # plugin enabled later from the web UI can still get one in any mode
+        # (toggle_plugin hands it view.ROOT._agent) - that case falls into
+        # the else branch below and reads the real agent.mode instead.
+        agent = self._agent()
+        if agent is None:
+            current = "manual"
+        else:
+            current = "manual" if getattr(agent, "mode", "auto") == "manual" else "auto"
         if mode == current:
             # Nothing to do, and restarting the services to arrive where we
             # already are would be a gratuitous outage.
@@ -1964,8 +1972,10 @@ class Router:
         if plugin is None:
             raise ProtocolError("pasv_unavailable", "the pasv_mode plugin is not installed")
 
-        agent = self._require_agent()
-        if getattr(agent, "mode", "auto") != "auto":
+        # With no agent the unit is manual, hence not auto (SPEC F31, §2.6.0):
+        # the same pasv_requires_auto answer applies, no wait needed.
+        agent = self._agent()
+        if agent is None or getattr(agent, "mode", "auto") != "auto":
             raise ProtocolError("pasv_requires_auto", "passive mode only applies in auto")
 
         plugins.on("pasv_on" if on else "pasv_off")

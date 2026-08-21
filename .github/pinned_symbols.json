@@ -385,6 +385,15 @@
       "why": "neither entry point emits ready itself, so the only route to it is agent.start(), which do_auto_mode calls and do_manual_mode does not. Pinned as an absence because the absence is what makes the manual path agent-less; the day cli.py emits ready, this plugin can start its threads from on_ready again"
     },
     {
+      "id": "F31c",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "one(name, 'ready'"
+      ],
+      "why": "the second route to the ready event, off the boot path: toggle_plugin fires it at the single plugin it enables and hands over view.ROOT._agent, so a plugin switched on from the web UI receives an agent in any mode. Pinned because F31's rule is about how a unit boots rather than about the event, and a reader who finds this call without the row would reasonably conclude the row is wrong"
+    },
+    {
       "id": "F30a",
       "file": "pwnagotchi/plugins/__init__.py",
       "kind": "contains_all",

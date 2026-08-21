@@ -432,7 +432,8 @@ def test_the_three_failure_diagnostics_are_distinguished(tmp_path):
     (SPEC 2.15.1). The one case where "no HTML file anywhere" would print
     alone is `dist/` itself being unreadable, and that branch is
     suppressed there on purpose (a directory the gate could not open gets
-    its own message instead, see `test_dist_itself_unreadable_fails_with_a_named_message_not_a_traceback`),
+    its own message instead, pinned by
+    `test_dist_itself_unreadable_fails_with_a_named_message_not_a_traceback`),
     so it is not available to isolate this message either. What actually
     pins the `no_html` leg below is not the pairwise inequality - which
     the always-present `index.html does not exist` line would satisfy on

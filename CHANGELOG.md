@@ -21,6 +21,16 @@ against real hardware.
   missing value because nothing about it looks wrong. A client that assumed `mode` was always a
   string now has a null to handle; the app renders it as a dash, the same as every other value it
   does not know.
+- **`handshakes` and `handshakesTotal` are null when the capture directory is unknown**, where
+  they used to report a confident zero. This is the same defect as `mode` at a different field
+  (issue #146): the directory was read only from `agent._config['bettercap']['handshakes']`, so a
+  unit with no agent reported zero handshakes regardless of how many captures sat on disk. Another
+  re-shaped message and therefore the project's second MINOR bump under SPEC §12, to **0.2.0**. A
+  client that assumed the two counts were always integers now has nulls to handle, and the two are
+  null together or neither: they come from one scan of one directory. Half of the fix is the null;
+  the other half is a new plugin config key, `handshake_dir`, empty by default, so a unit whose
+  agent never arrives can be told where its captures are instead of only being able to say it does
+  not know.
 - **The plugin's threads start in `on_loaded` rather than in `on_ready`.** In manual mode
   pwnagotchi never calls `on_ready`, so the background pass and the stats ticker never started:
   no session refresh, no gpsd poll, and no listener reconcile, which is the pass that binds a

@@ -77,23 +77,35 @@
 
   const accessPointsValue = $derived(s === null ? DASH : `${s.accessPoints}`)
   const accessPointsEmpty = $derived(accessPointsValue === DASH)
-  // SPEC 4.5.1.1: the authoritative count is handshakesTotal, not the
-  // narrower *.pcapng count the unit's own display uses.
-  const handshakesValue = $derived(s === null ? DASH : `${s.handshakesTotal}`)
+  // SPEC 4.5.1.1/2.5: the authoritative count is handshakesTotal, not the
+  // narrower *.pcapng count the unit's own display uses. handshakesTotal is
+  // null when the plugin does not know where the captures are, which
+  // dashes the counter exactly as a missing `stats` does.
+  const handshakesValue = $derived(
+    s === null || s.handshakesTotal === null ? DASH : `${s.handshakesTotal}`,
+  )
   const handshakesEmpty = $derived(handshakesValue === DASH)
   const peersValue = $derived(s === null ? DASH : `${s.peers}`)
   const peersEmpty = $derived(peersValue === DASH)
-  // SPEC 4.5.1.1: a second line, shown only when the two handshake counts
-  // disagree, naming what it is rather than leaving the reader to notice
-  // the mismatch against the Wi-Fi view's Captured badge on their own. It
-  // is never empty: it is rendered only when stats.handshakes is a known,
-  // disagreeing count.
-  const showHandshakesOnUnit = $derived(s !== null && s.handshakes !== s.handshakesTotal)
-  // showHandshakesOnUnit already requires s to be non-null; the assertion
-  // documents that guarantee rather than re-testing it in an unreachable
-  // `s === null` arm. The DASH side of the ternary is never rendered --
-  // this row only appears behind {#if showHandshakesOnUnit} below -- and
-  // exists only because the expression needs some value on that branch.
+  // SPEC 4.5.1.1/2.5: a second line, shown only when both handshake counts
+  // are known and disagree, naming what it is rather than leaving the
+  // reader to notice the mismatch against the Wi-Fi view's Captured badge
+  // on their own. With a null on either side there is no disagreement to
+  // explain, so the row is not rendered at all rather than rendered as a
+  // dash. It is never empty: it is rendered only when stats.handshakes is
+  // a known, disagreeing count.
+  const showHandshakesOnUnit = $derived(
+    s !== null &&
+      s.handshakes !== null &&
+      s.handshakesTotal !== null &&
+      s.handshakes !== s.handshakesTotal,
+  )
+  // showHandshakesOnUnit already requires s to be non-null and
+  // s.handshakes to be non-null; the assertion documents that guarantee
+  // rather than re-testing it in an unreachable `s === null` arm. The DASH
+  // side of the ternary is never rendered -- this row only appears behind
+  // {#if showHandshakesOnUnit} below -- and exists only because the
+  // expression needs some value on that branch.
   const handshakesOnUnitValue = $derived(showHandshakesOnUnit ? `${s!.handshakes}` : DASH)
 
   // SPEC 4.5.1.1: named, not merely timed -- the ssid and the peer name are

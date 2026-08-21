@@ -387,25 +387,64 @@ def options(handshake_dir, tmp_path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+class _UnknownHandshakeStore:
+    """Stands in for "no directory to look in at all" (SPEC 2.5, issue #146).
+
+    Deliberately not `companion.HandshakeStore` under any path argument: this
+    fixture has no pinned knowledge of how - or whether - that production
+    class represents "unknown" internally, and guessing its constructor would
+    make a wrong guess look like a passing test instead of a naming mismatch.
+    What SPEC 2.5 actually promises is the *shape* a caller sees - both counts
+    `None`, an empty listing, no newest entry - and that shape is all this
+    double provides. The real resolution logic (`handshake_dir` config wins,
+    then `agent._config['bettercap']['handshakes']`, then unknown) is
+    `Companion`'s own job and is exercised for real, through `Companion`
+    itself, in `test_handshake_dir.py` - never reimplemented here.
+
+    `write_sidecar` is a no-op, not an omission: SPEC 2.12.1's sidecar write
+    happens on the `Companion.on_handshake` path, which builds its own store
+    through `Companion._handshake_store()` rather than through the Router's
+    injected callable this double stands in for, so nothing today drives this
+    method on an *unknown*-directory store. It is here so that the next hook
+    test written against `router_factory` gets a fake that answers rather
+    than an `AttributeError` that names this class instead of the behaviour
+    under test.
+    """
+
+    def counts(self) -> tuple[None, None]:
+        return (None, None)
+
+    def entries(self) -> tuple[list, bool, int]:
+        return ([], False, 0)
+
+    def newest(self):
+        return None
+
+    def write_sidecar(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
 @pytest.fixture
 def router_factory(options, deps):
     """Assembles a Router over a FakeAgent with every component wired to fakes.
 
-    The handshake store is built from the agent's own config so that a test can
-    move the capture directory without reaching past the agent, which is the
-    only place the plugin is allowed to learn the path from (SPEC F14).
+    The handshake store follows SPEC 2.5's own precedence: `handshake_dir`
+    from options when it is a non-empty string, else the agent's
+    `_config['bettercap']['handshakes']` (F14), else unknown. `agent` may be
+    `None` - the no-agent window issue #140 documents, which every reader
+    downstream of `agent_getter` must already tolerate - or it may answer to
+    everything except `._config`, the shape `test_face_status.py` uses to
+    prove a broken agent still degrades rather than crashing. Both a missing
+    agent and one whose config read raises land on `_UnknownHandshakeStore`
+    here, the same as a real broad `except Exception` would.
 
-    `agent` may be `None` - the no-agent window issue #140 documents (SPEC
-    2.5), which every reader downstream of `agent_getter` must already
-    tolerate - or it may answer to everything except `._config`, the shape
-    `test_face_status.py` uses to prove a broken agent still degrades rather
-    than crashing. Production does not distinguish those two failures:
-    `Companion._handshake_store()` wraps the read in one broad
-    `try/except Exception` and falls back to `HandshakeStore("")` either
-    way (issue #146). This factory mirrors that exactly - the same try, the
-    same broad except, the same fallback - rather than special-casing `None`
-    and leaving every other broken-agent shape to raise here before the code
-    under test is even reached.
+    This factory is deliberately not where "where the directory comes from"
+    is tested - that needs the real `Companion` object, not this fixture's own
+    reimplementation of the rule, and lives in `test_handshake_dir.py`. What
+    this factory owes every *other* test file is a Router whose handshake
+    counts are null exactly when SPEC says they must be, so a no-agent test
+    written for an unrelated field (mode, control handling, ...) does not
+    trip over a stale confident zero.
     """
 
     def _make(agent, *, overrides: dict[str, Any] | None = None, plugin_version: str | None = None):
@@ -416,13 +455,18 @@ def router_factory(options, deps):
         gps = companion.GpsResolver(resolved, deps, session)
         battery = companion.BatteryReader(resolved, deps)
 
-        def _handshakes_path() -> str:
+        def _handshake_store():
+            configured = resolved.get("handshake_dir")
+            if isinstance(configured, str) and configured:
+                return companion.HandshakeStore(configured)
             try:
-                return agent._config["bettercap"]["handshakes"]
+                path = agent._config["bettercap"]["handshakes"]
             except Exception:
-                return ""
+                path = None
+            if isinstance(path, str) and path:
+                return companion.HandshakeStore(path)
+            return _UnknownHandshakeStore()
 
-        store = lambda: companion.HandshakeStore(_handshakes_path())  # noqa: E731
         return companion.Router(
             resolved,
             deps,
@@ -430,7 +474,7 @@ def router_factory(options, deps):
             session,
             gps,
             battery,
-            store,
+            _handshake_store,
             plugin_version if plugin_version is not None else companion.__version__,
         )
 

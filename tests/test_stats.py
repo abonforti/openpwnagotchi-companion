@@ -387,18 +387,34 @@ def test_session_age_is_null_with_no_agent(router_factory):
     assert router_factory(None).stats()["sessionAge"] is None
 
 
-def test_handshake_counts_are_zero_with_no_agent(router_factory):
-    """Neither `handshakes` nor `handshakesTotal` is nullable in the schema
-    (`docs/schemas/common.json`), so with no agent to supply
-    `agent._config['bettercap']['handshakes']` (F14) the plugin must still
-    answer with a real integer rather than raising - and production does not
-    invent a directory to count instead: `Companion._handshake_store()`
-    catches the failure and falls back to `HandshakeStore("")` (issue #146),
-    which holds nothing. Zero is therefore pinned, not merely typed."""
+def test_handshake_counts_are_null_with_no_agent(router_factory):
+    """Both `handshakes` and `handshakesTotal` are nullable in the schema
+    (`docs/schemas/common.json`) precisely for this state: with no agent to
+    supply `agent._config['bettercap']['handshakes']` (F14), and no
+    `handshake_dir` configured either, the plugin does not know where the
+    captures are. SPEC 2.5 (issue #146) is explicit that this is a different
+    state from a directory that is merely missing or unreadable - only
+    "nowhere to look" is null, and reporting zero here was the confident-zero
+    defect the field used to have. The two counts must come back null
+    together, since both come from one scan of one directory."""
     data = router_factory(None).stats()
 
-    assert data["handshakes"] == 0
-    assert data["handshakesTotal"] == 0
+    assert data["handshakes"] is None
+    assert data["handshakesTotal"] is None
+
+
+def test_handshake_counts_are_never_null_on_only_one_side(router_factory, agent_factory, tmp_path):
+    """The pairing rule from the same paragraph: the two counts are null
+    together or neither, because they come from one scan of one directory.
+    Exercised on both sides of the divide - no agent (null/null) and a real,
+    populated directory (int/int) - so a mutant that frees one field from the
+    other would have to survive both."""
+    no_agent = router_factory(None).stats()
+    assert (no_agent["handshakes"] is None) == (no_agent["handshakesTotal"] is None)
+
+    known = router_factory(agent_factory()).stats()
+    assert known["handshakes"] is not None
+    assert known["handshakesTotal"] is not None
 
 
 def test_capabilities_gps_and_battery_survive_with_no_agent(router_factory):

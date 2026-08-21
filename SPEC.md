@@ -118,6 +118,7 @@ openpwnagotchi-companion/
 │   ├── test_stats.py
 │   ├── test_access_points.py
 │   ├── test_handshakes.py
+│   ├── test_handshake_dir.py
 │   ├── test_peers.py
 │   ├── test_gps.py
 │   ├── test_log_tail.py
@@ -197,6 +198,7 @@ save_gps_log = false
 gps_log_path = "/var/tmp/pwnagotchi_gps.log"
 mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
 keepalive_interval = 20            # stats and keepalive broadcast, clamped 5-20, 0 means default (SPEC 2.4)
+handshake_dir = ""                 # optional; where the captures are. Empty = ask the agent (SPEC 2.5)
 ```
 
 Every value has a hardcoded default in the plugin matching the table above. Missing keys must
@@ -671,17 +673,48 @@ was already reporting a real zero or a real null.
 That makes `Mode` nullable at both its use sites, `Stats` and `FaceStatus`, which is a re-shaped
 message and therefore a MINOR bump under §12: **0.1.0**.
 
-**The handshake counts are the same defect and are not fixed here, issue #146.** The capture
-directory is read from `agent._config['bettercap']['handshakes']` (F14), which with no agent
-raises and leaves the directory empty, so `handshakes` and `handshakesTotal` report **zero** on a
-unit that may have hundreds of captures on disk. That is a confident zero of exactly the kind
-this section is about, in a field nobody had looked at, and it is separated out because the fix
-is a decision rather than a substitution: the schema types both as non-nullable integers, so
-being honest means either widening them, adding a configured directory the plugin can read
-without an agent, or pinning pwnagotchi's default path as a fact with its evidence. Naming it
-here rather than leaving the reader to infer that these two fields were considered and found
-correct. The alternative, a separate "the agent
-is not here" flag beside a mode that keeps lying, spends a field to avoid fixing the field.
+**The handshake counts were the same defect, and both are now nullable, issue #146.** The
+capture directory was read from `agent._config['bettercap']['handshakes']` (F14) and nowhere
+else, which with no agent raises and leaves the directory empty, so `handshakes` and
+`handshakesTotal` reported **zero** on a unit that may have hundreds of captures on disk. A
+confident zero of exactly the kind this section is about, in a field nobody had looked at.
+
+Two changes together, because either alone leaves the unit worse off than the operator would
+accept. Both counts become **nullable**, so the wire can say "not known" where it used to say
+zero; and the plugin gains its own `handshake_dir` config key (§2.2), empty by default, so a unit
+with no agent can be *told* where its captures are instead of only being able to say it does not
+know. The first is the honest shape, the second is what makes the screen useful on the unit that
+needed the honesty.
+
+**Where the directory comes from, in order.** `handshake_dir`, when it is set to a non-empty
+string; otherwise `agent._config['bettercap']['handshakes']` (F14), when **that** yields a
+non-empty string; otherwise it is unknown. Neither source may contribute an empty path: an empty
+path is nowhere to look, and a store over one scans nothing and reports zero, which is this
+ticket's own defect written a second time. The
+config key wins deliberately: it is the one an operator can set on a unit whose agent never
+arrives, and a setting that only applies when it is not needed is not a setting. The two can
+disagree, and that is the cost of the key. It is paid knowingly: the operator who sets it has
+said which directory they mean.
+
+**Unknown is not the same as empty, and only unknown is null.** When the directory is unknown
+both counts are `null`. When it is known, the counts are what a scan of it finds, and a directory
+that is missing or unreadable counts **zero** - the plugin knew where to look and found nothing
+there, which is a real answer, not an absence. The two counts are null together or neither: they
+come from one scan of one directory, and a client may rely on that.
+
+`lastHandshake` was already `null` in this state, from the same source, which is the shape this
+change gives the counts.
+
+Widening these two fields is a re-shaped message and therefore a MINOR bump under §12: **0.2.0**,
+the project's second, following #140 one ticket earlier. The alternative considered and rejected was pinning pwnagotchi's default
+capture path as a fact in §11 and falling back to it: cheapest at the call site and the most
+fragile, since a path that moved upstream would silently resume reporting a zero, and this
+repository does not rely on a pwnagotchi behaviour it has no evidence for.
+
+**`get_handshakes` still answers an unknown directory as an empty listing**, issue #153. That is
+the same confident zero at a different field, left standing because `handshakes_list` types
+`total` as a non-null integer and setting `handshake_dir` removes the case entirely. Named here
+rather than left for the next reader to rediscover.
 
 ```
 uptime          = pwnagotchi.uptime()               # int seconds        (F1)
@@ -691,7 +724,9 @@ channel         = agent._current_channel            # attribute, NOT session()  
 battery         = battery_info()                    # §2.11
 temperature     = pwnagotchi.temperature()          # int °C             (F2)
 handshakes      = count of *.pcapng in the handshakes dir  # matches the device display (F15)
+                  or None when the directory is unknown
 handshakesTotal = count of *.pcapng plus *.pcap            # always >= handshakes
+                  or None, together with handshakes, never alone
 peers           = len(agent._peers)                                      (F5)
 accessPoints    = len(agent._access_points)                              (F3)
 lastHandshake   = newest handshake dir entry {filename, ssid, bssid, mtime} or null
@@ -756,7 +791,7 @@ that cannot change without a restart.
 |---|---|---|
 | `set_mode` | reading the current mode, to refuse a restart into the mode already in effect | the current mode **is** manual (F31). A request for `manual` is the no-op it always was; a request for `auto` restarts, which is the whole point |
 | `set_pasv` | checking that the mode is auto | it is not auto, so the answer is the one the contract already has: `pasv_requires_auto` |
-| `log_lines` | the log path, which comes from `agent._config` (F17) | genuinely unavailable, and answered as `log_unavailable` rather than as an internal error. Tracked with the same class of problem in issue #146 |
+| `log_lines` | the log path, which comes from `agent._config` (F17) | genuinely unavailable, and answered as `log_unavailable` rather than as an internal error. The same class of problem as the handshake counts (§2.5), and the same fix would close it: a configured path the plugin can read with no agent, issue #154 |
 
 **The inference "no agent means manual" has a window, and it is named rather than hidden.** In
 auto mode the agent arrives when `agent.start()` fires `ready`, and that is the **last** statement
@@ -2560,6 +2595,14 @@ of the decision: when the numbers agree there is one number and no explanation t
 when they disagree the screen explains the disagreement itself instead of leaving the reader to
 discover it against the Captured badge and conclude that one of the two is broken.
 
+**Both counts can be null, and the second line needs both.** The plugin sends `null` for
+`handshakes` and `handshakesTotal` when it does not know where the captures are (§2.5), so the
+handshake counter dashes on a null exactly as it does on a missing `stats`. The
+`handshakesOnUnit` line is rendered only when **both** counts are known and they differ: with a
+null on either side there is no disagreement to explain, and a row reading "On the unit's own
+display: —" beside a dashed total explains nothing while implying the app looked and found
+something absent. One dash on the counter is the whole of what the app knows.
+
 **The card is one snapshot, with two named exceptions.** Mode, uptime, battery, temperature and
 the counters all come from the `stats` store, so the age the banner declares describes every
 one of them. The exception is the channel, which comes from the `channel` store: §4.4.1 exports
@@ -3536,6 +3579,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_stats.py` | field-by-field `stats` mapping; `pasv_or_auto` across all four states; `capabilities` reflects `plugins.loaded`; **asserts `session()` call count is 0** during `get_stats`; `SessionCache.refresh` before `on_ready` (agent getter returning `None`) and on a non-`Mapping` bettercap snapshot both return `False` without raising and leave a prior snapshot and its climbing age untouched, and the `None`-agent case is asserted to log nothing at all - it is a normal startup state, not the failure a dead bettercap logs |
 | `test_access_points.py` | `mac`→`bssid` mapping; `clients: None`; missing keys; empty list |
 | `test_handshakes.py` | SSID containing underscores; `.pcap` and `.pcapng`; unparseable name yields `bssid: null`; sidecar present/absent/malformed; 500-entry cap sets `truncated`; unreadable file skipped; both `on_handshake` argument shapes normalise identically |
+| `test_handshake_dir.py` | where the capture directory comes from (§2.5): `handshake_dir` wins over the agent's `bettercap.handshakes`; falls back to the agent when unset or empty; unknown when neither yields one; a store over an unknown directory reports **both** counts as `None` while a store over a directory that is merely missing or unreadable reports `0`, `0`; asserted on the store rather than through a fixture whose directory the test chose (issue #146) |
 | `test_peers.py` | every field in the §2.8 table; the `datetime` vs float `last_seen` asymmetry; a `Peer` whose timestamp parsing fell back to `str`; missing `adv` keys |
 | `test_gps.py` | source priority order; `gps_source` config overrides; `0.0/0.0` is not a fix; browser staleness expiry; sidecar written in bettercap shape (D13); no sidecar without a fix; existing sidecar not overwritten; `.pcap` gets the right sidecar name |
 | `test_log_tail.py` | bounded tail returns the last N; default and cap; file smaller than one chunk; undecodable bytes; missing file yields `log_unavailable` |
@@ -3637,7 +3681,8 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   states each asserted for their own banner, per state rather than in one pass, with the two
   `unauthorized` reasons carrying different sentences; the
   handshake counter reading `handshakesTotal`, and the `*.pcapng` figure appearing only when the
-  two disagree; the channel following the `channel` store rather than the last `stats`, and the
+  two disagree and both are known, with a null on either side asserted to leave the second line
+  off the screen rather than dashed (issue #146); the channel following the `channel` store rather than the last `stats`, and the
   mode badge following `stats` rather than `face`; the GPS rows following the `gps` store rather
   than `stats.gps`; every banner sentence asserted by equality against §4.5.1.1, per state and
   per reason, with `connecting` and `connected` asserted to carry their state and no copy, and

@@ -173,6 +173,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      # SPEC 2.15.1: script-src 'self' covers an external script and does
+      # nothing for an inline one. That is a property of today's build
+      # configuration, not of the tools, so it is asserted against the actual
+      # output rather than trusted (issue #141). python3, not python: no
+      # setup-python step runs in this job.
+      - name: No inline script in the built page
+        run: python3 ../.github/check_no_inline_script.py
+
   e2e:
     name: End-to-end (Chromium, WebKit)
     runs-on: ubuntu-latest

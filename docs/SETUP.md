@@ -185,6 +185,21 @@ static files: the HTTPS server on 8443 serves the app itself to anyone who can r
 is the data behind the app that the token protects. Every option and its default is in
 [`SPEC.md`](../SPEC.md) §2.2.
 
+**If your unit runs in manual mode, set `handshake_dir`.** A plugin loaded at boot is handed its
+agent only on the auto-mode boot path, and the capture directory is one of the things the plugin
+reads from it. Enabling the plugin later from the web UI does hand it one in any mode, but that
+is not how it comes up after a restart. Without an agent it does not know where your captures are, so the app shows a dash for
+the handshake count rather than a zero it cannot stand behind. Point it at the directory yourself
+and the count works with no agent at all. Copy the value your own `config.toml` gives
+`bettercap.handshakes`:
+
+```toml
+handshake_dir = "<the same path as bettercap.handshakes>"
+```
+
+When both are set, this one wins. If you ever report a problem with the handshake count,
+say whether the key is set rather than quoting the path: it names a directory on your own unit.
+
 Restart:
 
 ```sh

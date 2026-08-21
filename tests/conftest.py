@@ -397,12 +397,15 @@ def router_factory(options, deps):
 
     `agent` may be `None` - the no-agent window issue #140 documents (SPEC
     2.5), which every reader downstream of `agent_getter` must already
-    tolerate. There is then no config to read a handshake path from, and
-    production does not invent one: `Companion._handshake_store()` catches
-    the `agent._config` failure and falls back to `HandshakeStore("")`. This
-    factory matches that exactly rather than substituting a populated
-    fixture directory, which would let the no-agent tests pass against data
-    a real agentless unit never has (issue #146).
+    tolerate - or it may answer to everything except `._config`, the shape
+    `test_face_status.py` uses to prove a broken agent still degrades rather
+    than crashing. Production does not distinguish those two failures:
+    `Companion._handshake_store()` wraps the read in one broad
+    `try/except Exception` and falls back to `HandshakeStore("")` either
+    way (issue #146). This factory mirrors that exactly - the same try, the
+    same broad except, the same fallback - rather than special-casing `None`
+    and leaving every other broken-agent shape to raise here before the code
+    under test is even reached.
     """
 
     def _make(agent, *, overrides: dict[str, Any] | None = None, plugin_version: str | None = None):
@@ -412,10 +415,14 @@ def router_factory(options, deps):
         session = companion.SessionCache(agent_getter, deps)
         gps = companion.GpsResolver(resolved, deps, session)
         battery = companion.BatteryReader(resolved, deps)
-        handshakes_path = (
-            agent._config["bettercap"]["handshakes"] if agent is not None else ""
-        )
-        store = lambda: companion.HandshakeStore(handshakes_path)  # noqa: E731
+
+        def _handshakes_path() -> str:
+            try:
+                return agent._config["bettercap"]["handshakes"]
+            except Exception:
+                return ""
+
+        store = lambda: companion.HandshakeStore(_handshakes_path())  # noqa: E731
         return companion.Router(
             resolved,
             deps,

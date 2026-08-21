@@ -3507,6 +3507,16 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   content area in either orientation, the map never owning the full width or height of the views
   area so a drag always has somewhere to scroll the app, touch targets at 44px, contrast computed
   for every token against every surface it can land on.
+- **A view is allowed to be taller than the viewport, and the invariant is about where its
+  overflow goes, not about its height.** The first version of the geometry suite asserted that
+  every view root stayed inside the shell, which was true of seven placeholder views two lines
+  long and stopped being true of the first view with content on it: a `<section>` 897 px tall in
+  a 402 px viewport reports a bounding box below the shell, which is what a scroll container
+  looks like from the outside and not a defect. What must hold instead is that the overflow
+  belongs to the views area and to nothing else - the document itself still does not scroll, the
+  area's own `scrollHeight` accounts for the view, and no pixel of it is painted below the
+  navigation. The horizontal edges keep the original rule: a view that escapes sideways has
+  nowhere legitimate to go, because nothing scrolls that way.
 - `charset.spec.ts` (SPEC 4.2): the built `dist/index.html` declares `utf-8` within the first
   1024 bytes, checked once against the raw response bytes rather than once per project since the
   rule has no engine dependency; and `document.characterSet` is `UTF-8` in every project, which

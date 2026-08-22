@@ -14,6 +14,18 @@ against real hardware.
 
 ### Changed
 
+- **`rebind_interval` is clamped to 5-300 seconds**, and a configured `0` now takes the floor of
+  5 rather than running the reconcile on every pass. Unlike `keepalive_interval = 0`, which means
+  the default, `0` here never meant disable. A value that is not a usable number, `nan` and both
+  infinities take the default 30 and are reported at `WARNING`, as the other two intervals
+  already were. This is the fix for a value that could stop far more than itself: the interval
+  was read with a bare `float()` at the entry of the background thread, outside that loop's own
+  `try`, so `rebind_interval = "30s"` killed the session refresh, the gpsd poll and the listener
+  reconcile together, for the life of the process, with the sockets still open and the data
+  served from then on stale. A bare `nan`, which TOML has a literal for, stopped the reconcile
+  silently after the first pass. If your `rebind_interval` is a number in range, nothing changes
+  for you (issue #105).
+
 - **`mode` is null when the plugin has no agent**, on both `Stats` and `FaceStatus`, where it
   used to be `AUTO`. This is a re-shaped message and therefore the project's first MINOR bump
   under SPEC §12, to **0.1.0**. It was found on the first end-to-end run on real hardware

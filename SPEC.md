@@ -192,7 +192,7 @@ gps_source = "auto"                # auto | bettercap | gpsd | none (browser fal
 gpsd_host = "127.0.0.1"
 gpsd_port = 2947
 session_poll_interval = 5          # bettercap session refresh, clamped 1-5 (SPEC 2.4)
-rebind_interval = 30               # seconds between local-address re-enumeration passes
+rebind_interval = 30               # re-enumeration, clamped 5-300, 0 means the floor (SPEC 2.4)
 save_gps_log = false
 gps_log_path = "/var/tmp/pwnagotchi_gps.log"
 mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
@@ -249,7 +249,11 @@ interfaces, or a backend that lists it under both a primary and a secondary labe
 A legacy `interfaces` key is **ignored**, with a warning naming `bind_addresses`. Carrying the
 old behaviour over silently would preserve the exposure D5.1 exists to close.
 
-A `rebind_interval` timer (default 30 s) re-enumerates the host's addresses and reconciles:
+A `rebind_interval` timer (default 30 s, clamped to 5-300 s by §2.4) re-enumerates the host's
+addresses and reconciles. **The first pass after load reconciles unconditionally**, whatever the
+interval; the timer spaces the passes after it. That is what binds the tether a unit already had
+when the plugin loaded, rather than making the first listener wait out an interval, and two tests
+rest on it, so it is stated here and not left to the initialiser that happens to implement it:
 
 | Observed | Action |
 |---|---|
@@ -630,6 +634,84 @@ the broadcast spacing. `sessionAge` is wall-clock age, so the poll interval does
 it grows; it governs how soon it is **reset** once bettercap answers again. At 5 s a recovered
 unit leaves `degraded` on the next broadcast; at a minute it would stay stale-looking long
 after it was well.
+
+`rebind_interval` is clamped to **5-300 s** (issue #105). Until that ticket it was the one
+interval that went through no clamp at all: `_background` read it with a bare `float()` at
+thread entry, outside the loop's own `try`, so a `rebind_interval = "30s"` raised `ValueError`
+before the first pass and killed the thread that does the session refresh, the gpsd poll and
+the reconcile alike. The plugin then held its sockets open and served stale data for the life
+of the process, and a tether that moved was never followed. That is why the clamp is not a
+tidiness: this one key could stop the other two loops.
+
+The **floor** is derived only as far as *above 1*, and 5 is then chosen rather than derived.
+The reconcile only runs when the background loop wakes, and that loop wakes on
+`session_poll_interval`, itself clamped to 1-5, so any value at or below 1 makes the pass run
+on every wake. A pass enumerates the host's addresses through `netifaces` when it is importable
+and by forking `ip -4 addr show` when it is not, and §2.3 forbids making `netifaces` a hard
+dependency, so the fork is the case that must be assumed rather than the unlucky one. Once a
+second on a Pi Zero 2 W that is a real cost, and the event it is watching for, a tether changing
+address, does not happen at that rate. None of that distinguishes 5 from 2 or 3. **5 is chosen
+for consistency with the `keepalive_interval` floor**, and that analogy is one of size and not
+of kind: that floor is about payload cost over BT PAN, this one about fork and CPU cost on the
+unit. The first draft of this paragraph presented 5 as derived and review caught it, which is
+the same failure §2.4 already records twice: a number that sounds argued is worse than one
+admitted to be a choice, because nobody rechecks it.
+
+The **ceiling of 300** exists so that no configured value can quietly turn the rebind off.
+While the plugin is bound to an address that no longer exists there is no listener to reach:
+the app is not slow, it is absent. The client's backoff saturates at a **cap** of 30 s and is full
+jitter (§4.3.2), so each delay is drawn uniformly from `[0, 30]` and averages about 15: at the
+ceiling roughly **twenty** reconnection attempts fail before the plugin looks at the address
+list again, which is five minutes of an app reporting offline over a tether that is up. The
+count is approximate because the draw is random. The five minutes is not, and it is the half
+that decides the number. Past that the timer stops
+being a repair the user waits for and becomes one they beat by restarting the app, and a
+`rebind_interval = 86400` would disable the reconcile while reading like a preference.
+
+The ceiling bounds the other direction too, and that is the half a reader looks for. An address
+removed from the host right after a pass keeps its listening socket until the next one, so the
+socket outlives the address by four terms, and **no single total is correct**, because the last
+of them scales with how many addresses are being torn down:
+
+| term | worst case at both ceilings | why |
+|---|---|---|
+| waiting for `next_rebind` | 300 s | the `rebind_interval` ceiling |
+| the loop wake after it | 5 s | the `session_poll_interval` ceiling |
+| the pass before the clock is sampled | 30 s + about 4 s | the clock is read after both slow calls: the session refresh carries bettercap's 30 s timeout (F7), and the gpsd read passes 2.0 s to both the connect and the socket timeout and checks its deadline before each `recv`, so a `recv` entered just under it can return about 2 s late, twice 2 |
+| the reconcile after the sample, which is where the socket actually closes | 5 s enumeration, then per address 5 s for the WSS shutdown and 0.5 s for the HTTP poll interval | the `ip -4 addr show` fallback the floor paragraph above insists must be assumed, and a teardown that is per address rather than shared |
+
+Two things the table assumes, said here rather than left for the next reader to discover. It
+bounds the working path: an enumeration that fails returns early and leaves the bound set alone
+on purpose, per the last row of the §2.3.1 table, so each consecutive failure defers the close by
+another whole cycle. And the gpsd figure assumes `gpsd_host` is an address literal, which the
+default is: `socket.create_connection`'s timeout does not cover `getaddrinfo`, so a hostname
+there is not covered by the 2.0 s bound at all, and costs whatever the resolver's own retry
+budget costs, the same hazard §2.3.1 already records for the reverse lookup in `server_bind`.
+That one is a defect rather than a caveat, and is issue #163.
+
+For one stale address that is about **350 s**. Three drafts of this paragraph gave a single
+smaller figure, 305, then 335, then 340, each by naming fewer terms than the loop has. The table
+is here instead of a number because the fourth term has no ceiling in the number of addresses,
+and because a total invites the next reader to trust it rather than recount. It is not an
+exposure at any of those figures. While the address is absent the kernel delivers nothing to
+that socket, so the plugin is holding a dead socket rather than serving on an address it should
+have dropped, and if the address returns it returns through the same `bind_addresses` selectors
+that admitted it (§2.3.1), which a reconcile would have re-opened anyway. There is no
+configuration in which the stale socket serves something the selectors would have refused.
+Stated here because the number is small and checkable, and a reader who cannot find it assumes
+it is large.
+
+A configured `0` therefore takes the **floor**, not the default. Unlike `keepalive_interval = 0`
+it never meant *disable*: it meant *reconcile on every pass*, and 5 s is the nearest the plugin
+is willing to honour that. A value that is not a usable number, `nan` and both infinities take
+the **default 30** and are reported at WARNING, exactly as the other two keys are, and the
+thread starts and keeps running whichever of those it was given.
+
+**The clamp costs the tests their extremes, and that is the intended trade.** A test that set
+`rebind_interval = 0` to force a reconcile on every pass, or `3600` to suppress it for the
+duration, gets neither now: both land inside the range. The reconcile is driven by
+`self.deps.now()`, so a test that needs a pass at a chosen moment advances that clock instead of
+asking for an interval the plugin would refuse from a `config.toml`.
 
 **The better shape, deliberately not taken here.** The plugin could publish its effective spacing
 in `Capabilities` and let the client derive `S` from it, which would survive any configuration
@@ -3555,7 +3637,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | `test_pre_commit_hook.py` | the leak gate's own exit-status rule (§13): a `git diff --cached` that fails refuses the commit instead of reading an empty staged list as nothing to scan, on both the file list and the unified diff; an unset `companion.denylist` still gives the existing "not configured" failure rather than the new one, so the two stay distinguishable and `tolerate=(1,)` is real; a `git config` failing with any other status is a failure; a clean staged diff exits 0, a matching one exits 1, and the matching line is never printed because it is the secret; and the shipped-inventory gate the hook now runs first refuses when its `git ls-files` fails, before the denylist is looked up at all |
 | `test_hooks.py` | the hook surface the agent calls: both `on_handshake` argument shapes (F20), sidecar written only on a fix, `on_peer_detected`, `on_wifi_update` skipping non-mappings, `on_channel_hop`, `on_ui_update` pushing only when the face or status text changed and pushing a degraded payload rather than nothing when a read fails (§2.13), the four mood hooks; every push validated against `docs/schemas/outgoing/`; the router-absent and pre-`on_ready` windows; **a failing broadcast is logged and swallowed in every one of them**, because `plugins.on()` runs these on the agent's thread (F8) and an escaping exception reaches the UI loop |
 | `test_deps.py` | the real `Deps` defaults nothing else drives: `spawn`, `run_command` exit statuses and a missing binary, `list_local_ipv4` returning IPv4 literals only and never `0.0.0.0`, `read_pisugar_i2c` (a shape guarantee that holds on any host, a two-tuple that never raises, plus a no-bus case whose precondition is **established** rather than assumed, and a bus that imports but refuses to open; then the register map of SPEC 2.11.1 and both rules of 2.11.2, which is where most of that file now is: bit 7 of `0x02` asserted over all 256 values of the byte rather than the two observed, every other bit of it shown not to matter, the registers actually touched compared as a set so a word read is visible and not only its result, and the transport-versus-content line asserted directly rather than only through its two instances), and `read_gpsd` against a fake gpsd socket — the `?WATCH` handshake, reading past `VERSION`/`DEVICES`, a damaged line, a refused connection, and a silent server bounded by the timeout. **Both backends of every seam**, not only the fallback: `tests/fakes/i2c_stub/` and `tests/fakes/netifaces_stub/` put the libraries on `sys.path` so the branches that run on a unit that has them are exercised, instead of being unreachable by construction because injection is how you avoid running them |
-| `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every client in the broadcast set (that only authenticated sockets join it is `test_integration_ws.py`); **a failure building `stats` must not cost that tick's `keepalive`**, since the liveness frame is what tells an idle client a quiet plugin from a dead link and a broken payload is exactly when it is needed; a tick with nobody connected sends nothing at all (§2.4) and does not move the next one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less |
+| `test_broadcast_cadence.py` | §4.3.7: `stats` broadcast on the `keepalive_interval` tick, to every client in the broadcast set (that only authenticated sockets join it is `test_integration_ws.py`); **a failure building `stats` must not cost that tick's `keepalive`**, since the liveness frame is what tells an idle client a quiet plugin from a dead link and a broken payload is exactly when it is needed; a tick with nobody connected sends nothing at all (§2.4) and does not move the next one; **zero `agent.session()` calls on that path** (§2.5), since a periodic broadcast that blocks is worse than no broadcast; `keepalive_interval` clamped to 5-20 with the clamp logged, and `0` clamping to the default 20 rather than to the floor; `session_poll_interval` clamped to 1-5, which no longer sets the broadcast spacing but does set how soon `sessionAge` is reset after bettercap recovers, so a recovered unit leaves `degraded` promptly; **the `keepalive_interval` ceiling bounds how late the client hears of a stall**, not whether it is reported: the threshold is derived from the refresh episode and not from the spacing (§2.4), so a value above the ceiling delays the badge rather than falsifying it. The floor is about payload cost over BT PAN, not staleness: below it the broadcast is more frequent, not less; `rebind_interval` clamped to 5-300 with the clamp logged, `0` clamping to the **floor** rather than to the default because unlike `keepalive_interval = 0` it never meant disable, and a non-numeric value, `nan` and both infinities taking the default 30 at WARNING. In every one of those cases **the background thread starts and keeps running** (#105): the defect was a bare `float()` at thread entry, outside the loop's `try`, so one bad key killed the session refresh, the gpsd poll and the reconcile together and the plugin served stale data for the life of the process |
 
 A rule the `read_pisugar_i2c` row exists to state: **a test may not assert a property of the
 machine it happens to run on.** The first version of that test asserted the read returns nulls

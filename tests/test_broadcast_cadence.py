@@ -29,6 +29,20 @@ reach the plugin through `wired_plugin_factory`'s override *before*
 there rather than inside `_stats_ticker` because `on_loaded` owns configuration:
 one place decides each interval, and neither loop can drift from it.
 
+`rebind_interval` (5-300 s) goes through the same `clamp_interval()` and is
+stored on `Companion._rebind_interval`, clamped once in `on_loaded` exactly
+like the other two (issue #105). It differs from `keepalive_interval` in one
+deliberate way: a configured `0` lands on the **floor** of 5 rather than the
+default of 30, because `0` never meant "disable" for this key, only
+"reconcile on every pass" - 5 s is the nearest the plugin will honour that. A
+value that is not a usable number still takes the default and is reported at
+WARNING, and - this is the actual defect #105 fixes - the background thread
+must start and keep running regardless: before the fix `_background` read
+`rebind_interval` with a bare `float()` at thread entry, outside the loop's
+own `try`, so a non-numeric value raised before the first pass and killed the
+thread that also refreshes the session and polls gpsd, for the life of the
+process.
+
 `_stats_ticker`'s loop body has an outer `try/except` around both inner
 sends, the same shape `_background` already had, because `len(self._clients)`
 and `deps.now()` sit outside either inner `try` and a fault there would
@@ -585,7 +599,7 @@ def test_session_poll_interval_below_the_floor_is_clamped_once_and_read_from_sel
     """
     with caplog.at_level("INFO"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": 0.1, "rebind_interval": 3600}
+            {"session_poll_interval": 0.1, "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == 1.0
@@ -606,7 +620,7 @@ def test_session_poll_interval_above_the_ceiling_is_clamped_once_and_read_from_s
 ):
     with caplog.at_level("INFO"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": 3600, "rebind_interval": 3600}
+            {"session_poll_interval": 3600, "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == 5.0
@@ -619,7 +633,7 @@ def test_session_poll_interval_above_the_ceiling_is_clamped_once_and_read_from_s
 def test_session_poll_interval_inside_the_range_is_left_alone(wired_plugin_factory, caplog):
     with caplog.at_level("INFO"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": 3, "rebind_interval": 3600}
+            {"session_poll_interval": 3, "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == 3.0
@@ -634,7 +648,7 @@ def test_session_poll_interval_non_numeric_falls_back_to_default_and_warns(
 ):
     with caplog.at_level("WARNING"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": "5s", "rebind_interval": 3600}
+            {"session_poll_interval": "5s", "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
@@ -649,7 +663,7 @@ def test_session_poll_interval_nan_falls_back_to_default_and_warns(wired_plugin_
     `self._session_poll_interval` too, so a `nan` here is just as dangerous."""
     with caplog.at_level("WARNING"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": float("nan"), "rebind_interval": 3600}
+            {"session_poll_interval": float("nan"), "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
@@ -669,7 +683,7 @@ def test_session_poll_interval_true_falls_back_to_default_and_warns(
     boolean typo as a deliberate one-second poll."""
     with caplog.at_level("WARNING"):
         plugin, agent, sent = wired_plugin_factory(
-            {"session_poll_interval": True, "rebind_interval": 3600}
+            {"session_poll_interval": True, "rebind_interval": 300}
         )
 
     assert plugin._session_poll_interval == float(companion.DEFAULTS["session_poll_interval"])
@@ -679,6 +693,197 @@ def test_session_poll_interval_true_falls_back_to_default_and_warns(
         r.levelname == "WARNING" and "session_poll_interval" in r.getMessage()
         for r in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# rebind_interval: clamped 5-300, 0 -> floor (not default), thread survives
+# a non-numeric value (issue #105)
+# ---------------------------------------------------------------------------
+
+
+def test_rebind_interval_below_the_floor_is_clamped_to_5(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": 2})
+
+    assert plugin._rebind_interval == 5.0
+    assert any(
+        "rebind_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    ), "the clamp must be logged, not applied silently"
+
+
+def test_rebind_interval_above_the_ceiling_is_clamped_to_300(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": 5000})
+
+    assert plugin._rebind_interval == 300.0
+    assert any(
+        "rebind_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_rebind_interval_zero_takes_the_floor_not_the_default(wired_plugin_factory, caplog):
+    """The deliberate opposite of `keepalive_interval = 0`
+    (`test_keepalive_interval_zero_takes_the_default_not_the_floor` above):
+    that key's `0` used to mean "disable" and now lands on the default of 20.
+    This key's `0` never meant disable, only "reconcile on every pass", so it
+    lands on the floor of 5 instead - a test that only checked the value
+    differs from `0` would pass just as well against a plugin that mistakenly
+    fell back to the default 30, which is why the floor is asserted by its
+    exact number and the default is ruled out explicitly."""
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": 0})
+
+    assert plugin._rebind_interval == 5.0
+    assert plugin._rebind_interval != float(companion.DEFAULTS["rebind_interval"])
+    assert any(
+        "rebind_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_rebind_interval_inside_the_range_is_left_alone(wired_plugin_factory, caplog):
+    with caplog.at_level("INFO"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": 45})
+
+    assert plugin._rebind_interval == 45.0
+    assert not any(
+        "rebind_interval" in r.getMessage() and "clamp" in r.getMessage()
+        for r in caplog.records
+    ), "a value already inside 5-300 must not be reported as clamped"
+
+
+def test_rebind_interval_non_numeric_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog
+):
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": "30s"})
+
+    assert plugin._rebind_interval == float(companion.DEFAULTS["rebind_interval"])
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any(
+        "rebind_interval" in r.getMessage() and "30s" in r.getMessage() for r in warnings
+    ), "a non-numeric value must be reported at WARNING, distinct from the INFO clamp lines"
+
+
+@pytest.mark.parametrize(
+    "bad_value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+def test_rebind_interval_non_finite_falls_back_to_default_and_warns(
+    wired_plugin_factory, caplog, bad_value
+):
+    """`nan` is the case the issue names specifically: `now >= next_rebind`
+    is `False` for every comparison against `nan`, so a bare `nan` - a legal
+    TOML float literal - used to pin the reconcile silently after the first
+    pass and never run it again."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": bad_value})
+
+    assert plugin._rebind_interval == float(companion.DEFAULTS["rebind_interval"])
+    assert any(
+        r.levelname == "WARNING" and "rebind_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_rebind_interval_true_falls_back_to_default_and_warns(wired_plugin_factory, caplog):
+    """`float(True)` is `1.0`, which is out of range and would otherwise be
+    clamped to the floor and logged at INFO as a number, rather than at
+    WARNING as the type mistake it is."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory({"rebind_interval": True})
+
+    assert plugin._rebind_interval == float(companion.DEFAULTS["rebind_interval"])
+    assert any(
+        r.levelname == "WARNING" and "rebind_interval" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+class ClockAdvancingStop(SteppingStop):
+    """A `SteppingStop` that also advances `harness`'s fake clock by every
+    wait it records.
+
+    `next_rebind` inside `_background` is a local, reset to `0.0` on every
+    call, so two separate `run_background` calls cannot show spacing - each
+    one's first pass always reconciles regardless of the interval. Only a
+    double that lets the clock move *between* passes of one call can show
+    whether the second reconcile lands where the clamped interval says it
+    should, which is what proves `_background` is reading the clamped
+    attribute and not `self.options` on every pass.
+    """
+
+    def __init__(self, passes: int, harness) -> None:
+        super().__init__(passes)
+        self._harness = harness
+
+    def wait(self, timeout: float | None = None) -> bool:
+        result = super().wait(timeout)
+        self._harness.advance(timeout)
+        return result
+
+
+def test_rebind_interval_clamped_once_and_read_from_self(wired_plugin_factory, harness):
+    """Mirrors the `session_poll_interval` shape (test above), the honest
+    way: it drives `_background` and asserts on when the reconcile actually
+    runs, not on an attribute nothing in the test writes to.
+
+    `rebind_interval` does not govern `stop.waits` the way
+    `session_poll_interval` does - it governs *when the reconcile fires*,
+    so the observable here is the number of `list_local_ipv4` calls across
+    two passes with the clock advanced by `session_poll_interval` (5 s,
+    the fixture default) between them. Pass 1 always reconciles (`next_rebind`
+    starts at `0.0`), scheduling the next one at `+5` if `_background` reads
+    the clamped `self._rebind_interval`, or at `+250` if it read
+    `self.options["rebind_interval"]` instead - the value mutated below,
+    which on_loaded already clamped away and must stay inert. At exactly
+    5 s elapsed, only the clamped reading brings the second pass due.
+    """
+    plugin, agent, sent = wired_plugin_factory({"rebind_interval": 2})
+    assert plugin._rebind_interval == 5.0
+
+    plugin.options = {**plugin.options, "rebind_interval": 250}
+
+    # on_loaded already performed one eager reconcile of its own before
+    # spawning anything, so the count below is measured as a delta across
+    # the two manual passes rather than as an absolute total.
+    before = harness.names().count("list_local_ipv4")
+    stop = ClockAdvancingStop(passes=2, harness=harness)
+    plugin._stop = stop
+    plugin._background()
+    after = harness.names().count("list_local_ipv4")
+
+    assert after - before == 2, (
+        "the second pass must reconcile at the clamped 5 s mark, not sit "
+        "waiting for the mutated 250 s that on_loaded already discarded"
+    )
+
+
+def test_rebind_interval_non_numeric_does_not_kill_the_background_thread(
+    wired_plugin_factory, harness, caplog
+):
+    """The actual defect #105 fixes, and the one assertion in this file that
+    would have failed against the code the issue describes. Before the fix,
+    `float("30s")` ran at thread entry, outside the loop's own `try`, and
+    raised before the first pass ever completed - killing the thread that
+    also refreshes the session and polls gpsd, for the life of the process.
+    A test that only checks `plugin._rebind_interval == 30.0` passes whether
+    or not the thread that reads it is still alive, since the clamp itself
+    runs in `on_loaded`, not in `_background`. Only driving the loop and
+    observing all three of its jobs - the wait completing, the session
+    refreshed, gpsd polled, the address list enumerated - proves survival."""
+    with caplog.at_level("WARNING"):
+        plugin, agent, sent = wired_plugin_factory(
+            {"rebind_interval": "30s", "gps_source": "gpsd"}
+        )
+
+    stop = run_background(plugin, passes=2)
+
+    assert len(stop.waits) == 2, "the background thread died instead of completing both passes"
+    assert agent.session_calls > 0, "the session refresh must still run"
+    assert "read_gpsd" in harness.names(), "the gpsd poll must still run"
+    assert "list_local_ipv4" in harness.names(), "the listener reconcile must still run"
 
 
 # ---------------------------------------------------------------------------
@@ -696,7 +901,7 @@ def test_the_background_loop_broadcasts_nothing(wired_plugin):
     plugin.options = {
         **plugin.options,
         "session_poll_interval": 1,
-        "rebind_interval": 3600,
+        "rebind_interval": 300,
     }
 
     run_background(plugin, passes=5)
@@ -913,10 +1118,28 @@ def test_on_loaded_itself_schedules_the_reconcile_that_binds_a_tether(
     is expected to kill: with no `on_ready` call anywhere in this test,
     nothing would ever spawn `_background`, and the socket would never open
     inside the timeout.
+
+    Before issue #105, `rebind_interval = 0` forced a reconcile on every
+    pass here, which this test relied on to make the second pass (the one
+    that actually finds the address) arrive promptly. The clamp now refuses
+    `0` outright - it lands on the floor of 5, not on "every pass" - so
+    SPEC 2.4's own prescribed fix is used instead: the reconcile is driven
+    by `self.deps.now()`, so `now()` is replaced with a hand-controlled
+    clock and advanced past the floor once the address is in place, rather
+    than asking for an interval the plugin would no longer honour.
     """
     ws_port, http_port = free_ports
     box = {"addrs": []}
-    real_deps = companion.Deps(list_local_ipv4=lambda: list(box["addrs"]))
+    clock = {"t": 1_755_264_000.0}
+    clock_lock = threading.Lock()
+
+    def controlled_now() -> float:
+        with clock_lock:
+            return clock["t"]
+
+    real_deps = companion.Deps(
+        now=controlled_now, list_local_ipv4=lambda: list(box["addrs"])
+    )
     plugin = companion.Companion()
     plugin.deps = real_deps
     plugin.options = {
@@ -930,9 +1153,10 @@ def test_on_loaded_itself_schedules_the_reconcile_that_binds_a_tether(
         # Short enough that the test does not have to wait out the 1-5 s
         # clamp floor several times over, long enough that the first pass
         # (still finding nothing) is clearly over before the address
-        # appears.
+        # appears. rebind_interval is left at the 5 s floor, in range, so
+        # nothing here depends on the clamp correcting it.
         "session_poll_interval": 1,
-        "rebind_interval": 0,
+        "rebind_interval": 5,
         # This test is about the reconcile, and everything else in it being
         # real is deliberate - except gpsd. With the option default of
         # "auto", every background pass would open a real TCP connection to
@@ -952,6 +1176,8 @@ def test_on_loaded_itself_schedules_the_reconcile_that_binds_a_tether(
         assert not is_listening("127.0.0.1", http_port)
 
         box["addrs"] = ["127.0.0.1"]
+        with clock_lock:
+            clock["t"] += 10.0  # past the 5 s floor: the next wake reconciles
 
         assert wait_until(lambda: is_listening("127.0.0.1", ws_port), timeout=5.0), (
             "on_loaded must itself schedule the pass that reconciles a "

@@ -33,7 +33,9 @@ wrong, that is a finding for the report.
 ## The allowlist
 
 `SPEC.md` §11 pins every pwnagotchi attribute, method, config key, event and bettercap field
-that exists on jayofelony v2.9.5.6, with file-and-line evidence. §11.1 lists what is forbidden.
+this project may use, with file-and-line evidence. The jayofelony tag they were verified against
+is named in `.github/pinned_symbols.json` and nowhere else, so do not repeat it here or anywhere
+you write. §11.1 lists what is forbidden.
 
 **If a symbol is not in §11, you may not use it.** Not from upstream `pwnios.py`, not from an
 older pwnagotchi, not from another plugin, not from memory, not because it obviously ought to

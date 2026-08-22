@@ -69,6 +69,31 @@ jobs:
       - name: Check protocol.ts against the schemas
         run: node tools/gen-protocol-types.mjs --check
 
+  pinned-facts:
+    name: Pinned facts still hold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No flags: the default mode checks the pinned facts against
+      # `verified_against`, a fixed tag recorded in pinned_symbols.json. Nothing
+      # upstream does can turn this red, so a failure here means this repository
+      # changed a fact without re-verifying it, or lost the tag it verifies
+      # against - a defect worth blocking a merge for (SPEC.md 11.2). This is
+      # the "has this repository stayed honest" question; --latest asks the
+      # different one, "has upstream moved", and stays out of CI in
+      # upstream-drift.yml because an upstream release is not a reason for
+      # somebody's unrelated pull request to go red. Exit 0 is clean, 1 means a
+      # fact drifted, anything above 1 means the check itself could not run -
+      # all three fail this job, because a check that could not run has not
+      # passed.
+      - name: Check the pinned facts against verified_against
+        run: python .github/check_pinned_facts.py
+
   plugin:
     name: Plugin tests (${{ matrix.python }})
     runs-on: ubuntu-latest

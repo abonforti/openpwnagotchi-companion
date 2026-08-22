@@ -1,6 +1,6 @@
 {
   "upstream": "jayofelony/pwnagotchi",
-  "verified_against": "v2.9.5.6",
+  "verified_against": "v2.9.5.8",
   "note": [
     "The machine-checkable subset of SPEC.md section 11. Section 11 is the human",
     "record, with the reasoning and the evidence; this is the part a script can",
@@ -277,9 +277,9 @@
       "file": "pwnagotchi/defaults.toml",
       "kind": "contains_all",
       "text": [
-        "custom_plugins = \"/usr/local/share/pwnagotchi/custom-plugins/\""
+        "custom_plugins = \"/etc/pwnagotchi/custom-plugins/\""
       ],
-      "why": "the installer's fallback when the running config names none"
+      "why": "upstream's own default for the key the installer resolves; the literal moved between 2.9.5.6 and 2.9.5.8, so the installer reads it from the unit rather than carrying a copy, and this entry is what tells us when it moves again"
     },
     {
       "id": "F23b",
@@ -306,7 +306,7 @@
       "text": [
         "/etc/pwnagotchi/custom-plugins/"
       ],
-      "why": "disagrees with defaults.toml on purpose; if this ever matches, the resolution can be simplified"
+      "why": "on the verified tag this agrees with defaults.toml, where it once did not; the rule it justified survives because a unit may run either version, and this entry now pins the agreement rather than the disagreement"
     },
     {
       "id": "F26",

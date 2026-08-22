@@ -30,7 +30,7 @@ body:
       description: >
         From `pwnagotchi --version` on the unit. This project makes no compatibility promise
         across versions, so it is the first thing worth knowing.
-      placeholder: "2.9.5.6 (jayofelony)"
+      placeholder: "x.y.z.w (jayofelony, or which fork)"
     validations:
       required: true
 

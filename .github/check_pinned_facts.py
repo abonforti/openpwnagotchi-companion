@@ -10,22 +10,40 @@ failure would surface on a device, as a plugin that loads and does nothing.
 This closes that gap in the only way that costs nothing: it downloads upstream
 at a ref and confirms each symbol still exists with the shape claimed.
 
-Deliberately **not** pinned to a version, and deliberately not a required check.
-Declaring a supported range would mean committing to test every version inside
-it, and a range that is claimed but not tested is worse than no claim, because
-it reads as covered. So this runs on a schedule against whatever upstream is
-current, and its output is a ticket rather than a red pull request: upstream
-moving is not a reason for somebody's documentation change to fail CI.
+Three invocations, because they answer two different questions and a usage
+error is a third thing again. The default mode checks a **fixed tag** -
+`verified_against` in the manifest - so nothing upstream does can turn it red;
+the only way it fails is that this repository changed a fact without
+re-verifying it, or lost the tag it verifies against, which is exactly a
+defect worth blocking a merge for. It runs in CI, on every pull request, as a
+required check (SPEC.md section 11.2). `--latest` asks the other question,
+whether upstream has moved since, and is expected to fail eventually; it stays
+out of CI and runs on a schedule instead, filing a ticket rather than
+reddening somebody's unrelated pull request. `--ref` names an explicit tag,
+branch or SHA, overriding both, for examining a candidate version before
+anybody decides to move to it.
 
 What it cannot do: check behaviour. That `pwnagotchi.restart` really touches
 those files, that `agent.session()` really blocks - those are what the on-device
 run is for. This sees names and shapes.
 
 Usage:
-    python .github/check_pinned_facts.py [--ref v2.9.5.6] [--json]
+    python .github/check_pinned_facts.py [--json]
+        Default: checks against `verified_against` in the manifest (SPEC.md
+        section 11.2). This is "do the facts still hold where we said they
+        held", and it is what makes the recorded version load-bearing.
+
+    python .github/check_pinned_facts.py --latest [--json]
+        Checks against the newest upstream release. This is "has upstream
+        moved since", and is expected to fail eventually.
+
+    python .github/check_pinned_facts.py --ref <tag> [--json]
+        Checks against a named tag, branch or SHA, overriding both of the
+        above.
 
 Exit status: 0 when every fact holds, 1 when one does not, 2 on a usage or
-network error (so "upstream drifted" is distinguishable from "the check broke").
+network error, including a manifest with no `verified_against` to default to
+(so "upstream drifted" is distinguishable from "the check broke").
 """
 
 from __future__ import annotations
@@ -34,6 +52,7 @@ import argparse
 import ast
 import io
 import json
+import re
 import sys
 import tarfile
 import warnings
@@ -45,6 +64,16 @@ from typing import NoReturn
 
 MANIFEST = Path(__file__).resolve().parent / "pinned_symbols.json"
 TIMEOUT = 60
+# `upstream` is read from the manifest and used to build the fetch URL below.
+# This now runs on pull requests (a change on this branch put it there), and a
+# fork PR can edit `pinned_symbols.json` to steer the fetch at any repository
+# it names - a security audit flagged this. The workflow grants `contents:
+# read`, fork PRs get no secrets, and the fetched text is only parsed and
+# string-matched, so the risk is contained, not dangerous; it is still a
+# diff-controlled value driving a network call in CI and deserves the same
+# shape check `tools/install-on-pi.sh` applies to `--repo` for the same
+# reason.
+UPSTREAM_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 # The upstream tarball is a few megabytes. The cap exists so a malformed or
 # hostile response fails cleanly instead of taking the runner's memory with it.
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -151,6 +180,16 @@ def methods_of(tree: ast.Module, class_name: str) -> set[str]:
             }
     return set()
 
+
+# §11.2: the two questions read the same but mean opposite things, so the
+# report says which one this run answers rather than leaving a reader to
+# guess from the ref alone. Module scope so a test can read the wording
+# instead of restating it.
+QUESTION_LABELS = {
+    "verified": "checked against verified_against",
+    "latest": "checked against the latest release",
+    "asked": "checked against the requested ref",
+}
 
 TEXT_KINDS = {"contains_all", "absent"}
 REQUIRED_KEYS = {
@@ -264,9 +303,17 @@ def check(fact: dict, files: dict[str, str]) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ref", help="tag, branch or SHA; default is the latest release")
+    parser.add_argument("--ref", help="tag, branch or SHA; overrides --latest and the manifest")
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="check against the newest release instead of verified_against (discovery)",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     arguments = parser.parse_args()
+
+    if arguments.ref and arguments.latest:
+        fail("--ref and --latest are two different questions; pass one, not both")
 
     try:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -279,7 +326,32 @@ def main() -> int:
             fail(f"{MANIFEST.name} is malformed: {problem}")
 
     repo = manifest["upstream"]
-    ref = arguments.ref or latest_tag(repo)
+    # `..` is rejected outright, on top of the shape check below: it is an
+    # ordinary character inside a segment, so "owner/.." and "../owner" both
+    # match UPSTREAM_RE while still being able to walk the path curl builds
+    # from it. `tools/install-on-pi.sh` refuses any `..` in `--repo` for the
+    # same reason with its own `*..*` arm, regardless of slash count, and
+    # this mirrors it rather than tightening the pattern instead.
+    if ".." in repo or not UPSTREAM_RE.match(repo):
+        # Same path as "the check itself could not run": a malformed repo is
+        # not upstream drifting, so it must not read as one.
+        fail(f"{MANIFEST.name} has a malformed upstream: {repo!r}")
+
+    if arguments.ref:
+        ref = arguments.ref
+        question = "asked"
+    elif arguments.latest:
+        ref = latest_tag(repo)
+        question = "latest"
+    else:
+        ref = manifest.get("verified_against")
+        if not ref:
+            # §11.2: the default question is "do the facts still hold where we
+            # said they held", and that question has no answer without a
+            # recorded answer to check against. A manifest that lost this
+            # value is the check failing to run, not a clean result.
+            fail(f"{MANIFEST.name} has no verified_against to check the facts against")
+        question = "verified"
 
     files = fetch_tree(repo, ref)
 
@@ -299,11 +371,13 @@ def main() -> int:
         print(json.dumps({
             "repo": repo,
             "ref": ref,
+            "question": question,
             "checked": len(manifest["facts"]),
             "drifted": drifted,
         }, indent=2))
     else:
-        print(f"{repo}@{ref}: {len(manifest['facts'])} fact(s) checked")
+        asked = QUESTION_LABELS[question]
+        print(f"{repo}@{ref} ({asked}): {len(manifest['facts'])} fact(s) checked")
         for entry in drifted:
             print(f"  {entry['id']}: {entry['problem']}", file=sys.stderr)
             if entry["why"]:

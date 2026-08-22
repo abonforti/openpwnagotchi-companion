@@ -1,9 +1,10 @@
 # openpwnagotchi-companion — Build Specification
 
-Version 2. Supersedes v1. Every API claim in this document has been verified against
-`jayofelony/pwnagotchi` tag `v2.9.5.6`; the evidence is in §11 (Pinned Facts). Claims that
-could not be verified are marked **UNVERIFIED** and carry an explicit instruction on what to
-do instead of guessing.
+Version 2. Supersedes v1. Every API claim in this document has been verified against one
+tag of `jayofelony/pwnagotchi`, and **that tag is named in exactly one place**:
+`verified_against` in `.github/pinned_symbols.json`. The evidence is in §11 (Pinned Facts).
+Claims that could not be verified are marked **UNVERIFIED** and carry an explicit instruction
+on what to do instead of guessing.
 
 A free, self-hostable PWA companion for pwnagotchi (jayofelony fork), replacing the paid
 iOS app "Pwnagotchi Companion" (`BraedenP232/PwnIOS`). Backend is a hardened fork of that
@@ -3459,7 +3460,7 @@ release asset into `web_root`.
 
     install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]
                      [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]
-                     [--plugin-only] [--web-only] [--dry-run]
+                     [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]
 
 Runs **on the Pi**, as root. POSIX `sh`, `set -eu`, and nothing beyond `curl`, `tar` and
 `sha256sum`. Non-interactive: it never prompts, so it is the same invocation by hand, from a
@@ -3471,10 +3472,11 @@ installs the PWA and leaves `companion.py` to a manual `scp` is a script that pr
 web server serving an app with nothing to talk to. So:
 
 1. `plugin/companion.py` into the custom plugins directory. That directory is **resolved, never
-   hardcoded**: read `main.custom_plugins` from `--config` (default `/etc/pwnagotchi/config.toml`,
-   F24), fall back to the `defaults.toml` value `/usr/local/share/pwnagotchi/custom-plugins/`
-   (F23). The two paths shipped with the image disagree (F25), so guessing picks the wrong one
-   on some units and the plugin silently never loads.
+   hardcoded, and the fallback is resolved too**: read `main.custom_plugins` from `--config`
+   (default `/etc/pwnagotchi/config.toml`, F24), and when the user configuration does not set it,
+   read the same key from the `defaults.toml` **of the pwnagotchi installed on this unit** rather
+   than from a copy of its value (§5.3.1). The script runs on the unit, so the authoritative
+   answer is under its hand and there is no reason to guess.
 2. The PWA into `--web-root` (default `/var/www/openpwn-companion`).
 
 The archive comes from a GitHub Release: the latest, or the one named by `--tag`, or a local
@@ -3554,8 +3556,67 @@ carries: the flat dotted form `main.custom_plugins = "..."`, with or without spa
 the same key inside a `[main]` table, including an indented table; and either quote style. A
 commented-out line is not a match, and neither is `custom_plugins` under any other table - a
 plugin of its own may legitimately have such a key. A trailing slash on the value is tolerated.
-When the file is absent, or the key is not present in any of those forms, fall back to the F23
-default and say which path was chosen and why on stdout. `--plugins-dir` overrides both.
+When the file is absent, or the key is not present in any of those forms, fall back to the
+unit's own `defaults.toml` as described below, and say which path was chosen and why on stdout.
+`--plugins-dir` overrides everything.
+
+**The fallback is read, not remembered (issue #157).** Earlier versions of this script carried
+`/usr/local/share/pwnagotchi/custom-plugins/` as a literal, which was upstream's default at
+2.9.5.6. Upstream moved it to `/etc/pwnagotchi/custom-plugins/` at 2.9.5.8, and on any newer unit
+whose configuration does not set the key the script would have written the plugin to a directory
+pwnagotchi no longer reads, reported success, and left the owner with a plugin that never loads.
+Nobody had seen it because it only fires when the user configuration is silent, and a unit
+whose configuration names the key never reaches the fallback at all. That is the shape of a
+defect that waits for somebody else.
+
+The script runs on the unit as root, so the value it wants is on the disk in front of it. It
+resolves the fallback by reading `custom_plugins` out of the installed package's own
+`defaults.toml`, found under the image's Python tree (F26), with the **same parser** the user
+configuration goes through: one implementation, so the two files cannot be read by two sets of
+rules that drift apart. The resolution order is therefore:
+
+1. `--plugins-dir`, which overrides everything and is how a unit with an unusual layout is
+   handled without teaching the script about it.
+2. `main.custom_plugins` in `--config`.
+3. `custom_plugins` in the installed `defaults.toml`.
+4. **No fallback after that.** If none of the three answers, the script fails, names all three
+   places it looked, and points at `--plugins-dir`. It does not install to a guess. A wrong
+   directory here is invisible: every file is written, every permission is set, the script exits
+   0, and the plugin simply never loads. Refusing is louder than that and no more inconvenient,
+   because the fix is one flag.
+
+**More than one Python tree under `/opt/.pwn/` is refused, not resolved.** It means a unit in a
+state this script has not seen, most plausibly a partial upgrade, and choosing between the trees
+would put back the silent wrong answer the whole change exists to remove. The script lists every
+`defaults.toml` it found and stops. This is the same judgement as the point above and is written
+down separately because it is the one case where the script has an answer available and declines
+to use it, which a later reader would otherwise be tempted to tidy away.
+
+**`--pwn-prefix DIR` names the tree, defaulting to `/opt/.pwn`.** It is a **seam, documented
+rather than hidden**, and calling it anything else would be dressing it up: F26 pins `/opt/.pwn`
+as hardcoded in the image's own `01-motd`, `profile`, `sudoers` and `pwnagotchi-launcher`, so a
+unit whose tree is elsewhere is not an image this document describes, and `--plugins-dir` already
+answers that unit in one flag. What the seam buys is that the third resolution step, which is the
+whole of the fix, can be exercised by an ordinary test run. Without it that step is reachable only
+by a test that needs root and writes into the host's real `/opt/.pwn`, and a behaviour covered
+only by a test most runs skip is not covered. A documented flag beats an undocumented environment
+variable for the same job, so it is in `usage()` and in `docs/SETUP.md` with the others.
+
+It is validated the way `--web-root` is, as an absolute path, and it is interpolated into a glob
+rather than into a URL, so the reasoning behind `--tag`'s character check does not apply: a
+strange value here fails to match and the script refuses, which is the behaviour it would have
+had anyway. **Whitespace is the exception and is rejected outright.** The value feeds an unquoted
+glob and a space-separated accumulator that counts the matches, so a prefix containing any of the
+default `IFS` characters, space, tab or **newline**, word-splits and the count is wrong. The
+first version of the guard listed space and tab and let a newline through, which is the same
+mistake in miniature: enumerating the cases you thought of instead of naming the class. It fails
+closed, which is exactly why nothing caught it for a round. Refusing outright is a usage error
+the caller can read, where the alternative is an `IFS` dance in two places in POSIX `sh` to
+support a path nobody has.
+
+**This costs the fallback its version independence and that is the point.** The script no longer
+knows or cares what upstream's default is, on any version, which is what makes F23's literal
+something the drift check reports rather than something the installer depends on.
 
 **Updates replace, they do not merge.** The new tree is swapped in whole, so a file the previous
 build shipped and the new one does not is gone afterwards. A stale asset served alongside a new
@@ -3570,7 +3631,7 @@ install does not rotate it, so `.previous` is always a version that worked.
 checksum, archive members, plugin source, path resolution - and stops before the first write. A
 dry run that approves an archive the real run would refuse is worse than no dry run. It prints
 the resolved plugins directory, web root and config path, which is also the only way to see
-which side of the F23/F25 disagreement the script landed on without installing anything.
+where the resolution below landed without installing anything.
 
 **Modes and ownership.** Installed PWA files are `0644` and directories `0755`, because the
 HTTPS server has to read them; `companion.py` is `0644`. Ownership is left to whatever the
@@ -3963,6 +4024,19 @@ a **subprocess** against a throwaway checkout rather than calling `main()`, beca
 status, the printed annotation and the *absence of a traceback* are the contract, and none of the
 three is observable in-process.
 
+`tests/tools/test_install.py` drives `install-on-pi.sh` the same way, as a subprocess against a
+throwaway root. Since issue #157 the part of it worth naming here is the resolution of
+`main.custom_plugins` (§5.3.1): each of the three sources answering only when the one above it
+did not, the refusal when none of them does, and the refusal when more than one tree matches.
+Two of those assertions are unusual enough to say why they exist. **One reads the shipped script
+as text and asserts neither candidate custom-plugins path appears in it at all**, which is the
+assertion that would have caught the original defect and the only one that still catches it if a
+literal is reintroduced in a branch no test happens to take. **The other asserts the exit status
+and that nothing was written**, rather than that a message appeared: a run that prints the right
+complaint and installs anyway is the failure being guarded against, and the message alone cannot
+tell the two apart. `--pwn-prefix` is what lets the third source be exercised without root and
+without writing into the host's real `/opt/.pwn`.
+
 ### 10.7 Coverage gate
 
 **The floor is 85% of lines and branches. The target is as high as the code allows.** Those are
@@ -4085,16 +4159,55 @@ criteria in its issue are satisfied. Not before.
 
 ---
 
-## 11. Pinned Facts (verified against `jayofelony/pwnagotchi` v2.9.5.6)
+## 11. Pinned Facts (verified against the tag in `.github/pinned_symbols.json`)
 
 **This is the allowlist.** Symbols not listed here are out of bounds. Line numbers refer to the
-v2.9.5.6 tree and are indicative; the names and semantics are what matter.
+verified tree and are indicative; the names and semantics are what matter.
+
+**One place names the version, and it is not this heading.** `verified_against` in
+`.github/pinned_symbols.json` is that place, and CI runs the check against it on every pull
+request (§11.2), so it cannot go stale unnoticed. Two drafts of this paragraph claimed that
+before it was true: the first said the drift check already read the value, and it did not, and
+the second said the value being read was enough, when nothing was asking the question it
+answers. Both were caught in review. The claim is only worth making once something executes it.
+This document, the reference-hardware note in `CLAUDE.md`, `README.md` and `docs/SETUP.md` all
+cite it rather than repeat it.
+A version literal that does appear in this document is there for one of two reasons, and never
+to restate the current answer. Either it dates a **particular observation** on a particular unit
+(F26's Python 3.13.5, F27's `websockets` 17.0.1), or it names a **tag other than the verified
+one** in order to say what changed between them, which is what F23 and §5.3.1 do about the
+custom-plugins default. Both are claims a reader can check; a second copy of `verified_against`
+is not, because nothing keeps it honest.
+That distinction is the whole of issue #151: "`agent.mode` is a plain attribute" is not a claim
+about pwnagotchi, it is a claim about a version of it, and a reader has to be able to tell which
+version without guessing which of two numbers is the current one.
+
+**The tag the facts hold for and the version a given unit runs are allowed to differ**, and this
+paragraph is where that is decided rather than somewhere it can be cited from. Issue #151 said
+§12 already settled it; §12 is about this project's own SemVer line and says nothing about
+pwnagotchi versions at all, and the claim was repeated from the ticket into a draft of this
+paragraph before anyone read §12. Recorded because it is the second time in this document that a
+citation was inherited rather than checked, and the check costs one grep. When they do, the facts
+are what the code was written against and the unit is what it has to survive: the two are named
+separately wherever both matter, and the installer resolving its own paths from the running unit
+rather than from a literal in this document (§5.3.1) is the pattern for handling the difference.
+
+**The heading claims less than it looks like it claims.** Three entries are not about
+`jayofelony/pwnagotchi` at all and cannot be checked at any tag of it: F12 pins `pasv_mode.py` in
+`abonforti/pwnagotchi-plugins`, F22 pins upstream `pwnios.py` in `BraedenP232/PwnIOS`, and F29
+pins a commit in `pwnagotchi-plugins`. Each carries its own ref. And the manifest encodes names
+and shapes, never behaviour: that `agent.session()` blocks, that `pwnagotchi.restart()` touches
+what it touches, and the reading of `ready` in manual mode are asserted from source and are not
+re-verified by any run. Several entries say outright which of their clauses are not
+machine-checked. So the tag covers **what the manifest encodes**, and the rest is evidence a
+person read, cited so the next person can read it too.
 
 **This table has a machine-checked twin.** `.github/pinned_symbols.json` encodes the part of it
-a script can confirm, and `.github/check_pinned_facts.py` runs weekly against current upstream and
-opens a ticket when something no longer holds. **Editing a fact here means editing that file too**,
-and `tests/tools/test_pinned_facts.py` fails if a fact gains an entry in one and not the other -
-two allowlists drifting apart is the failure the checker exists to prevent, one level up.
+a script can confirm, and `.github/check_pinned_facts.py` checks it against upstream and opens a
+ticket when something no longer holds. **Editing a fact here means editing that file too**, and
+`tests/tools/test_pinned_facts.py` fails if a fact gains an entry in one and not the other - two
+allowlists drifting apart is the failure the checker exists to prevent, one level up. §11.2
+below says which of two questions a given run is asking.
 
 | ID | Fact | Evidence |
 |---|---|---|
@@ -4122,12 +4235,12 @@ two allowlists drifting apart is the failure the checker exists to prevent, one 
 | F26 | The image installs its Python under `/opt/.pwn/`, and that tree is **3.13**, not the `>=3.11` floor of F21. CI must test the shipped version | `stage3/06-patches/files/01-motd` reads `/opt/.pwn/lib/python3.13/site-packages/pwnagotchi/_version.py`; `/opt/.pwn/bin` is likewise hardcoded in `stage3/06-patches/files/profile`, `sudoers` and `pwnagotchi-launcher`. Confirmed as 3.13.5 on a unit running 2.9.5.6 |
 | F27 | The **installed `websockets` version is not knowable from upstream** and must not be assumed. `pyproject.toml` pins nothing (F21), so it is whatever pip resolved when that image was built, and `plugins/default/auto-update.py` runs `pip install` on the unit afterwards. One unit running 2.9.5.6 was observed at 17.0.1 - evidence that a modern major occurs in the field, not that every unit has one | `pwnagotchi/plugins/default/auto-update.py`; `pyproject.toml` |
 | F22 | Upstream `pwnios.py` binds `websockets.serve(self._handle_client, "0.0.0.0", 8082, ...)` and reads `self.agent.access_points` before falling back to `_access_points` — both are bugs this fork fixes | `BraedenP232/PwnIOS/pwnios.py:292-293,653-656,678-680` |
-| F23 | Custom plugins are loaded from `config['main']['custom_plugins']`, whose default is `/usr/local/share/pwnagotchi/custom-plugins/`. The key is optional: `load_from_path` is called only `if 'custom_plugins' in config['main']`. **Machine-checked entries**: F23, F23b pin the literal default custom-plugins path in `defaults.toml` and the `'custom_plugins' in` guard in `plugins/__init__.py`. | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
+| F23 | Custom plugins are loaded from `config['main']['custom_plugins']`. The key is optional in the user configuration: `load_from_path` is called only `if 'custom_plugins' in config['main']`, and the merged view always has it because `defaults.toml` sets it. **The default value is version-dependent and must not be copied anywhere.** It was `/usr/local/share/pwnagotchi/custom-plugins/` at 2.9.5.6 and is `/etc/pwnagotchi/custom-plugins/` at 2.9.5.8, which is why §5.3.1 has the installer read it from the unit it is installing on rather than carry a literal (issue #157). **Machine-checked entries**: F23, F23b pin the current default in `defaults.toml` and the `'custom_plugins' in` guard in `plugins/__init__.py`. The first exists to report the move, not to be depended on. | `pwnagotchi/defaults.toml:27`; `pwnagotchi/plugins/__init__.py` |
 | F24 | The user configuration the image merges over the defaults is `/etc/pwnagotchi/config.toml` (`--user-config`), and `plugins/__init__.py` writes back to that same path | `pwnagotchi/cli.py`; `pwnagotchi/plugins/__init__.py` |
 | F31 | **On the boot path, `ready` is fired only in auto mode**, because the manual path does not reach the code that fires it. `automata.py` emits `plugins.on('ready', self)` and is reached through `agent.start()`; `cli.py` has two entry points, and `do_auto_mode` calls `agent.start()` while `do_manual_mode` sets the mode, parses the last session and enters a loop that sleeps and emits `internet_available`. **There is a second route and it is not on the boot path**: `toggle_plugin` in `plugins/__init__.py` fires `ready` at the single plugin it is enabling, handing it `view.ROOT._agent`, so a plugin switched on from the web UI receives an agent in any mode. So the rule is about how a unit boots, not about the event: a plugin loaded at boot into manual mode gets no agent, ever (§2.5, §2.6.0, issue #140), and the same plugin enabled by hand afterwards gets one. Manual mode is not hookless either, since that loop emits `internet_available` every five seconds. **Machine-checked entries**: F31a, F31b, F31c pin where the boot path emits `ready`, that `cli.py` never emits it itself, and that the toggle path exists. That `do_manual_mode` does not call `agent.start()` is read from the two function bodies and is not machine-checked. | `pwnagotchi/automata.py`; `pwnagotchi/cli.py`, `do_manual_mode` and `do_auto_mode`; `pwnagotchi/plugins/__init__.py`, `toggle_plugin`, observed on 2.9.5.8 |
 | F30 | **A plugin is executed but never registered in `sys.modules`.** `load_from_file` is `spec_from_file_location`, `module_from_spec`, `exec_module`, and no assignment to `sys.modules[plugin_name]`. So during import `sys.modules.get(__name__)` is `None`, and **any module-scope construct that resolves its own module through `sys.modules` fails at import**: with `from __future__ import annotations` in force, that includes `@dataclasses.dataclass`, which looks the module up to resolve string annotations while searching for `KW_ONLY` (CPython `dataclasses.py`, `_is_type`). It equally includes `typing.get_type_hints`, and anything else that resolves annotations by name. The plugin was unloadable on every unit for this reason (issue #136), while 925 tests passed, because pytest imports it the ordinary way and an ordinary import registers it. `tests/test_plugin_loads.py` pins the contract. **Machine-checked entries**: F30a, F30b pin that the three calls `load_from_file` is made of are still in that file, and that the file never names `sys.modules` at all. The second is the fact itself rather than a proxy for it; the first only reports that the three calls are present, since it is not scoped to one function and cannot see a fourth call added beside them. | `pwnagotchi/plugins/__init__.py`, `load_from_file`, observed on 2.9.5.8 |
-| F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`, which is **not** the `defaults.toml` value. The two disagree, so the directory must be resolved from the running configuration and never hardcoded | `stage3/06-patches/files/profile` vs `pwnagotchi/defaults.toml:27` |
-| F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked entries**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `v2.9.5.6` or `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
+| F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`. Nothing else watches that file, so the pin stays and fires if the profile moves. It once recorded a **disagreement** with `defaults.toml` and the rule was drawn from it; at the verified tag the two agree (issue #157), and the rule now rests on F23 | `stage3/06-patches/files/profile` |
+| F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked entries**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
 | F29 | `pisugarx_ext.py` defines **two** classes. `plugins.loaded['pisugarx_ext']` is the `PiSugar(plugins.Plugin)` at line 544, which holds its hardware client as `self.ps = PiSugarServer()`. The battery state lives on that client, not on the plugin: `PiSugarServer.__init__` sets `battery_level` and `power_plugged`, and the accessors are `get_battery_level()` and `get_battery_power_plugged()`. **The attributes are kept current, and the accessors touch no hardware**: `start_timer()` runs `update_value()` on a `daemon=True` thread, and that loop rewrites the attributes on a `time.sleep(3)` cycle; each accessor is a one-line `return` of the corresponding attribute. **`ready` says whether any of it is real**: it is `False` from the constructor and is set `True` only at the end of `_connect_device`, after a device has been found and its 256 registers have been read, and nothing anywhere in the file sets it back to `False`. `start_timer()` is likewise called only after a device is found, so a loaded plugin with no PiSugar attached loops on `time.sleep(5)` forever with `ready` `False`, no refresh running, and `battery_level` and `power_plugged` still at their constructor values `0` and `False`. The plugin mirrors the flag as `self.ready = self.ps.ready`. **`battery_charging` is dead**: it is assigned `0` in that same constructor and nowhere else in the file, and `get_battery_charging()` has a body of `pass`, so it returns `None`. Upstream `jayofelony` `pisugarx.py` has the identical shape, so the same traversal reaches both tiers; that file is on branch **`noai`** and does **not** exist on `master`, which 404s | [`abonforti/pwnagotchi-plugins` @ `abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/blob/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be/pisugarx_ext.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61 (`battery_level`, `battery_charging`), 63 (`power_plugged`), 75-96 (`_connect_device`, `time.sleep(5)` when no device is found), 99 (`self.start_timer()`, reached only after one is), 102 (`self.ready = True`), 105-109 (`start_timer`, `timer_thread.daemon = True` at 108), 111 (`def update_value`), 203 and 206 (`time.sleep(3)`), 330-336 (`get_battery_level`), 528-534 (`get_battery_charging`, body `pass`), 520-526 (`get_battery_power_plugged`), 544 (`class PiSugar(plugins.Plugin)`), 655 (`self.ps = None`), 658 (`self.ps = PiSugarServer()`), 664 (`self.ready = False`), 731 and 947 (`self.ready = self.ps.ready`), and commit [`abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/commit/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be) (whose message is about display behaviour when the PiSugar does not answer on I2C; the bit-7 belief is in the file it touches, as a comment at line 985, see 2.11.1). Upstream: [`jayofelony/pwnagotchi` branch `noai` @ `9fc1b6f0`, `pwnagotchi/plugins/default/pisugarx.py`](https://github.com/jayofelony/pwnagotchi/blob/9fc1b6f0cc4b7002ecbf5f3ab1e7623109fe5bf9/pwnagotchi/plugins/default/pisugarx.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61, 63, 102 (`self.ready = True`), 105-109 (`start_timer`, `daemon = True` at 108), 111 (`def update_value`), 202 and 205 (`time.sleep(3)`), 329-335 (`get_battery_level`), 519-525 (`get_battery_power_plugged`), 543 (`class PiSugar(plugins.Plugin)`), 566 (`self.ps = None`), 569 (`self.ps = PiSugarServer()`), 575 (`self.ready = False`), 619 and 811 (`self.ready = self.ps.ready`) |
 
 ### 11.1 Explicitly forbidden
@@ -4153,6 +4266,75 @@ If you need something in this list, the answer is a spec change requested from t
 workaround.
 
 ---
+
+### 11.2 The checker has two questions, and they are not the same question
+
+**"Do the facts still hold where we said they held?"** is the default: no `--ref` and no
+`--latest`. The script reads `verified_against` from the manifest and checks against that tag.
+This is what makes the recorded version load-bearing rather than decorative: a fact edited
+without re-verifying it fails the next run, and a `verified_against` nobody maintains fails too,
+because the facts have to hold at whatever it names.
+
+**"Has upstream moved since?"** is `--latest`, which resolves the newest release and checks
+against that. This is discovery, it is expected to fail eventually, and failing is the point: it
+is how the project learns that a fact needs re-checking. `.github/workflows/upstream-drift.yml`
+runs this one on its schedule and files the ticket.
+
+**The two questions belong in different places, and this is the whole reason for splitting
+them.** The default runs **in CI, on every pull request, as a required check**. The `--latest`
+run stays out of CI and stays advisory, exactly as `upstream-drift.yml` has always argued: an
+upstream release is not a reason for somebody's unrelated pull request to go red. That argument
+is about `--latest` and does not carry to the default, which checks a **fixed tag**: nothing
+upstream does can turn it red, so the only way it fails is that this repository changed a fact
+without re-verifying it, or lost the tag it verifies against. That is precisely a defect worth
+blocking a merge for. It needs the network, like every other CI job that installs anything, and
+a fetch failure is a red job rather than a silent pass, because a check that cannot run has not
+passed. That is the rule §13 states for the security scans, from issue #126, and it applies here
+for the same reason.
+
+Two things this needs in order to be true, and both are easy to leave undone. It must be **an
+ordinary job that fails the workflow**, never `continue-on-error` and never otherwise advisory.
+And its context, `Pinned facts still hold`, must be in the **required checks of the ruleset on
+`master`**, which lives in the repository's settings and not in any file here. The second is
+worth naming because `.github/workflows/pull-request.yml` auto-merges on required checks alone:
+a job outside that list is one an automatic merge does not wait for, and a pull request touching
+only Markdown is classified documentation-only, so the job would be exactly the kind of gate that
+looks present and is not. `tests/test_ci_gates.py` pins the half that lives in the repository,
+including that the job's `name:` is that exact string, since renaming the job would leave the
+required context reporting nothing for ever. Adding the context is issue #164, deliberately
+after the branch that introduces the job rather than with it: a required context that a pull
+request's head cannot report leaves that pull request waiting indefinitely, and three were open
+at the time.
+
+**Putting the checker on a pull-request path changed who can steer it.** The repository it fetches
+comes from `upstream` in the manifest, interpolated into a URL, and until this change nothing
+validated it: a pull request editing that field redirected CI's outbound fetch wherever it liked.
+It is contained rather than dangerous, since the job holds `contents: read`, a fork's pull request
+gets no secrets, and the archive is parsed and string-matched and never executed. It is still a
+value out of the diff steering a network call, so `upstream` is now checked against the
+`owner/name` shape, the same check and the same reasoning `tools/install-on-pi.sh` applies to
+`--repo`, and a value that fails it is the check refusing to run rather than a drift result. The
+member-count limit that would bound a hostile archive is issue #165, and the finding is the
+ordinary consequence of a script's audience widening: it was written for a weekly cron, where a
+dead runner cost nothing and nobody could reach it from outside.
+
+`--ref` names a tag explicitly and overrides both, which is how a candidate version is examined
+before anybody decides to move to it. Passing `--ref` and `--latest` together is a **usage error**
+and not a precedence rule: they are the two different questions, and a script that silently picked
+one would answer a question nobody asked.
+
+**A manifest with no `verified_against`, or an empty one, is the check failing rather than
+drifting.** It exits the way a malformed manifest already does, above 1, so
+`.github/workflows/upstream-drift.yml` turns the job red instead of filing a ticket saying
+upstream moved. Nothing moved: the repository lost the answer it checks against, which is a defect
+here and reads nothing like the ticket the other exit produces.
+
+Before this was written down the script had one mode, defaulting to the latest release, so the
+number in the manifest was read by nothing and the weekly job answered only the second question
+(issue #151). The distinction matters because the two failures mean opposite things. The first
+means **this repository is wrong about the code it was written against**, which is a defect here.
+The second means **upstream changed**, which is news, and may well end in widening what the plugin
+tolerates rather than following it.
 
 ## 12. Versioning and releases
 

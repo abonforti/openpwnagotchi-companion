@@ -26,11 +26,27 @@ Decisions Ledger (§0) is not to be re-litigated.
 
 ## Reference hardware
 
-Development targets a Pi Zero 2 W running jayofelony 2.9.5.6 with a Waveshare 2.13" v3 display
+Development targets a Pi Zero 2 W with a Waveshare 2.13" v3 display
 and a PiSugar 3, reached over BT PAN (the `172.20.10.0/28` subnet every iPhone Personal Hotspot
 uses) or the USB gadget interface (`10.0.0.2`, desktop only — an iPhone cannot use it). The
 `pasv_mode.py` plugin adds a third state PASV between AUTO and MANU; the companion maps it as a
 soft dependency.
+
+**Two version numbers, and they are not the same fact.** What the pinned facts were verified
+against is `verified_against` in `.github/pinned_symbols.json`, and that file is the only place
+it is written down (SPEC.md §11, issue #151). What the owner's unit happens to run is a separate
+thing, it changes when the unit updates itself, and **its current value is not recorded here**:
+ask, the same way you ask how the unit is reached. Code is written against the first; it has to
+survive the second.
+
+**Two exemptions, and SPEC §11 states both.** A **dated observation** is allowed, because it is
+evidence rather than a claim about today: F26 and F27 in SPEC §11 each say what was seen on a
+unit at a stated version, and the `PYTHON_VERSION` comment in `ci.yml` says where its number was
+measured. Those age into history rather than into being wrong, which is the test for whether a
+version may be written down. The second exemption is **naming a tag other than the verified one
+in order to say what changed between them**: F23 records where `custom_plugins` moved, and
+§5.3.1 and its tests say which release moved it. A change is not a fact about today either, and
+describing one takes two version numbers.
 
 ## Workflow (automatic — do not wait to be asked)
 

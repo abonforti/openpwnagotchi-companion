@@ -11,7 +11,8 @@ goes wrong produce no error at all.
 You need:
 
 - A pwnagotchi running the [jayofelony fork](https://github.com/jayofelony/pwnagotchi), reachable
-  over a tether. Development targets 2.9.5.6 on a Pi Zero 2 W.
+  over a tether. Development targets a Pi Zero 2 W. The companion resolves the paths it needs
+  from your unit rather than assuming a version's defaults, so it does not ask you to match one.
 - Your phone tethered to it, or the unit joined to your phone's Personal Hotspot over Bluetooth.
 - A computer with `openssl`, to issue the certificates. Not the pwnagotchi itself.
 
@@ -112,11 +113,13 @@ sha256sum dist.tgz > SHA256SUMS
 It installs two things: `companion.py` into the unit's custom plugins directory, and the built
 PWA into `/var/www/openpwn-companion`.
 
-The plugins directory is **resolved from your configuration**, not assumed. The pwnagotchi image
-ships two different paths for it - `/usr/local/share/pwnagotchi/custom-plugins/` in
-`defaults.toml`, and `/etc/pwnagotchi/custom-plugins/` in the shell aliases - so the installer
-reads `main.custom_plugins` from `/etc/pwnagotchi/config.toml` and falls back to the first. It
-prints which one it chose.
+The plugins directory is **resolved from your unit**, not assumed. The installer reads
+`main.custom_plugins` from `/etc/pwnagotchi/config.toml`, and if you have not set it, reads the
+same key from the `defaults.toml` of the pwnagotchi installed on the unit. It never carries a
+path of its own: that default changed between pwnagotchi versions, and a copy of it would be
+right on one and quietly wrong on the other. If neither file answers, the installer stops and
+tells you to pass `--plugins-dir`, rather than installing somewhere the unit does not read. It
+prints which path it chose either way.
 
 To see what it would do without writing anything:
 
@@ -129,7 +132,9 @@ the first write.
 
 Useful flags: `--tag v0.2.0` for a specific release, `--archive ./dist.tgz` for a local build
 (a `SHA256SUMS` must sit beside it; there is no way to skip verification), `--web-root` and
-`--plugins-dir` to override the destinations, `--plugin-only` and `--web-only` to do one half.
+`--plugins-dir` to override the destinations, `--plugin-only` and `--web-only` to do one half,
+and `--pwn-prefix` to say where the pwnagotchi package tree lives if it is not under `/opt/.pwn`
+(that is where the installer looks for the `defaults.toml` it reads the plugins directory from).
 
 After an update, the previous web root is kept as `/var/www/openpwn-companion.previous`.
 

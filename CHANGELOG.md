@@ -25,6 +25,21 @@ against real hardware.
   served from then on stale. A bare `nan`, which TOML has a literal for, stopped the reconcile
   silently after the first pass. If your `rebind_interval` is a number in range, nothing changes
   for you (issue #105).
+- **`install-on-pi.sh` reads the plugins directory from your unit, and refuses rather than
+  guessing.** It used to fall back to `/usr/local/share/pwnagotchi/custom-plugins/` when
+  `/etc/pwnagotchi/config.toml` set no `main.custom_plugins`. That was upstream's default at
+  2.9.5.6; upstream moved it at 2.9.5.8, so on a newer unit with a silent configuration the
+  installer wrote the plugin to a directory pwnagotchi no longer reads, printed success, and left
+  a plugin that never loads. It now reads `custom_plugins` from the `defaults.toml` of the
+  pwnagotchi installed on the unit, and if neither file answers it **exits 1** where it used to
+  exit 0, naming every place it looked. If your unit sets `main.custom_plugins`, nothing changes
+  for you (issue #157).
+- **New `--pwn-prefix DIR` on the installer**, default `/opt/.pwn`, naming where the pwnagotchi
+  package tree lives. Only needed if yours is somewhere else.
+- **The pinned pwnagotchi version is named in one place**, `verified_against` in
+  `.github/pinned_symbols.json`, and `check_pinned_facts.py` now runs against that tag by default
+  instead of against the latest release. `--latest` asks the other question, has upstream moved,
+  and is what the weekly job runs (issue #151).
 
 - **`mode` is null when the plugin has no agent**, on both `Stats` and `FaceStatus`, where it
   used to be `AUTO`. This is a re-shaped message and therefore the project's first MINOR bump

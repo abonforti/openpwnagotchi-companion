@@ -32,6 +32,13 @@ Scope of this module, stated explicitly because it does not cover every
   scan could not run at all.
 - A plain-`grep` step this module does not recognise by name fails a
   dedicated guard test rather than being silently left out of coverage.
+- SPEC.md 11.2 also asserts something about a workflow that is not a grep
+  scan: `check_pinned_facts.py` runs in `ci.yml` with no mode flag, as an
+  ordinary (non-advisory) job, while `--latest` runs only from
+  `upstream-drift.yml`'s own schedule. That split is checked by parsing the
+  same two workflow files' YAML and reading the `run` scripts and step/job
+  keys directly - no stub process needed, since the claim is about which
+  command line is written down, not about a script's runtime behaviour.
 
 This test does not read `plugin/companion.py` or any production code; its
 subject is the shell scripts embedded in `.github/workflows/*.yml`, extracted
@@ -559,3 +566,145 @@ def test_pull_request_auto_merge_fails_when_scan_does_not_run(tmp_path, broken_g
         "either - it must refuse to decide at all"
     )
     assert not merge_marker.exists(), "gh pr merge must not run when the scan did not run"
+
+
+# ---------------------------------------------------------------------------
+# check_pinned_facts.py's two questions belong in different workflows
+# (SPEC.md 11.2, "The two questions belong in different places").
+#
+# `ci.yml` must ask the default question (no mode flag), as an ordinary job
+# that fails the workflow on drift; `upstream-drift.yml` must ask `--latest`,
+# on its own schedule, and CI must never ask that one - an upstream release
+# is not a reason for someone's unrelated pull request to go red, which is
+# the exact failure `upstream-drift.yml`'s own header argues against.
+# ---------------------------------------------------------------------------
+
+
+def _collect_pinned_facts_invocations():
+    """Every script line, in any workflow, that invokes `check_pinned_facts.py`.
+
+    One entry per line rather than per step: `upstream-drift.yml` calls it
+    twice from the same step, once in each branch of an `if [ -n "$REF" ]`,
+    and the two branches ask different questions.
+    """
+    invocations = []
+    for workflow_path in _iter_workflow_files():
+        with open(workflow_path, encoding="utf-8") as handle:
+            workflow = yaml.safe_load(handle)
+        jobs = (workflow or {}).get("jobs", {})
+        for job_key, job in jobs.items():
+            for step in job.get("steps", []):
+                run = step.get("run")
+                if not run:
+                    continue
+                for line in _script_command_lines(run):
+                    if "check_pinned_facts.py" not in line:
+                        continue
+                    invocations.append(
+                        {
+                            "workflow": workflow_path.name,
+                            "job_key": job_key,
+                            "step_name": step.get("name", "<unnamed step>"),
+                            "line": line,
+                            "step_continue_on_error": step.get("continue-on-error"),
+                            "job_continue_on_error": job.get("continue-on-error"),
+                        }
+                    )
+    return invocations
+
+
+PINNED_FACTS_INVOCATIONS = _collect_pinned_facts_invocations()
+CI_PINNED_FACTS_INVOCATIONS = [
+    i for i in PINNED_FACTS_INVOCATIONS if i["workflow"] == "ci.yml"
+]
+DRIFT_PINNED_FACTS_INVOCATIONS = [
+    i for i in PINNED_FACTS_INVOCATIONS if i["workflow"] == "upstream-drift.yml"
+]
+
+
+def test_pinned_facts_invocations_were_found_in_both_workflows():
+    """Guards every test below: an empty list here means the collector's
+
+    detection stopped matching, or the job was deleted, and every
+    parametrized assertion that follows would vacuously pass over zero
+    cases instead of failing loudly.
+    """
+    assert CI_PINNED_FACTS_INVOCATIONS, "no check_pinned_facts.py invocation found in ci.yml"
+    assert DRIFT_PINNED_FACTS_INVOCATIONS, (
+        "no check_pinned_facts.py invocation found in upstream-drift.yml"
+    )
+
+
+def test_ci_asks_the_default_question_with_no_mode_flag():
+    """SPEC 11.2: "the default runs in CI, on every pull request, as a
+
+    required check". Neither `--latest` nor `--ref` may appear on the line
+    that runs it there - either flag would mean CI is no longer asking "do
+    the facts still hold where we said they held" against the fixed,
+    recorded tag.
+    """
+    for invocation in CI_PINNED_FACTS_INVOCATIONS:
+        assert "--latest" not in invocation["line"], invocation["line"]
+        assert "--ref" not in invocation["line"], invocation["line"]
+
+
+def test_ci_never_asks_the_latest_question():
+    """The mutant this exists for: swapping the CI invocation to `--latest`
+
+    still runs the script and still exits 0 today, but it reintroduces
+    exactly the failure `upstream-drift.yml`'s own header argues against -
+    an upstream release reddening an unrelated pull request. Checked across
+    every workflow but `upstream-drift.yml` itself, not just `ci.yml`, so a
+    future workflow gaining the same mistake is not exempt.
+    """
+    outside_drift = [i for i in PINNED_FACTS_INVOCATIONS if i["workflow"] != "upstream-drift.yml"]
+    assert outside_drift, "no check_pinned_facts.py invocation found outside upstream-drift.yml"
+    for invocation in outside_drift:
+        assert "--latest" not in invocation["line"], invocation["line"]
+
+
+def test_ci_pinned_facts_check_is_not_made_advisory():
+    """SPEC 11.2: it "must be an ordinary job that fails the workflow, never
+
+    `continue-on-error` and never otherwise advisory". Checked at both the
+    step and the job level: either one set would let a drifted, fixed tag
+    pass a pull request silently. Whether the job's context is actually in
+    the required checks of the ruleset on `master` lives in repository
+    settings, not a file, so that half is outside what this test can check.
+    """
+    for invocation in CI_PINNED_FACTS_INVOCATIONS:
+        assert not invocation["step_continue_on_error"], invocation
+        assert not invocation["job_continue_on_error"], invocation
+
+
+def test_ci_pinned_facts_job_is_named_the_context_the_ruleset_requires():
+    """SPEC 11.2: "the job's `name:` is that exact string, since renaming
+
+    the job would leave the required context reporting nothing for ever."
+    The ruleset that names `Pinned facts still hold` as a required check
+    lives in repository settings, not a file, so it cannot itself notice a
+    rename here - this is the half of that split that a file-reading test
+    can pin.
+    """
+    with open(WORKFLOWS_DIR / "ci.yml", encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
+
+    # The job key the invocation was actually found under, not a literal
+    # guessed here: a job-key rename would otherwise silently stop this test
+    # from finding anything, the same failure mode the guard test above
+    # exists to catch for the invocation collector as a whole.
+    job_keys = {i["job_key"] for i in CI_PINNED_FACTS_INVOCATIONS}
+    assert len(job_keys) == 1, f"expected one job running check_pinned_facts.py, found {job_keys}"
+    job = workflow["jobs"][job_keys.pop()]
+
+    assert job["name"] == "Pinned facts still hold"
+
+
+def test_upstream_drift_schedule_asks_latest():
+    """SPEC 11.2: the discovery question runs from `upstream-drift.yml`, on
+
+    its schedule - the workflow's default path, taken when no `ref` input
+    was given (`workflow_dispatch` lets a human override it with a named
+    ref, which is the `--ref` branch, not this one).
+    """
+    assert any("--latest" in i["line"] for i in DRIFT_PINNED_FACTS_INVOCATIONS)

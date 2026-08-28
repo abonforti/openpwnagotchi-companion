@@ -58,7 +58,10 @@ jobs:
           if [ -n "$REF" ]; then
             python .github/check_pinned_facts.py --ref "$REF" > report.txt 2>&1
           else
-            python .github/check_pinned_facts.py > report.txt 2>&1
+            # SPEC.md section 11.2: the schedule asks the discovery question,
+            # not the default one - it wants to know whether upstream moved,
+            # not whether verified_against still holds.
+            python .github/check_pinned_facts.py --latest > report.txt 2>&1
           fi
           status=$?
           set -e

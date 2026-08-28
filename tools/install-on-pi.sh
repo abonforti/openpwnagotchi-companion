@@ -3,7 +3,7 @@
 #
 #   install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]
 #                    [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]
-#                    [--plugin-only] [--web-only] [--dry-run]
+#                    [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]
 #
 # Runs on the unit, as root. Non-interactive by design: the same invocation
 # works by hand, from the test suite and from a future CI job.
@@ -16,15 +16,16 @@
 # configuration of a running pwnagotchi can break far more than it installs.
 #
 # Exit status: 0 success, 1 failure (missing tool or source file, no release,
-# download, checksum, an archive that refuses to stay inside its target), 2
-# usage error. Anything non-zero leaves the installation as it was.
+# download, checksum, an archive that refuses to stay inside its target, an
+# unresolved custom plugins directory), 2 usage error. Anything non-zero
+# leaves the installation as it was.
 
 set -eu
 
 usage() {
     echo "usage: install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]" >&2
     echo "                        [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]" >&2
-    echo "                        [--plugin-only] [--web-only] [--dry-run]" >&2
+    echo "                        [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]" >&2
 }
 
 # Strip leading and trailing spaces and tabs. Written out rather than shelled
@@ -216,6 +217,11 @@ read_tag_name() {
 web_root="/var/www/openpwn-companion"
 plugins_dir=""
 config_file="/etc/pwnagotchi/config.toml"
+# Named the image's package tree, so the third resolution step for
+# main.custom_plugins is a seam rather than a literal (SPEC.md 5.3.1, issue
+# #157): a test can point this elsewhere instead of writing into a real
+# /opt/.pwn, and a unit whose tree lives somewhere else is handled the same way.
+pwn_prefix="/opt/.pwn"
 tag=""
 archive=""
 repo="abonforti/openpwnagotchi-companion"
@@ -262,6 +268,40 @@ while [ $# -gt 0 ]; do
                 exit 2
             fi
             config_file="$2"
+            shift 2
+            ;;
+        --pwn-prefix)
+            if [ $# -lt 2 ]; then
+                echo "install-on-pi.sh: --pwn-prefix requires a directory" >&2
+                usage
+                exit 2
+            fi
+            # Absolute only, the same reasoning as --web-root above: it is
+            # interpolated into a glob, not a URL, so --tag's character check
+            # does not apply (SPEC.md 5.3.1) - a strange value simply fails to
+            # match and the script refuses, which is what it would do anyway.
+            case "$2" in
+                /*) ;;
+                *)
+                    echo "install-on-pi.sh: --pwn-prefix must be an absolute path: $2" >&2
+                    exit 2
+                    ;;
+            esac
+            # No whitespace either: the value below is expanded unquoted so the
+            # glob still matches, and $defaults_list accumulates matches
+            # space-separated so it can be counted with a plain `for`. Any
+            # whitespace in the prefix - space, tab or newline, the whole of
+            # the default IFS - would word-split both, so a match would go
+            # missed and the count would be wrong rather than merely
+            # inconvenient. Rejecting here is louder than a miscount
+            # discovered downstream.
+            case "$2" in
+                *[[:space:]]*)
+                    echo "install-on-pi.sh: --pwn-prefix must not contain whitespace: $2" >&2
+                    exit 2
+                    ;;
+            esac
+            pwn_prefix="$2"
             shift 2
             ;;
         --tag)
@@ -400,17 +440,66 @@ if [ $do_plugin -eq 1 ]; then
             plugins_dir=$(read_custom_plugins "$config_file")
             if [ -n "$plugins_dir" ]; then
                 echo "Plugins dir:    $plugins_dir (main.custom_plugins in $config_file)"
-            else
-                echo "Plugins dir:    $config_file sets no main.custom_plugins, using the default"
             fi
-        else
-            echo "Plugins dir:    no $config_file, using the default"
         fi
-        # The defaults.toml value. The shipped shell profile aliases "custom" to
-        # a different directory, so the two paths on the image disagree and a
-        # hardcoded guess picks the wrong one on some units, where the plugin
-        # then silently never loads.
-        [ -n "$plugins_dir" ] || plugins_dir="/usr/local/share/pwnagotchi/custom-plugins/"
+        defaults_glob=""
+        defaults_list=""
+        defaults_count=0
+        if [ -z "$plugins_dir" ]; then
+            # Upstream's own default moved once already, between the two
+            # pwnagotchi versions this project targets (issue #157). Carrying
+            # either value as a literal is right on one version and silently
+            # wrong on the other, so instead of guessing, this reads
+            # custom_plugins out of the defaults.toml actually shipped on this
+            # unit, under the image's Python tree (F26, SPEC.md 5.3.1), with
+            # the same parser the user configuration goes through. The Python
+            # version is part of that path and has moved before too, so it is
+            # globbed rather than pinned to one release.
+            defaults_glob="$pwn_prefix/lib/python*/site-packages/pwnagotchi/defaults.toml"
+            for defaults_file in $defaults_glob; do
+                [ -f "$defaults_file" ] || continue
+                defaults_list="$defaults_list $defaults_file"
+                defaults_count=$((defaults_count + 1))
+            done
+            if [ "$defaults_count" -eq 1 ]; then
+                defaults_file=$(trim "$defaults_list")
+                plugins_dir=$(read_custom_plugins "$defaults_file")
+                if [ -n "$plugins_dir" ]; then
+                    echo "Plugins dir:    $plugins_dir (custom_plugins in $defaults_file)"
+                fi
+            elif [ "$defaults_count" -gt 1 ]; then
+                # More than one Python tree under $pwn_prefix is a unit in a
+                # state this script has never seen, most likely a partial
+                # upgrade, and picking one of them is exactly the kind of
+                # silent wrong answer this fallback exists to avoid. Refuse
+                # rather than guess.
+                echo "install-on-pi.sh: more than one defaults.toml matches $defaults_glob:" >&2
+                for defaults_file in $defaults_list; do
+                    echo "install-on-pi.sh:   $defaults_file" >&2
+                done
+                echo "install-on-pi.sh: pass --plugins-dir to name the directory directly" >&2
+                exit 1
+            fi
+        fi
+        if [ -z "$plugins_dir" ]; then
+            # No fallback beyond this (SPEC.md 5.3.1): a wrong directory here
+            # is invisible, every file is written, the script exits 0, and the
+            # plugin never loads. Refusing is louder and no more inconvenient,
+            # since the fix is one flag.
+            echo "install-on-pi.sh: could not resolve the custom plugins directory" >&2
+            if [ -f "$config_file" ]; then
+                echo "install-on-pi.sh:   $config_file sets no main.custom_plugins" >&2
+            else
+                echo "install-on-pi.sh:   no $config_file" >&2
+            fi
+            if [ "$defaults_count" -eq 0 ]; then
+                echo "install-on-pi.sh:   no defaults.toml matches $defaults_glob" >&2
+            else
+                echo "install-on-pi.sh:   $defaults_file sets no custom_plugins" >&2
+            fi
+            echo "install-on-pi.sh:   --plugins-dir was not given" >&2
+            exit 1
+        fi
     else
         echo "Plugins dir:    $plugins_dir (--plugins-dir)"
     fi

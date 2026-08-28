@@ -18,6 +18,7 @@ import collections
 import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -339,3 +340,361 @@ def test_every_multi_entry_fact_has_a_spec_sentence_naming_its_entries():
             f"SPEC.md's sentence for {number} names {sorted(sentenced)} but "
             f"pinned_symbols.json actually has {sorted(entries)} for it; keep them in sync"
         )
+
+
+# ---------------------------------------------------------------------------
+# The two questions (SPEC.md section 11.2): default, --latest, --ref, and the
+# manifest defect that must not be mistaken for drift.
+#
+# No network: `fetch_tree` and `latest_tag` are the only two functions that
+# reach out, and both are replaced with recording fakes before `main()` runs.
+# A fake that raises when called stands in wherever a mode must not reach the
+# network path it is not supposed to take.
+# ---------------------------------------------------------------------------
+
+
+def write_manifest(tmp_path: Path, **overrides) -> Path:
+    """A minimal manifest with every key `main()` reads unconditionally.
+
+    `facts` defaults to empty: the modes under test care about which tag gets
+    fetched and which exit status comes back, not about drift detection,
+    which the rest of this file already covers via `check()` directly.
+    """
+    manifest = {"upstream": "example/upstream", "verified_against": "v1.0.0", "facts": []}
+    manifest.update(overrides)
+    path = tmp_path / "pinned_symbols.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def install_manifest(monkeypatch, tmp_path: Path, **overrides) -> Path:
+    path = write_manifest(tmp_path, **overrides)
+    monkeypatch.setattr(cpf, "MANIFEST", path)
+    return path
+
+
+def recording_fetch_tree(monkeypatch, tree: dict | None = None) -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+
+    def fake(repo: str, ref: str) -> dict[str, str]:
+        calls.append((repo, ref))
+        return tree if tree is not None else {}
+
+    monkeypatch.setattr(cpf, "fetch_tree", fake)
+    return calls
+
+
+def forbid(monkeypatch, name: str) -> None:
+    """A network function that must not be called on this path.
+
+    A regression that reaches it fails the test at the call site, with a
+    clear reason, rather than surfacing later as a network error or a wrong
+    tag silently accepted.
+    """
+
+    def fake(*args, **kwargs):
+        raise AssertionError(f"{name} must not be called on this path")
+
+    monkeypatch.setattr(cpf, name, fake)
+
+
+def run_main(monkeypatch, argv: list[str]) -> int:
+    monkeypatch.setattr(sys, "argv", ["check_pinned_facts.py", *argv])
+    return cpf.main()
+
+
+def test_default_mode_fetches_the_tag_named_by_verified_against(monkeypatch, tmp_path):
+    """The load-bearing case (issue #151): before this change the default mode
+
+    ignored `verified_against` outright and always checked the latest release,
+    so a test only watching the exit status would have passed against that
+    code unchanged. Pinning the exact tag `fetch_tree` receives is what makes
+    a fact edited without re-verifying actually fail the next run.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="v1.0.0")
+    forbid(monkeypatch, "latest_tag")
+    calls = recording_fetch_tree(monkeypatch)
+
+    status = run_main(monkeypatch, [])
+
+    assert status == 0
+    assert calls == [("example/upstream", "v1.0.0")]
+
+
+def test_latest_flag_fetches_the_newest_release_not_the_manifest_tag(monkeypatch, tmp_path):
+    install_manifest(monkeypatch, tmp_path, verified_against="v1.0.0")
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: "v9.9.9")
+    calls = recording_fetch_tree(monkeypatch)
+
+    status = run_main(monkeypatch, ["--latest"])
+
+    assert status == 0
+    assert calls == [("example/upstream", "v9.9.9")]
+
+
+def test_ref_flag_overrides_the_manifest_tag(monkeypatch, tmp_path):
+    install_manifest(monkeypatch, tmp_path, verified_against="v1.0.0")
+    forbid(monkeypatch, "latest_tag")
+    calls = recording_fetch_tree(monkeypatch)
+
+    status = run_main(monkeypatch, ["--ref", "candidate-branch"])
+
+    assert status == 0
+    assert calls == [("example/upstream", "candidate-branch")]
+
+
+def test_ref_and_latest_together_is_a_usage_error_not_a_precedence_rule(monkeypatch, tmp_path):
+    """Neither wins silently: the script must refuse to guess which question
+
+    was meant, and must not reach the network to find out.
+    """
+    install_manifest(monkeypatch, tmp_path)
+    forbid(monkeypatch, "latest_tag")
+    forbid(monkeypatch, "fetch_tree")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(monkeypatch, ["--ref", "v1.0.0", "--latest"])
+
+    assert excinfo.value.code == 2
+
+
+def test_missing_verified_against_is_the_check_failing_not_drift(monkeypatch, tmp_path):
+    """SPEC 11.2: this exits above 1, distinct from the exit 1 a real drifted
+
+    fact produces, so `upstream-drift.yml` goes red instead of filing a
+    ticket claiming upstream moved when nothing did. Neither network
+    function may run: there is no tag to check anything against.
+    """
+    manifest = {"upstream": "example/upstream", "facts": []}
+    path = tmp_path / "pinned_symbols.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(cpf, "MANIFEST", path)
+    forbid(monkeypatch, "latest_tag")
+    forbid(monkeypatch, "fetch_tree")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(monkeypatch, [])
+
+    assert excinfo.value.code == 2
+
+
+def test_empty_verified_against_is_the_check_failing_not_drift(monkeypatch, tmp_path):
+    """The empty-string case, distinct from missing: `.get()` returns it rather
+
+    than the default, so only the explicit falsiness check catches it.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="")
+    forbid(monkeypatch, "latest_tag")
+    forbid(monkeypatch, "fetch_tree")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(monkeypatch, [])
+
+    assert excinfo.value.code == 2
+
+
+def test_a_real_drifted_fact_still_exits_exactly_one(monkeypatch, tmp_path):
+    """Contrast case for the two tests above: a manifest defect exits above 1,
+
+    but an actual drifted fact must still exit exactly 1 - the two failure
+    modes must stay distinguishable in both directions.
+    """
+    install_manifest(
+        monkeypatch,
+        tmp_path,
+        facts=[{"id": "F1", "file": "mod.py", "kind": "function", "name": "gone"}],
+    )
+    recording_fetch_tree(monkeypatch, tree={"mod.py": "x = 1\n"})
+
+    status = run_main(monkeypatch, [])
+
+    assert status == 1
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [[], ["--latest"], ["--ref", "asked-ref"]],
+    ids=["verified", "latest", "asked"],
+)
+def test_the_report_says_which_question_was_asked(monkeypatch, tmp_path, capsys, argv):
+    """SPEC 11.2 point 6: the two failures mean opposite things and the ticket
+
+    is read cold, so the printed report - not just `--json` - has to let a
+    reader tell which question produced it. Checked here by requiring every
+    mode's report to differ from the other two and to name the tag it used.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="v-verified")
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: "v-latest")
+    recording_fetch_tree(monkeypatch)
+
+    run_main(monkeypatch, argv)
+    report = capsys.readouterr().out
+
+    if argv == []:
+        expected_ref = "v-verified"
+    elif argv == ["--latest"]:
+        expected_ref = "v-latest"
+    else:
+        expected_ref = "asked-ref"
+
+    assert expected_ref in report
+
+
+def test_the_three_reports_are_pairwise_distinct(monkeypatch, tmp_path, capsys):
+    """The distinguishability claim itself, gathered in one place rather than
+
+    left to be inferred from three separate runs above.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="v-verified")
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: "v-latest")
+
+    reports = []
+    for argv in ([], ["--latest"], ["--ref", "asked-ref"]):
+        recording_fetch_tree(monkeypatch)
+        run_main(monkeypatch, argv)
+        reports.append(capsys.readouterr().out)
+
+    assert len(set(reports)) == 3, reports
+
+
+def test_the_reports_differ_by_wording_even_when_the_tag_is_the_same(
+    monkeypatch, tmp_path, capsys
+):
+    """The same tag reached three different ways is exactly the case where the
+
+    ref alone cannot tell a reader which question was asked: `--ref` naming
+    the currently verified tag, or `--latest` resolving to it because
+    upstream has not released since. The wording is the only signal left,
+    so this pins that the wording itself - not just the tag - differs.
+    """
+    same_tag = "v-same"
+    install_manifest(monkeypatch, tmp_path, verified_against=same_tag)
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: same_tag)
+
+    reports = []
+    for argv in ([], ["--latest"], ["--ref", same_tag]):
+        recording_fetch_tree(monkeypatch)
+        run_main(monkeypatch, argv)
+        reports.append(capsys.readouterr().out)
+
+    assert len(set(reports)) == 3, reports
+
+
+TOKEN_PROBE_ARGV = [[], ["--latest"], ["--ref", "candidate-3"]]
+
+_LABEL_RE = re.compile(r"\(([^)]*)\):")
+
+
+@pytest.mark.parametrize("argv", TOKEN_PROBE_ARGV, ids=["verified", "latest", "asked"])
+def test_the_plain_reports_label_matches_the_json_reports_question(
+    monkeypatch, tmp_path, capsys, argv
+):
+    """Closes a gap the same-tag test above cannot: three pairwise-distinct
+
+    strings still pass even if a mutant swaps which phrase belongs to which
+    mode, since three mislabelled strings are still three distinct strings.
+    This ties the human report's parenthetical label to `cpf.QUESTION_LABELS`,
+    the same table the script itself uses to pick that wording and to build
+    `--json`'s `question` field, so a mismatch between the two outputs can
+    only mean the printed label and the assigned `question` disagree.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="candidate-1")
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: "candidate-2")
+
+    recording_fetch_tree(monkeypatch)
+    run_main(monkeypatch, [*argv, "--json"])
+    question = json.loads(capsys.readouterr().out)["question"]
+
+    recording_fetch_tree(monkeypatch)
+    run_main(monkeypatch, argv)
+    plain_report = capsys.readouterr().out
+    match = _LABEL_RE.search(plain_report)
+    assert match is not None, f"no parenthetical label found in report: {plain_report!r}"
+
+    assert match.group(1) == cpf.QUESTION_LABELS[question]
+
+
+def test_the_three_json_questions_are_pairwise_distinct(monkeypatch, tmp_path, capsys):
+    """The opaque-token test above only checks a mode against itself; a mutant
+
+    that collapses `question` to the same value for every mode (and collapses
+    the text label lookup to match) would pass every one of those cases
+    without ever being caught. This closes that, at the `--json` layer where
+    the token actually lives.
+    """
+    install_manifest(monkeypatch, tmp_path, verified_against="candidate-1")
+    monkeypatch.setattr(cpf, "latest_tag", lambda repo: "candidate-2")
+
+    questions = []
+    for argv in TOKEN_PROBE_ARGV:
+        recording_fetch_tree(monkeypatch)
+        run_main(monkeypatch, [*argv, "--json"])
+        questions.append(json.loads(capsys.readouterr().out)["question"])
+
+    assert len(set(questions)) == 3, questions
+
+
+# ---------------------------------------------------------------------------
+# `upstream` steers a network call and is now checked against the owner/name
+# shape before that call happens (SPEC.md 11.2, "Putting the checker on a
+# pull-request path changed who can steer it").
+# ---------------------------------------------------------------------------
+
+
+def test_a_well_formed_upstream_is_fetched_exactly_as_given(monkeypatch, tmp_path):
+    install_manifest(
+        monkeypatch, tmp_path, upstream="example-owner/example-repo", verified_against="v1.0.0"
+    )
+    calls = recording_fetch_tree(monkeypatch)
+
+    status = run_main(monkeypatch, [])
+
+    assert status == 0
+    assert calls == [("example-owner/example-repo", "v1.0.0")]
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        "https://evil.example/owner/repo",
+        "example-owner/example-repo/extra",
+        "../secret-org/private-repo",
+        "",
+        "example-owner/..",
+        "../example-repo",
+    ],
+    ids=[
+        "absolute-url",
+        "second-slash",
+        "dot-dot",
+        "empty",
+        "dot-dot-suffix-correct-slash-count",
+        "dot-dot-prefix-correct-slash-count",
+    ],
+)
+def test_a_malformed_upstream_is_refused_before_any_fetch(monkeypatch, tmp_path, upstream):
+    """The seam assertions are the point, not the exit status alone: a check
+
+    that refused only after already calling `fetch_tree` would satisfy a
+    status-only test while still having made the diff-controlled request it
+    exists to prevent. Exit 2 is above 1, not 1 itself: 1 means a fact
+    drifted, and `upstream-drift.yml` branches on the two meaning opposite
+    things, so a malformed `upstream` must not read as upstream having
+    moved when the repository never asked it anything.
+
+    The last two are the cases the first draft of this test deliberately
+    left out: `owner/..` and `../owner` both have exactly one slash and two
+    segments, so `UPSTREAM_RE` alone accepts them - `.` is an ordinary
+    character inside a segment - and only a separate `".." in repo` check
+    catches them. They are here now that that check exists.
+    """
+    install_manifest(monkeypatch, tmp_path, upstream=upstream, verified_against="v1.0.0")
+    forbid(monkeypatch, "fetch_tree")
+    forbid(monkeypatch, "latest_tag")
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(monkeypatch, [])
+
+    assert excinfo.value.code == 2
+
+

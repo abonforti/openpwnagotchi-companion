@@ -2,10 +2,13 @@
 
 The contract under test is SPEC section 5.3, plus pinned facts F23, F24 and F25
 for the one thing this script must not get wrong: the custom plugins directory.
-The image ships two disagreeing values for it (F25), so a hardcoded path picks
-the wrong one on some units and the plugin silently never loads - the unit keeps
-running, the web root serves the app, and the only symptom is a PWA that
-connects to nothing.
+Upstream's own default for it moved between versions this project targets
+(F23), so a hardcoded fallback is right on one version and silently wrong on
+the newer one - the unit keeps running, the web root serves the app, and the
+only symptom is a PWA that connects to nothing (issue #157). SPEC 5.3.1 fixes
+this by having the script read its own fallback off the unit's `defaults.toml`
+rather than carry either candidate path as a literal, and by failing loudly
+when none of the three resolution steps answers instead of guessing.
 
 Everything here drives `--archive` with a tarball built in the test. SPEC 5.3
 names that flag as the way to exercise the script without a network, and a test
@@ -45,11 +48,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALL = REPO_ROOT / "tools" / "install-on-pi.sh"
 PLUGIN_SOURCE = REPO_ROOT / "plugin" / "companion.py"
 
-# F23: the `defaults.toml` value, and the only fallback the script may use when
-# the running configuration does not name one. F25: the shell profile shipped
-# with the image points at `/etc/pwnagotchi/custom-plugins/` instead, so this
-# constant appearing in a resolution the config was supposed to drive is a bug,
-# and the profile path appearing anywhere is a hardcoded guess.
+# F23: upstream's `defaults.toml` value at 2.9.5.6. F25: the shell profile
+# shipped with the image, and upstream's `defaults.toml` value from 2.9.5.8
+# onward. SPEC 5.3.1 (issue #157) forbids the script from carrying either as a
+# literal: the fallback must be read off the unit's own installed
+# `defaults.toml`, never remembered. Both constants exist here only to prove
+# neither appears anywhere the script could reach for it - in its own text or
+# in anything it prints.
 F23_DEFAULT_PLUGINS_DIR = "/usr/local/share/pwnagotchi/custom-plugins/"
 F25_PROFILE_ALIAS_DIR = "/etc/pwnagotchi/custom-plugins/"
 
@@ -57,6 +62,12 @@ F25_PROFILE_ALIAS_DIR = "/etc/pwnagotchi/custom-plugins/"
 F24_DEFAULT_CONFIG = "/etc/pwnagotchi/config.toml"
 
 DEFAULT_WEB_ROOT = "/var/www/openpwn-companion"
+
+# SPEC 5.3.1: the image's Python tree, matched by glob rather than a hardcoded
+# version. This is only the default; `--pwn-prefix` redirects it, which is how
+# the tests below exercise the third resolution step without root and without
+# writing anywhere near the real path.
+OPT_PWN = Path("/opt/.pwn")
 
 REQUIRED_TOOLS = ("sh", "tar", "sha256sum")
 _MISSING = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
@@ -453,6 +464,35 @@ def test_a_trailing_slash_on_the_configured_value_is_tolerated(pi, tmp_path):
     assert (target / "companion.py").is_file()
 
 
+def test_the_array_before_the_key_does_not_leak_into_it(pi, tmp_path):
+    """The real neighbourhood the parser has to survive.
+
+    In upstream's own `defaults.toml`, `custom_plugins` sits in a top-level
+    `[main]` table right after `custom_plugin_repos`, a multi-line array of
+    URLs (SPEC 5.3.1). SPEC 5.3.1 says the fallback is read with "the same
+    parser" the user configuration goes through, so this shape is exercised
+    through `--config` directly rather than only through the root-gated
+    `defaults.toml` fixture below. A parser that matches a key prefix, or
+    that reads the last assignment in the table regardless of name, returns a
+    URL instead of the path.
+    """
+    target = tmp_path / "from-config-with-array-neighbour"
+    pi.config.write_text(
+        '[main]\n'
+        'name = "pwnagotchi"\n'
+        'custom_plugin_repos = [\n'
+        '    "https://example.test/plugins/repo-one",\n'
+        '    "https://example.test/plugins/repo-two",\n'
+        ']\n'
+        f'custom_plugins = "{target}"\n'
+    )
+
+    result = pi.install(archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert (target / "companion.py").is_file()
+
+
 def test_the_configured_directory_is_used_and_the_f23_default_is_not(pi, tmp_path):
     """The whole point of F25: never write to a guessed path.
 
@@ -470,8 +510,59 @@ def test_the_configured_directory_is_used_and_the_f23_default_is_not(pi, tmp_pat
     assert F25_PROFILE_ALIAS_DIR not in result.stdout
 
 
-# The fallback cases are asserted through `--dry-run`, because the answer they
-# must produce is the real F23 path and a test is not allowed to write there.
+def test_the_script_contains_neither_candidate_path_as_a_literal():
+    """SPEC 5.3.1, "The fallback is read, not remembered" (issue #157).
+
+    This is the assertion that would have caught the original defect
+    directly: `tools/install-on-pi.sh:413` carried
+    `/usr/local/share/pwnagotchi/custom-plugins/` as a literal, which was
+    right at 2.9.5.6 and silently wrong at 2.9.5.8. Reading the shipped script
+    as text catches that shape of regression before any process is spawned.
+    """
+    text = INSTALL.read_text()
+
+    assert F23_DEFAULT_PLUGINS_DIR not in text
+    assert F25_PROFILE_ALIAS_DIR not in text
+
+
+@pytest.fixture
+def not_a_real_unit():
+    """Refuses to run a test that assumes `/opt/.pwn` is absent when it is not.
+
+    Only `test_the_default_pwn_prefix_is_opt_dot_pwn` still needs this: every
+    other test below names its own `--pwn-prefix` under `tmp_path` (SPEC
+    5.3.1's seam) and no longer depends on what this host happens to have
+    under `/opt/.pwn`. That one test is checking the *default* value of the
+    flag, which by definition cannot be overridden, so it is the one place
+    left where the host's real `/opt/.pwn` still matters.
+    """
+    if OPT_PWN.exists():
+        pytest.skip(f"{OPT_PWN} exists on this host; not a safe test host")
+
+
+def make_pwn_prefix(root: Path, trees: dict[str, str]) -> Path:
+    """Builds a `--pwn-prefix` tree: `trees` maps a Python version such as
+    `"3.13"` to the `defaults.toml` contents for that tree. More than one
+    entry reproduces SPEC 5.3.1's "more than one Python tree" case.
+    """
+    prefix = root / "pwn-prefix"
+    for version, contents in trees.items():
+        site_packages = (
+            prefix / "lib" / f"python{version}" / "site-packages" / "pwnagotchi"
+        )
+        site_packages.mkdir(parents=True)
+        (site_packages / "defaults.toml").write_text(contents)
+    return prefix
+
+
+def defaults_toml_path(prefix: Path, version: str) -> Path:
+    return prefix / "lib" / f"python{version}" / "site-packages" / "pwnagotchi" / "defaults.toml"
+
+
+# The fallback cases below name an empty `--pwn-prefix` under `tmp_path`
+# explicitly (SPEC 5.3.1's seam), so they no longer depend on this host
+# having no real `/opt/.pwn` - the default value is checked separately, in
+# `test_the_default_pwn_prefix_is_opt_dot_pwn`.
 FALLBACK_CONFIGS = {
     # F23: `load_from_path` runs only `if 'custom_plugins' in config['main']`,
     # so the key really is optional and its absence is the common case.
@@ -488,51 +579,329 @@ FALLBACK_CONFIGS = {
 
 
 @pytest.mark.parametrize("body", sorted(FALLBACK_CONFIGS), ids=sorted(FALLBACK_CONFIGS))
-def test_the_f23_default_is_used_when_the_config_names_no_directory(pi, body):
+def test_a_silent_config_fails_when_no_pwn_prefix_defaults_toml_answers(pi, tmp_path, body):
+    """SPEC 5.3.1 item 4: with the config silent and an empty `--pwn-prefix`,
+    resolution has nowhere left to go. Falling back to a remembered literal
+    instead of failing is exactly the shape of issue #157.
+
+    This is the real-run form: it proves nothing is written on a genuine
+    install, which the `--dry-run` tests below cannot show by themselves
+    since they never attempt a write in the first place.
+    """
     pi.config.write_text(FALLBACK_CONFIGS[body])
+    empty_prefix = tmp_path / "no-pwn-prefix"
+    before = pi.state()
 
-    result = pi.install("--dry-run", archive=pi.archive())
+    result = pi.install("--pwn-prefix", str(empty_prefix), archive=pi.archive())
 
-    assert result.returncode == 0, result.stderr
-    assert F23_DEFAULT_PLUGINS_DIR in result.stdout, (
-        "with no `main.custom_plugins` the only permitted answer is the "
-        f"defaults.toml value (F23); got:\n{result.stdout}"
-    )
+    assert result.returncode == 1
+    assert pi.state() == before
+    assert F23_DEFAULT_PLUGINS_DIR not in result.stdout
+    assert F23_DEFAULT_PLUGINS_DIR not in result.stderr
     assert "/decoy/" not in result.stdout
     assert "/commented/out" not in result.stdout
 
 
-def test_the_f23_default_is_used_when_the_config_file_is_missing(pi, tmp_path):
+def test_a_missing_config_file_fails_when_no_pwn_prefix_defaults_toml_answers(pi, tmp_path):
     missing = tmp_path / "no" / "such" / "config.toml"
+    empty_prefix = tmp_path / "no-pwn-prefix"
+    before = pi.state()
 
-    result = pi.install("--dry-run", "--config", str(missing), archive=pi.archive())
+    result = pi.install(
+        "--dry-run", "--config", str(missing), "--pwn-prefix", str(empty_prefix),
+        archive=pi.archive(),
+    )
 
-    assert result.returncode == 0, result.stderr
-    assert F23_DEFAULT_PLUGINS_DIR in result.stdout
+    assert result.returncode == 1
+    assert pi.state() == before
+    assert F23_DEFAULT_PLUGINS_DIR not in result.stdout
 
 
-def test_the_f25_profile_alias_is_never_used_as_a_fallback(pi):
+def test_the_f25_profile_alias_is_never_used_as_a_fallback(pi, tmp_path):
     """F25 in one assertion.
 
     `/etc/pwnagotchi/custom-plugins/` is what the shipped shell profile aliases
-    `custom` to, and it is *not* the `defaults.toml` value. Falling back to it
-    is the specific guess this resolution exists to prevent.
+    `custom` to. It agrees with `defaults.toml` at the version this project
+    targets (issue #157), but the script must still never reach it as a
+    literal - the resolution reads the unit, it does not recognise this path
+    by name.
+    """
+    pi.config.write_text('main.name = "testunit"\n')
+    empty_prefix = tmp_path / "no-pwn-prefix"
+
+    result = pi.install("--dry-run", "--pwn-prefix", str(empty_prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert F25_PROFILE_ALIAS_DIR not in result.stdout
+    assert F25_PROFILE_ALIAS_DIR not in result.stderr
+
+
+def test_all_three_sources_silent_names_them_all_and_points_at_plugins_dir(pi, tmp_path):
+    """SPEC 5.3.1 item 4: the failure message is the fix, not just a refusal.
+
+    A wrong directory is invisible - every file is written, the script exits
+    0, and the plugin never loads. The message has to name every place that
+    was consulted plus the flag that unblocks it, or the owner is left to
+    guess the same way the script just refused to.
+
+    This is the load-bearing form of the check, and it has to be `--dry-run`:
+    Mutant B (deleting only the final `exit 1` and leaving the diagnostic
+    `echo`s in place) still exits non-zero on a real run, because the next
+    step tries to `mkdir` an empty `plugins_dir` and *that* fails - the
+    message assertions below would then pass by accident, for a reason that
+    has nothing to do with the guard under test. `--dry-run` stops before any
+    write is attempted, so a passing result here can only mean the guard
+    itself fired.
+    """
+    pi.config.write_text('main.name = "testunit"\nmain.lang = "en"\n')
+    empty_prefix = tmp_path / "no-pwn-prefix"
+
+    result = pi.install("--dry-run", "--pwn-prefix", str(empty_prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+    assert "--plugins-dir" in result.stderr
+    assert str(pi.config) in result.stderr
+    assert "defaults.toml" in result.stderr
+
+
+def test_dry_run_also_fails_when_all_three_sources_are_silent(pi, tmp_path):
+    """SPEC 5.3.1: "`--dry-run` verifies before it reports" - it performs every
+    check a real run performs, so a resolution failure must not be swallowed
+    just because nothing would have been written anyway.
+
+    Load-bearing for the same reason as the test above: a real run can exit
+    non-zero here even with the guard removed, because the empty
+    `plugins_dir` breaks a later `mkdir` instead. Only `--dry-run` isolates
+    the guard itself, since it never reaches that later step.
+    """
+    pi.config.write_text('main.name = "testunit"\n')
+    empty_prefix = tmp_path / "no-pwn-prefix"
+
+    result = pi.install("--dry-run", "--pwn-prefix", str(empty_prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+
+
+def test_the_default_pwn_prefix_is_opt_dot_pwn(pi, not_a_real_unit):
+    """SPEC 5.3.1: "`--pwn-prefix DIR` names the tree, defaulting to
+    `/opt/.pwn`." Omitting the flag has to mean the same absolute path the
+    script always looked at, which is only observable on a host with no real
+    `/opt/.pwn` to answer from - see `not_a_real_unit`.
     """
     pi.config.write_text('main.name = "testunit"\n')
 
     result = pi.install("--dry-run", archive=pi.archive())
 
-    assert F25_PROFILE_ALIAS_DIR not in result.stdout
+    assert result.returncode == 1
+    assert "/opt/.pwn" in result.stderr
 
 
-def test_the_default_config_path_is_the_f24_user_config(pi):
-    # With no `--config`, SPEC 5.3 pins `/etc/pwnagotchi/config.toml` (F24).
+# ---------------------------------------------------------------------------
+# The third resolution step, through `--pwn-prefix` (SPEC 5.3.1, F26).
+# ---------------------------------------------------------------------------
+
+# The real neighbourhood: in upstream's own `defaults.toml`, `custom_plugins`
+# sits in a top-level `[main]` table right after `custom_plugin_repos`, a
+# multi-line array of URLs.
+DEFAULTS_TOML_NEIGHBOURHOOD = """[main]
+name = "pwnagotchi"
+custom_plugin_repos = [
+    "https://example.test/plugins/repo-one",
+    "https://example.test/plugins/repo-two",
+]
+custom_plugins = "{path}"
+"""
+
+
+def test_the_pwn_prefix_defaults_toml_answers_when_the_config_is_silent(pi, tmp_path):
+    """SPEC 5.3.1 items 3 and 5: the third step, and stdout naming it as the
+    source of the answer."""
+    target = tmp_path / "from-pwn-prefix-defaults-toml"
+    prefix = make_pwn_prefix(
+        tmp_path, {"3.99": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=target)}
+    )
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install("--dry-run", "--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert str(target) in result.stdout
+    assert "defaults.toml" in result.stdout
+    assert "repo-one" not in result.stdout
+    assert "repo-two" not in result.stdout
+
+
+def test_the_pwn_prefix_defaults_toml_without_the_key_still_fails(pi, tmp_path):
+    """SPEC 5.3.1 item 4: a `defaults.toml` that exists but never sets
+    `custom_plugins` answers nothing, same as one that is absent."""
+    prefix = make_pwn_prefix(tmp_path, {"3.99": '[main]\nname = "pwnagotchi"\n'})
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install("--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+
+
+def test_an_empty_pwn_prefix_tree_still_fails(pi, tmp_path):
+    """The trap in an unguarded glob under `set -eu`: with nothing matching
+    `python*` under the prefix, a resolver that does not guard the glob risks
+    treating the literal pattern string as a path instead of finding
+    nothing."""
+    prefix = tmp_path / "pwn-prefix"
+    (prefix / "lib").mkdir(parents=True)
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install("--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+
+
+def test_plugins_dir_overrides_a_present_pwn_prefix_defaults_toml(pi, tmp_path):
+    """SPEC 5.3.1 item 1: `--plugins-dir` overrides everything, including a
+    `defaults.toml` under `--pwn-prefix` that would otherwise answer - the
+    resolution order is not just "first non-empty value wins", it stops at
+    the first step that applies at all.
+    """
+    from_defaults = tmp_path / "from-defaults-toml"
+    prefix = make_pwn_prefix(
+        tmp_path, {"3.99": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=from_defaults)}
+    )
+    explicit = tmp_path / "explicit"
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install(
+        "--plugins-dir", str(explicit), "--pwn-prefix", str(prefix), archive=pi.archive()
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (explicit / "companion.py").is_file()
+    assert not from_defaults.exists()
+
+
+def test_config_overrides_a_present_pwn_prefix_defaults_toml(pi, tmp_path):
+    """SPEC 5.3.1 item 2: the running configuration is read before the third
+    step is ever consulted, so a unit whose config disagrees with its own
+    `defaults.toml` still gets what the config says."""
+    from_defaults = tmp_path / "from-defaults-toml"
+    prefix = make_pwn_prefix(
+        tmp_path, {"3.99": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=from_defaults)}
+    )
+    from_config = tmp_path / "from-config"
+    pi.config.write_text(config_with(from_config))
+
+    result = pi.install("--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert (from_config / "companion.py").is_file()
+    assert not from_defaults.exists()
+
+
+def test_more_than_one_python_tree_is_refused_not_resolved(pi, tmp_path):
+    """SPEC 5.3.1: "More than one Python tree under `/opt/.pwn/` is refused,
+    not resolved" - a unit in this state is a partial upgrade, and choosing
+    between the trees would put back the silent wrong answer the whole
+    change exists to remove. The script lists every `defaults.toml` it
+    found and stops.
+    """
+    first = tmp_path / "from-first-tree"
+    second = tmp_path / "from-second-tree"
+    prefix = make_pwn_prefix(
+        tmp_path,
+        {
+            "3.11": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=first),
+            "3.13": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=second),
+        },
+    )
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install("--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+    assert not first.exists()
+    assert not second.exists()
+    assert str(defaults_toml_path(prefix, "3.11")) in result.stderr
+    assert str(defaults_toml_path(prefix, "3.13")) in result.stderr
+
+
+@pytest.mark.parametrize("value", ["", "relative/prefix", "./prefix"])
+def test_a_pwn_prefix_that_is_not_absolute_is_a_usage_error(pi, value):
+    """SPEC 5.3.1: "It is validated the way `--web-root` is, as an absolute
+    path"."""
+    before = pi.state()
+
+    result = pi.install("--pwn-prefix", value, archive=pi.archive())
+
+    assert result.returncode == 2
+    assert result.stderr.strip()
+    assert pi.state() == before
+
+
+def test_a_pwn_prefix_with_unusual_characters_is_not_specially_rejected(pi, tmp_path):
+    """SPEC 5.3.1: no `--tag`-style character check, because this value is
+    interpolated into a glob rather than a URL - "a strange value here fails
+    to match and the script refuses, which is the behaviour it would have
+    had anyway." Exit `1` (no match), not `2` (rejected outright), is the
+    proof that no extra validation was added. No whitespace here - that is
+    its own, deliberate rejection, covered separately below.
+    """
+    strange = tmp_path / "weird..prefix"
+    strange.mkdir(parents=True)
+    pi.config.write_text('main.name = "testunit"\n')
+
+    result = pi.install("--pwn-prefix", str(strange), archive=pi.archive())
+
+    assert result.returncode == 1
+    assert not pi.installed_plugin.exists()
+
+
+@pytest.mark.parametrize("whitespace", [" ", "\t", "\n"], ids=["space", "tab", "newline"])
+def test_a_pwn_prefix_containing_whitespace_is_rejected_outright(pi, tmp_path, whitespace):
+    """SPEC 5.3.1: "Whitespace is the exception and is rejected outright."
+
+    The value feeds an unquoted glob and a space-separated accumulator that
+    counts matches, so a prefix containing whitespace word-splits and the
+    count comes out wrong - it fails closed either way, which is exactly why
+    a usage error is preferred: the caller gets a message it can read instead
+    of a script that refuses for a reason it never explains.
+
+    Newline is in the list alongside space and tab, not decorative: the
+    guard was widened from exactly those two characters to a `[[:space:]]`
+    class specifically because of the newline case, so a guard narrowed
+    back to the original two-case form would still pass every other test
+    here while leaving a `\n`-containing prefix unrejected.
+    """
+    strange = tmp_path / f"weird{whitespace}prefix"
+    strange.mkdir(parents=True)
+    pi.config.write_text('main.name = "testunit"\n')
+    before = pi.state()
+
+    result = pi.install("--pwn-prefix", str(strange), archive=pi.archive())
+
+    assert result.returncode == 2
+    assert "whitespace" in result.stderr.lower()
+    assert pi.state() == before
+
+
+def test_the_default_config_path_is_the_f24_user_config(pi, not_a_real_unit):
+    """With no `--config`, SPEC 5.3 pins `/etc/pwnagotchi/config.toml` (F24).
+
+    Neither that file nor a default `--pwn-prefix` answers on this host, so
+    resolution fails (SPEC 5.3.1 item 4) - and the failure message is exactly
+    where the default path is checked, since item 4 requires it to name the
+    config file it looked at. Depends on the host having no real `/opt/.pwn`,
+    same as `test_the_default_pwn_prefix_is_opt_dot_pwn`.
+    """
     result = pi.run(
         "--web-root", str(pi.web_root), "--dry-run", "--archive", str(pi.archive())
     )
 
-    assert result.returncode == 0, result.stderr
-    assert F24_DEFAULT_CONFIG in result.stdout
+    assert result.returncode == 1
+    assert F24_DEFAULT_CONFIG in result.stderr
 
 
 def test_the_default_web_root_is_the_documented_one(pi):

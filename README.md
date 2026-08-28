@@ -78,7 +78,10 @@ other people around, set one.
 
 ## Compatibility
 
-**No compatibility guarantee across pwnagotchi versions.** Verified against jayofelony 2.9.5.6.
+**No compatibility guarantee across pwnagotchi versions.** The tag every API claim was
+verified against is named in `.github/pinned_symbols.json`, and only there, so it cannot
+quietly disagree with a copy of itself. CI checks the facts against it on every pull
+request.
 
 That is a deliberate non-promise. Declaring a supported range would mean committing to test every
 version inside it, and a range that is claimed but not tested is worse than no claim at all,

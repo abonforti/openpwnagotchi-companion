@@ -4352,10 +4352,12 @@ a job outside that list is one an automatic merge does not wait for, and a pull 
 only Markdown is classified documentation-only, so the job would be exactly the kind of gate that
 looks present and is not. `tests/test_ci_gates.py` pins the half that lives in the repository,
 including that the job's `name:` is that exact string, since renaming the job would leave the
-required context reporting nothing for ever. Adding the context is issue #164, deliberately
-after the branch that introduces the job rather than with it: a required context that a pull
-request's head cannot report leaves that pull request waiting indefinitely, and three were open
-at the time.
+required context reporting nothing for ever. The context was added to the ruleset on 2026-08-28
+(issue #164), deliberately after the branch that introduced the job rather than with it: a
+required context that a pull request's head cannot report leaves that pull request waiting
+indefinitely, and three were open at the time. Nothing here can check that half, so it was
+verified by reading the ruleset back from the API and recording the read-back on the issue, which
+is the most a repository can do about a fact kept outside it.
 
 **Putting the checker on a pull-request path changed who can steer it.** The repository it fetches
 comes from `upstream` in the manifest, interpolated into a URL, and until this change nothing

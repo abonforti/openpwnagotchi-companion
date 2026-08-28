@@ -2942,6 +2942,9 @@ class Companion(plugins.Plugin):
         # Same reasoning for _stats_ticker: seeded here so it is runnable in a
         # test that never calls on_loaded (SPEC 10.7).
         self._keepalive_interval = float(DEFAULTS["keepalive_interval"])
+        # Same reasoning for _background's reconcile pass: seeded here so it
+        # is runnable in a test that never calls on_loaded (SPEC 10.7, #105).
+        self._rebind_interval = float(DEFAULTS["rebind_interval"])
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -2995,6 +2998,20 @@ class Companion(plugins.Plugin):
         if keepalive_clamped:
             log.info("[companion] keepalive_interval clamped to %.0f", keepalive)
         self._keepalive_interval = keepalive
+        # Clamped once here too, for the same reason, and read from self by
+        # _background. A configured 0 takes the floor rather than the
+        # default here: unlike keepalive_interval = 0 it never meant
+        # disable, it meant reconcile on every pass (SPEC 2.4, #105).
+        rebind, rebind_clamped = clamp_interval(
+            "rebind_interval",
+            option(self.options, "rebind_interval"),
+            5,
+            300,
+            float(DEFAULTS["rebind_interval"]),
+        )
+        if rebind_clamped:
+            log.info("[companion] rebind_interval clamped to %.0f", rebind)
+        self._rebind_interval = rebind
         self._gps = GpsResolver(self.options, self.deps, self._session)
         self._router = Router(
             self.options,
@@ -3076,9 +3093,10 @@ class Companion(plugins.Plugin):
         # clamped once in on_loaded and read from self rather than from
         # self.options: options mutated after on_loaded must be inert, or a
         # value that failed the clamp would take effect on the next pass
-        # anyway (SPEC 2.4). rebind_interval below is the one interval that
-        # gets none of that, tracked as issue #105.
-        rebind = float(option(self.options, "rebind_interval"))
+        # anyway (SPEC 2.4). self._rebind_interval, read below, is clamped
+        # the same way for the same reason (#105): a bare float() here used
+        # to be able to kill this thread before its first pass, taking the
+        # session refresh and the gpsd poll down with the reconcile.
         next_rebind = 0.0
         while not self._stop.is_set():
             try:
@@ -3089,7 +3107,7 @@ class Companion(plugins.Plugin):
                 now = self.deps.now()
                 if self._listeners is not None and now >= next_rebind:
                     self._listeners.reconcile()
-                    next_rebind = now + rebind
+                    next_rebind = now + self._rebind_interval
             except Exception:
                 log.exception("[companion] background pass failed")
             self._stop.wait(self._session_poll_interval)

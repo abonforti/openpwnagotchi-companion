@@ -108,6 +108,15 @@ DEFAULTS: dict[str, Any] = {
     "handshake_dir": "",
 }
 
+# The set of config keys the plugin accepts under [main.plugins.companion]:
+# DEFAULTS plus `enabled`, which pwnagotchi itself writes and persists via
+# `toggle_plugin` (F32) - the one key besides DEFAULTS that `plugin.options`
+# can carry without the owner having typed it. This is both what
+# on_loaded's unknown-key check compares against and what its warning
+# advertises (SPEC 2.2.1); the two must never be expressed separately, or
+# they can drift apart.
+ACCEPTED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {"enabled"}
+
 HANDSHAKE_LIMIT = 500
 # How often an unauthenticated connection wakes up to re-check its deadline
 # (SPEC 2.3.4). It has to be a poll rather than a check on the next frame,
@@ -2954,6 +2963,21 @@ class Companion(plugins.Plugin):
         Without a usable certificate this logs an explicit error and starts
         nothing at all.
         """
+        # Read before the merge below, which fills in every DEFAULTS key that
+        # is absent: after it every unknown key would look identical to one
+        # the owner never wrote, and this warning would have nothing left to
+        # find (SPEC 2.2.1). `interfaces` is subtracted separately - it is not
+        # accepted, it already has its own, more specific warning (SPEC 2.3.1)
+        # and must not be named twice.
+        unknown = sorted(
+            (set(self.options or {}) - ACCEPTED_CONFIG_KEYS) - {"interfaces"}
+        )
+        if unknown:
+            log.warning(
+                "[companion] unknown config key(s): %s (accepted: %s)",
+                ", ".join(unknown),
+                ", ".join(sorted(ACCEPTED_CONFIG_KEYS)),
+            )
         self.options = {**DEFAULTS, **(self.options or {})}
         log.info("[companion] %s loading (websockets %s)", __version__, websockets_version())
 

@@ -412,6 +412,34 @@
         "sys.modules"
       ],
       "why": "the loader never registers the plugin module, so during import sys.modules.get(__name__) is None and any module-scope construct that resolves its own module by name dies. That made the plugin unloadable on every unit (issue #136) while the suite stayed green, because pytest imports it the ordinary way. Pinned as an absence because the absence is the fact: the day upstream adds a registration this constraint lifts, and we should hear about it rather than keep working around something that no longer applies"
+    },
+    {
+      "id": "F32a",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "plugin.options = config['main']['plugins'][name]"
+      ],
+      "why": "a plugin's options are the TOML table itself, assigned wholesale. pwnagotchi adds no key of its own, which is what lets this plugin treat any key outside DEFAULTS plus enabled as a misspelling and say so (SPEC 2.2.1, issue #137). The day this line composes a dict instead of assigning one, that rule can warn on a correct configuration"
+    },
+    {
+      "id": "F32b",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "contains_all",
+      "text": [
+        "pwnagotchi.config['main']['plugins'][name]['enabled'] = enable"
+      ],
+      "why": "the one key pwnagotchi itself ever writes into a plugin's table, from toggle_plugin, and then persists with save_config. It is why `enabled` is in the accepted set of SPEC 2.2.1 while nothing else outside DEFAULTS is: it arrives without the owner typing it"
+    },
+    {
+      "id": "F32c",
+      "file": "pwnagotchi/plugins/__init__.py",
+      "kind": "absent",
+      "text": [
+        "plugin.options[",
+        "options.update("
+      ],
+      "why": "F32's load-bearing claim is an absence - pwnagotchi puts no key of its own into a plugin's options - and F32a/F32b pin two presences, which a new write added elsewhere in the file would pass straight through. These are the two shapes such a write would take: a per-key assignment into the options mapping, or a bulk update of it. Pinned as an absence for the same reason as F30b: the absence is the fact, and an assumption nobody asserts is how SPEC 2.2.1 starts warning on a correct configuration"
     }
   ]
 }

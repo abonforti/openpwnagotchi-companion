@@ -5,6 +5,7 @@
 // functions return; it does not itself decide how a value becomes text.
 
 import type { Gps, Mode } from './protocol'
+import type { ConnectionState, UnauthorizedReason } from './ws'
 
 /** The dash itself. Exported so no caller writes the character by hand. */
 export const DASH = '-'
@@ -305,4 +306,66 @@ export function formatNamedEvent(name: string | null, epochSeconds: number | nul
     return time
   }
   return DASH
+}
+
+/**
+ * The sentence Settings shows for a connection state (SPEC 4.5.2.1). Total
+ * over `ConnectionState`: a `switch` with no `default` arm, so a state
+ * added to the type without a case added here is a compile error rather
+ * than a silent fall-through, the same discipline `formatMode` and
+ * `formatGpsFix` already follow over their own closed enums.
+ *
+ * This is a different sentence from Dashboard's banner (SPEC 4.5.1.1),
+ * which also carries the session's staleness age in `degraded` and has no
+ * business here: Settings names the socket's own state, not the age of
+ * the last snapshot it carried.
+ */
+export function formatConnectionState(state: ConnectionState): string {
+  switch (state) {
+    case 'connecting':
+      return 'Connecting'
+    case 'connected':
+      return 'Connected'
+    case 'degraded':
+      return 'Connected (data is stale)'
+    case 'offline':
+      return 'Offline'
+    case 'unauthorized':
+      return 'Unauthorized'
+    case 'restarting':
+      return 'Restarting'
+  }
+}
+
+/**
+ * The sentence Settings shows for the reason a connection is `unauthorized`
+ * (SPEC 4.3.1, 4.5.2.1). Total over `UnauthorizedReason`, the same
+ * discipline `formatConnectionState` follows above: "rejected" is a token
+ * sent and refused, "required" is no token sent, whether because none is
+ * stored or because the close that would have said so never arrived.
+ */
+export function formatUnauthorizedReason(reason: UnauthorizedReason): string {
+  switch (reason) {
+    case 'rejected':
+      return 'The unit refused the stored token.'
+    case 'required':
+      return 'The unit requires a token and none is stored.'
+  }
+}
+
+/**
+ * The call to action that follows `formatUnauthorizedReason`'s sentence
+ * (SPEC 4.5.2.1): together they are the Dashboard's `unauthorized` banner
+ * (SPEC 4.5.1.1), `${formatUnauthorizedReason(reason)} ${formatUnauthorizedCallToAction(reason)}`,
+ * and Settings shows the first half alone as its diagnostic. One source
+ * for both sentences, not a second typing of the half that tells somebody
+ * what to do -- the half most likely to be corrected later.
+ */
+export function formatUnauthorizedCallToAction(reason: UnauthorizedReason): string {
+  switch (reason) {
+    case 'rejected':
+      return 'Fix it in Settings.'
+    case 'required':
+      return 'Add it in Settings.'
+  }
 }

@@ -22,8 +22,14 @@ export interface Settings {
 }
 
 const SETTINGS_STORAGE_KEY = 'companion.settings'
-const DEFAULT_WS_PORT = 8082
-const DEFAULT_HTTP_PORT = 8443
+// SPEC 4.5.2.1: "any constant the library owns is imported, never
+// restated" -- the Settings view mints a new host on these same two
+// numbers (SPEC 4.5.2) and must not carry its own copy: a change to
+// either default here would otherwise leave the view quietly minting
+// hosts on the old port, with sanitizePort repairing nothing because
+// both values are in range.
+export const DEFAULT_WS_PORT = 8082
+export const DEFAULT_HTTP_PORT = 8443
 const MIN_PORT = 1
 const MAX_PORT = 65535
 
@@ -64,8 +70,55 @@ export function defaultHosts(): Host[] {
   ]
 }
 
+/**
+ * SPEC 4.7: activates Bluetooth rather than leaving `activeHostId` null.
+ * This is not the first-run path -- nothing is derived here, and a blob
+ * that parses is a blob whose remaining fields were the owner's, so the
+ * entries that fell out are not evidence about the address the page came
+ * from -- but the active id still has to be one of the defaults. Leaving
+ * nothing active would answer a damaged install with exactly the dead end
+ * issue #134 exists to remove, on the one occasion the owner has nothing
+ * saved to fall back to.
+ */
 function defaultSettings(): Settings {
-  return { hosts: defaultHosts(), activeHostId: null }
+  return { hosts: defaultHosts(), activeHostId: 'bluetooth' }
+}
+
+/**
+ * SPEC 4.7 (issue #134): "derived from the origin on first run". The app is
+ * served by the unit, so the address it was reached on is the one that just
+ * worked, and it becomes the starting, active entry rather than one of the
+ * two alternatives. `hostname` is read through a seam (see `loadSettings`
+ * below) rather than from `window.location` directly, because nothing in
+ * this module otherwise depends on the page's own location and a test has
+ * no way to navigate it.
+ *
+ * Only the address is derived; the ports keep their defaults (8082, 8443)
+ * because nothing on the page knows the WebSocket port and `location.port`
+ * is the HTTPS one only. A `hostname` that is not an IPv4 literal -- a
+ * desktop dev server's `localhost`, or a unit reached by name -- fails the
+ * same grammar every other address is held to, and in that case this falls
+ * back exactly to what ships today: the two prefilled entries with
+ * Bluetooth active, so `activeHostId` is never left `null` on a fresh
+ * install (the whole of issue #134).
+ */
+function firstRunSettings(hostname: string): Settings {
+  if (isUsableAddress(hostname)) {
+    const origin: Host = {
+      id: 'origin',
+      label: hostname,
+      address: hostname,
+      wsPort: DEFAULT_WS_PORT,
+      httpPort: DEFAULT_HTTP_PORT,
+      token: null,
+    }
+    return { hosts: [origin, ...defaultHosts()], activeHostId: 'origin' }
+  }
+  return { hosts: defaultHosts(), activeHostId: 'bluetooth' }
+}
+
+function defaultGetHostname(): string {
+  return window.location.hostname
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,8 +170,16 @@ function isIPv4Literal(address: string): boolean {
  * host to connect to -- the wildcard nothing in this project ever binds
  * (SPEC 3), and the limited broadcast address -- so those two are
  * refused here by name instead.
+ *
+ * Exported so `Settings.svelte` calls this instead of carrying its own
+ * copy of the grammar (SPEC 4.5.2.1): two expressions of one rule in two
+ * files, one of them outside the coverage gate, is the arrangement
+ * SPEC 4.5.1.1 already refused for a different rule, and it made the
+ * form's `try`/`catch` around the mutator's throw unreachable by
+ * accident rather than by the one-grammar design the backstop is meant
+ * to rest on.
  */
-function isUsableAddress(address: string): boolean {
+export function isUsableAddress(address: string): boolean {
   if (!isIPv4Literal(address)) return false
   return address !== '0.0.0.0' && address !== '255.255.255.255'
 }
@@ -163,19 +224,22 @@ function parseHost(value: unknown): Host | null {
  * origin can write companion.settings, and companion.token lives under the
  * same threat. A blob that is not JSON, or is JSON but not the
  * `{hosts, activeHostId}` shape this module writes, is indistinguishable
- * from an older version's shape read by a newer one -- both fall back to
- * the defaults so the app still starts, rather than being partially
- * salvaged.
+ * from an older version's shape read by a newer one, and `null` here is
+ * how that "will not parse" case is told apart from a shape that parses but
+ * whose data does not hold up (SPEC 4.7): the caller, `loadSettings`, takes
+ * a blob nothing can read down the same path as a first run rather than the
+ * plain defaults, because a blob nothing can read leaves no edit of the
+ * owner's to preserve.
  */
-function parseSettings(raw: string): Settings {
+function parseSettings(raw: string): Settings | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return defaultSettings()
+    return null
   }
   if (!isRecord(parsed) || !Array.isArray(parsed.hosts)) {
-    return defaultSettings()
+    return null
   }
   const hosts: Host[] = []
   for (const entry of parsed.hosts) {
@@ -224,10 +288,10 @@ export const activeHost: Readable<Host | null> = derived(
 )
 
 /**
- * Reads companion.settings and (re)initialises the store from it, falling
- * back to the defaults for anything that will not parse (SPEC 4.7). A read
- * that throws -- storage disabled or unreadable -- is treated the same as
- * a blob that will not parse.
+ * Reads companion.settings and (re)initialises the store from it, taking
+ * the first-run path (below) for anything that will not parse (SPEC 4.7).
+ * A read that throws -- storage disabled or unreadable -- is treated the
+ * same as a blob that will not parse.
  *
  * SPEC 4.7 also makes this one of the paths that has to reconcile
  * companion.token: a reload restores an active host from storage while the
@@ -237,17 +301,48 @@ export const activeHost: Readable<Host | null> = derived(
  * all. The resolved active host's token (or `null`, if none is active) is
  * written before the store is set, so nothing observes the mismatch.
  *
+ * SPEC 4.7 (issue #134): a missing key (nothing under `companion.settings`
+ * yet) is first run, and the active entry is derived from `getHostname()`
+ * rather than left `null` -- see `firstRunSettings`. That derived list is
+ * persisted immediately, so it is minted once and from then on is a host
+ * like any other: a later reload has a key to read and takes the branch
+ * below instead, which never re-derives, and an owner's edit to the label
+ * or address of that entry is therefore never undone by a later visit.
+ *
+ * A key that is present but will not parse -- `parseSettings` returning
+ * `null` -- takes this same first-run path rather than the plain defaults
+ * (SPEC 4.7): a blob nothing can read leaves no edit of the owner's to
+ * preserve, so the argument against re-deriving does not apply, and the
+ * address that has just served the page is still the address that works.
+ * A `localStorage` read that throws is a blob that will not parse too
+ * (SPEC 4.7), and is folded into the same `raw === null` case as a missing
+ * key above rather than routed through `parseSettings`, since there is no
+ * string to hand it. A blob that parses and then has every host dropped is
+ * `parseSettings` returning the defaults directly, which is a different
+ * rule with a different answer (SPEC 4.7) and does not take this branch.
+ *
+ * `getHostname` defaults to reading `window.location.hostname`; the
+ * parameter exists as a seam because nothing else in this module needs
+ * one, and a test cannot navigate the page to exercise the derivation.
+ *
  * Meant to be called once, at startup; the store above is what everything
  * after that point reads.
  */
-export function loadSettings(): Settings {
+export function loadSettings(getHostname: () => string = defaultGetHostname): Settings {
   let raw: string | null
   try {
     raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
   } catch {
     raw = null
   }
-  const next = raw === null ? defaultSettings() : parseSettings(raw)
+  const parsed = raw === null ? null : parseSettings(raw)
+  let next: Settings
+  if (parsed === null) {
+    next = firstRunSettings(getHostname())
+    persist(next)
+  } else {
+    next = parsed
+  }
   const active = next.hosts.find((host) => host.id === next.activeHostId) ?? null
   storeToken(active === null ? null : active.token)
   settingsWritable.set(next)

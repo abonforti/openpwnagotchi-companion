@@ -30,6 +30,8 @@ import {
   formatMode,
   formatNamedEvent,
   formatTemperature,
+  formatUnauthorizedCallToAction,
+  formatUnauthorizedReason,
   formatUnitTime,
   formatUptime,
   NEVER_REFRESHED,
@@ -1344,6 +1346,18 @@ describe('the connection banner', () => {
     // swapped, per SPEC.md's own account of the review that found it; only
     // an exact match against each pinned sentence catches that.
     expect((banner().textContent ?? '').trim()).toBe('The unit refused the stored token. Fix it in Settings.')
+
+    // SPEC.md 4.5.2.1 (amended): "Those two sentences are also half of the
+    // Dashboard's banner ... the banner is this sentence followed by its
+    // call to action ... One source, not two." Computed from the two
+    // formatters rather than typed out a second time here, so a mutant that
+    // makes Dashboard.svelte restate its own copy instead of composing
+    // these two functions is what this specific assertion catches, distinct
+    // from the literal check above (which only catches the formatters'
+    // *own* wording drifting from SPEC.md's table).
+    expect((banner().textContent ?? '').trim()).toBe(
+      `${formatUnauthorizedReason('rejected')} ${formatUnauthorizedCallToAction('rejected')}`,
+    )
   })
 
   it('renders the exact pinned sentence for the unauthorized "required" reason', async () => {
@@ -1354,6 +1368,13 @@ describe('the connection banner', () => {
     expect(banner().getAttribute('data-banner')).toBe('unauthorized')
     expect((banner().textContent ?? '').trim()).toBe(
       'The unit requires a token and none is stored. Add it in Settings.',
+    )
+
+    // Same pair of independent checks as the "rejected" case above: the
+    // literal pins the wording, this pins that Dashboard composes it from
+    // the same two functions Settings does, rather than a second copy.
+    expect((banner().textContent ?? '').trim()).toBe(
+      `${formatUnauthorizedReason('required')} ${formatUnauthorizedCallToAction('required')}`,
     )
   })
 

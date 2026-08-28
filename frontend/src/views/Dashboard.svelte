@@ -16,6 +16,8 @@
     formatMode,
     formatNamedEvent,
     formatTemperature,
+    formatUnauthorizedCallToAction,
+    formatUnauthorizedReason,
     formatUptime,
   } from '../lib/format'
   import { channel, connection, face, gps, stats } from '../lib/stores'
@@ -244,10 +246,17 @@
       }
       case 'offline':
         return 'Not connected. Reconnecting automatically. Check that the Personal Hotspot is on.'
-      case 'unauthorized':
-        return conn.unauthorizedReason === 'rejected'
-          ? 'The unit refused the stored token. Fix it in Settings.'
-          : 'The unit requires a token and none is stored. Add it in Settings.'
+      case 'unauthorized': {
+        // SPEC 4.5.2.1: this sentence and its call to action are one
+        // source, shared with Settings' diagnostic -- lib/format.ts, not a
+        // second typing of either half. `=== 'rejected'` picks 'required'
+        // for anything else, same as before this composed the two: the
+        // reason is never null while conn.state is 'unauthorized'
+        // (SPEC 4.3.1), but the type admits it and there is no third
+        // sentence to fall back to.
+        const reason = conn.unauthorizedReason === 'rejected' ? 'rejected' : 'required'
+        return `${formatUnauthorizedReason(reason)} ${formatUnauthorizedCallToAction(reason)}`
+      }
       case 'restarting':
         // SPEC 4.5.1.1 gives distinct copy for reason mode_change/reboot and
         // for reason shutdown, but `connection` (lib/stores.ts) mirrors only

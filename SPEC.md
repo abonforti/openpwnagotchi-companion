@@ -3116,6 +3116,140 @@ and lays out what those functions return.
   ws/http ports, optional token, quick-connect from history, diagnostics (last error, latency,
   negotiated plugin version).
 
+#### 4.5.2.1 Settings presentation and DOM hooks (issue #134)
+
+This is the screen that decides which unit the app talks to, and on a fresh install it is the
+only screen that matters, because nothing else can be reached until it has been used. §4.7 owns
+the data; what follows is the shape.
+
+**The host list comes first and the add-host form sits under it.** The common visit is an owner
+correcting the address of the unit in front of them, not adding a second unit, and a form above
+the list pushes the list off a phone screen for the case that almost never happens.
+
+**The add-host form is always visible, with no toggle.** A toggle is one more state and one more
+tap for nothing, and it fails exactly where it matters: §4.7 makes an empty host list a
+reachable state, and a screen whose only escape hatch is hidden behind a control is a screen
+somebody can be stuck on. The order and the absence of a toggle are recorded here because the
+first implementation arrived at both by accident, having been shaped to fit a test file whose
+author was guessing.
+
+**Ports are rendered and not editable**, with §4.5.1's reason: making them editable means the
+plugin accepts writes to its own configuration and then restarts to apply them, which drops the
+socket carrying the confirmation.
+
+**A token is edited in the row, beside the host it belongs to.** It has no grammar to check - a
+token is whatever the unit was configured with - so there is nothing for a validation step to
+do, and putting it behind an edit mode separates it from the one fact that gives it meaning,
+which is the unit it authenticates to.
+
+**It is masked, with a control to reveal it.** The first implementation rendered every host's
+token in a plain text field, so a screen opened on a phone held outdoors showed every unit's
+shared secret at once, to anybody beside the owner and to any screenshot. Masked by default
+closes that; a reveal control is what keeps the field usable, because a token typed wrong is
+otherwise indistinguishable from a token the unit rejects. The control is `data-action="reveal"`
+and it acts on one field at a time. **The add-host form's token is masked on the same terms.**
+It holds a secret being typed rather than one already saved, which changes how long it is on
+screen and not who can see it, and a form where the same field is masked in one place and plain
+in another teaches nobody anything except that the rule is decorative.
+
+**One field is revealed at a time, across the whole screen.** Revealing a token re-masks whatever
+was showing before it. Independent per-field state would allow two secrets to sit uncovered on
+the same screen at once, which is the thing being prevented, and the screen holds every unit the
+owner has.
+
+**Quick-connect from history**, which §4.5.2 also names, is not built. What "history" means when
+a saved host is already one tap from active is a decision rather than an omission, and it is
+issue #177.
+
+**An address is validated in the form** (§4.7), with the message next to the field and
+`role="alert"` on it, and the mutator's throw is caught as the backstop it is meant to be.
+
+**Diagnostics render what exists, and name what does not.** §4.5.2 asks for the last error,
+the latency and the negotiated plugin version. Only the third has a surface today
+(`capabilities.pluginVersion`), alongside the connection state and, when the state is
+`unauthorized`, its reason (§4.3.1). The other two need a surface in `lib/ws.ts` that does not
+exist, and a view must not manufacture one: labelling the authentication reason as "the last
+error" says nothing happened when a TLS failure or a refused connection is exactly what did.
+That surface is issue #176 and this block grows when it lands.
+
+**The DOM hooks**, declared here for the reason §4.5.1.1 gives: a test that finds an element by
+walking the markup breaks when the markup is rearranged, and this screen will be rearranged.
+
+- `data-view="settings"` on the view root, as §4.5 requires of every view.
+- `data-host-id` on each row of the list, carrying the host id, and `data-host-active="true"` on
+  the row of the active host.
+- `data-host-field` on the element carrying a host's value or the input editing it:
+  `label`, `address`, `wsPort`, `httpPort`, `token`.
+- `data-action` on every button: `activate`, `remove`, `edit`, `save`, `cancel`, `add`.
+- `data-field-error="address"` on the validation message.
+- `data-add-field` on the add-host form's inputs, over `label`, `address` and `token`. The form
+  is not a host and must not wear `data-host-field`: overloading the two made a test filter for
+  "the one address input outside any row", which is a test walking the markup by another name.
+- `data-field` on each diagnostic value, reusing §4.5.1.1's convention and its `data-empty="true"`:
+  `connectionState`, `pluginVersion`, and `unauthorizedReason` on the row that appears only while
+  the state is `unauthorized`. The third is named here because the first implementation rendered
+  the row without a hook, correctly refusing to invent one the list did not carry. It is also the
+  one field that carries **no** `data-empty`: the row exists only when there is a reason, so the
+  two can never both be true, and a branch that cannot be reached is worse than absent - it reads
+  as a case somebody handled.
+
+**The address grammar has one expression, and the form asks for it.** §4.7 says to validate in
+the form and keep the mutator's throw as the backstop that says the form forgot. That is right,
+and it was first implemented by copying the grammar into the view - which makes the backstop
+unreachable by construction, since the two agree on every input, and leaves two expressions of
+one rule in two files with one of them outside the coverage gate. §4.5.1.1 already refused that
+arrangement for the same reason, about a different rule. `lib/settings.ts` exports the predicate;
+the form calls it. The `try`/`catch` stays, and stays unreachable, and that is now a property of
+there being one grammar rather than a coincidence of two that happen to match.
+
+This is also what the tests can say. A test cannot reach a backstop that nothing can trip, so
+what it pins instead is that the form and the mutator refuse the same set - driven from one
+table, so a value added to it is asserted on both sides at once.
+
+**The copy lives in `lib/format.ts`, and the wording lives here.** The sentence shown for each
+connection state, and the one shown for each unauthorized reason, are strings chosen by rule from
+a value, which §4.5.1.1 settles: a view that formats is a view that computes, and §10.7 excuses
+`src/views/` from the coverage gate on the grounds that a view is markup. `Settings.svelte`
+subscribes and lays out what those functions return, the same way `Dashboard.svelte` does.
+
+The wording is tabled below for the reason §4.5.1.1 gives about its own banner: a test cannot
+assert equality against wording that lives nowhere, and a test that reads the string out of the
+module it is testing pins nothing at all.
+
+| state | sentence |
+|---|---|
+| `connecting` | Connecting |
+| `connected` | Connected |
+| `degraded` | Connected (data is stale) |
+| `offline` | Offline |
+| `unauthorized` | Unauthorized |
+| `restarting` | Restarting |
+
+| reason | sentence |
+|---|---|
+| `rejected` | The unit refused the stored token. |
+| `required` | The unit requires a token and none is stored. |
+
+**Those two sentences are also half of the Dashboard's banner**, which §4.5.1.1 pins as *The unit
+refused the stored token. Fix it in Settings.* and *The unit requires a token and none is stored.
+Add it in Settings.* One source, not two: the banner is this sentence followed by its call to
+action, and the call to action is the second thing `lib/format.ts` returns for a reason. Typed
+out twice they would drift on the first correction, and the correction most likely to be made is
+to the half that tells somebody what to do.
+
+**Any constant the library owns is imported, never restated.** The port defaults are the case
+that arose: the view minted hosts from its own `8082` and `8443` while `lib/settings.ts` held the
+same two numbers, so a change to the library's defaults would have left the screen quietly
+creating hosts on the old ports, with `sanitizePort` repairing nothing because both values are in
+range. It is the address grammar's mistake in a second place, found by the same review.
+
+**The remote string on this screen is the plugin version**, and §4.5.3 governs it like any other.
+The unauthorized reason is not one: `lib/ws.ts` mints it locally from a close code, so what
+arrives from the unit is the code and the reason is one of two values this codebase chose. An
+earlier draft of this section called both of them remote, and the test author who read it duly
+cast a script tag into `UnauthorizedReason` to defend a path the client cannot produce. A
+defence against something that cannot happen is not free: it reads as evidence that it can.
+
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
 
 Every string this app renders that did not come from the owner came from somebody else, and on
@@ -3277,19 +3411,58 @@ limited broadcast address. A grammar cannot tell either from an ordinary address
 two values the shape rule cannot decide and the only ones that need naming.
 
 **A settings blob that will not parse is replaced by the defaults, and the app still starts.**
+Those defaults are the ones a first run produces, derivation included: a blob nothing can read
+leaves no edit of the owner's to preserve, so the argument against re-deriving does not apply,
+and the address that has just served the page is still the address that works. The alternative -
+falling back to the two literals - would answer a corrupted install with the failure mode issue
+#134 exists to remove, on the one occasion the owner has no saved entry to fall back to.
 `localStorage` survives every upgrade the app will ever ship, so a shape written by an older
 version and read by a newer one is the normal case rather than corruption. Refusing to boot over
 it would strand somebody with an app that cannot be fixed from inside itself, on a device whose
 only recovery path is the settings screen it will not render. Individual fields are validated the
 same way: a bad port falls back to its default rather than rejecting the host.
 
-**Prefilled rather than discovered.** The Bluetooth address `172.20.10.2` is prefilled and the
-USB gadget address `10.0.0.2` is offered beside it. The note that the USB path is desktop-only,
-because an iPhone cannot use it, is rendered by the Settings screen (§4.5.2) and is **not** part
-of the default label: a label is persisted on first run and never re-derived, so a warning
-living there is a warning the owner can delete by renaming the entry. There is no scan: the app is served by the unit, so the
-address it was reached on is the one that works, and everything else is the owner typing what
-they set up.
+**Derived from the origin on first run, prefilled beside it, and never discovered (issue #134).**
+There is no scan. The app is served by the unit, so the address it was reached on is the one that
+just worked, and that address is where the host list starts: on first run the active entry is
+built from `location.hostname`, with the Bluetooth address `172.20.10.2` and the USB gadget
+address `10.0.0.2` offered beside it as alternatives rather than as the starting point.
+
+This is a decision reversed rather than a rule applied, and the reason is that the sentence above
+- the address it was reached on is the one that works - argued for derivation while the code
+prefilled a literal. Over a Personal Hotspot the subnet is always `172.20.10.0/28` and **the host
+part comes from the phone's DHCP server** (§2.3.1, which is why `bind_addresses` accepts a CIDR
+block rather than a literal). A unit that did not get `.2` served the app correctly and then could
+not be connected to, from a screen that could not be edited, which is the whole of issue #134.
+
+Three things this is not, each of which was an argument for leaving it alone:
+
+- **The page and the socket are different ports**, and §2.15.1 already had to say that `'self'`
+  does not cover the socket for exactly that reason. Same host, different port, is an assumption
+  and not a fact. It is a much smaller assumption than same-subnet-different-host, which is what
+  the literal assumed and got wrong.
+- **Only the address is derived. The ports are not.** `location.port` is the HTTPS port and is
+  therefore knowable, but nothing on the page knows the WebSocket port, and a pair where one half
+  was measured and the other guessed is harder to reason about than two defaults. Both start at
+  8082 and 8443 and are shown read-only as diagnostics (§4.5.1).
+- **A derived address that is not an address is not used.** `location.hostname` is whatever served
+  the page: a desktop dev server derives `localhost`, and a unit reached by name derives a name.
+  Neither is an IPv4 literal, so neither passes the grammar above, and in that case the list falls
+  back to the two prefilled entries with Bluetooth active. That is the shipped list with one
+  correction: what shipped left **no** host active at all, which is the dead end issue #134 is
+  named for, and a fallback that reproduces it would fix nothing on the machines the derivation
+  cannot help. The derivation can only ever add an entry that would have been typed by hand.
+
+**It is derived once and then it is a host like any other.** The entry is minted on first run,
+persisted, and never re-derived: an owner who edits its label or its address keeps that edit, and
+a later visit from a different address adds nothing and changes nothing. Re-deriving would undo
+the owner's own correction, and on the transport where the address moves, undo it repeatedly.
+Its id is the stable `origin`, for the same reason `bluetooth` and `usb` are stable.
+
+The note that the USB path is desktop-only, because an iPhone cannot use it, is rendered by the
+Settings screen (§4.5.2) and is **not** part of the default label: a label is persisted on first
+run and never re-derived, so a warning living there is a warning the owner can delete by renaming
+the entry.
 
 **The list is for a client served by the unit it talks to.** A client served by unit A and
 pointed at unit B is blocked by A's Content-Security-Policy, which names A's addresses and
@@ -3356,6 +3529,15 @@ A list that is empty **because every entry was dropped** is a different thing, a
 come back: nobody chose that state, and leaving it empty strands somebody with no entry to
 connect to and no prefilled one to start from, on the screen that is their only way back.
 
+**Those defaults have Bluetooth active**, and this is not the same path as a first run: nothing
+is derived here, because a blob that parses is a blob whose remaining fields were the owner's,
+and the entries that fell out are not evidence about the address the page came from. But the
+active id has to be one of them. Returning a list with nothing active would answer a damaged
+install with precisely the dead end issue #134 exists to remove, and it is the one moment the
+owner has nothing saved to fall back to. The three cases stay distinct - unparseable derives,
+every-host-dropped restores with Bluetooth active, a deliberately empty list stays empty - and
+none of them leaves the app with nowhere to connect except the one the owner chose.
+
 **A host with no usable `id` or `address` is dropped; every other bad field is repaired.** Those
 two have no substitute: a host with no address is not a host. A missing label falls back to the
 address, a bad port to its default, which is the difference between losing one field and
@@ -3383,6 +3565,17 @@ order, and says the module that performs it is whoever holds the client. That is
 it in the wrong order leaves the previous unit's access points, peers and handshakes on screen
 under the new unit's name, which is the disclosure §4.4.2 refuses on `unauthorized` arriving by
 a different road.
+
+**`loadSettings()` runs before the subscription, and since issue #134 that ordering decides
+whether a socket opens.** It was already the right order, for a small reason: subscribing first
+would fire once for the module's defaults and again when the load overwrote them, which was extra
+work and a second place to get the ordering right. The reason is no longer small. §4.7 now has
+`defaultSettings()` activate `bluetooth`, so the module's initial value names a host, and a
+subscription set up before the load would build a client and open a socket to `172.20.10.2`
+before storage had been read - on every start, including one whose stored settings name a
+different unit. The fix that removed a dead end downstream made an ordering load-bearing
+upstream, which is the kind of thing that is obvious in the sentence that says it and invisible
+in the diff that causes it. A test pins the order.
 
 **It subscribes to `activeHost` and reacts.** A host change is the event; the session tears the
 old client down, resets the stores, builds a client for the new host with `wsUrlFor`, and
@@ -3975,11 +4168,19 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   PASV control; §4.3.4, the mode and PASV indicators derived from `stats` and never from the tap,
   showing the request as pending in between and **not** reverting silently if the command fails;
   §4.6.1's GPS states resolved first-match-wins in the stated order.
-- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as an IPv4 literal so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable.
+- `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as an IPv4 literal so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable. It also holds the three cases §4.7 keeps apart, which is where they belong because they are the loader's behaviour and not the derivation's: a blob that will not parse taking the first-run path, a blob that lost every host restoring the defaults with Bluetooth active and **without** deriving, and a deliberately empty list staying empty. Each of the three drives the hostname seam with a usable address, because under a hostname that is not one the deriving and non-deriving branches produce the same list and an assertion made there proves nothing about the defect it names.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
-- `format.spec.ts`: every §4.5.1.1 rule that turns a value into a string, asserted on the
-  function rather than through the DOM: `null` to a dash for each nullable field of `Stats`;
+- `format.spec.ts`: every §4.5.1.1 and §4.5.2.1 rule that turns a value into a string, asserted
+  on the function rather than through the DOM. The §4.5.2.1 half is the six connection-state
+  sentences, the two unauthorized-reason sentences and the two calls to action, each by equality
+  against the tables there, plus the assertion that no two states and no two reasons share a
+  sentence, which is the mutant a per-case table alone does not catch. One assertion there is
+  worth more than the rest together: that the reason and its call to action, composed, equal
+  §4.5.1.1's banner text byte for byte. It is what keeps the Settings row and the Dashboard
+  banner one source, and it is paired with an assertion in `dashboard.spec.ts` that the view
+  actually composes them - two failures worth telling apart, the wording drifting and the view
+  ceasing to use it. Then: `null` to a dash for each nullable field of `Stats`;
   an uptime cut to its two largest units at every boundary that changes which two those are;
   a `sessionAge` in whole seconds below a minute and whole minutes above it, and `null` reading
   as never refreshed rather than as zero; a temperature rounded, not truncated; a unit timestamp
@@ -4004,6 +4205,27 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   created, asserted on the DOM rather than assumed from Svelte's default, since §4.5.3 is the
   reason this view is the first place it matters; and a hostile name of exactly `-`, which must
   not make the field report itself as empty.
+- `settings-origin.spec.ts`: §4.7's first-run derivation, which is the whole of issue #134 below
+  the screen. The `origin` entry minted from the page's hostname and active, with the two
+  prefilled entries beside it and the ports left at their defaults; the fallback asserted over a
+  table of hostnames that are not addresses rather than over one, since `localhost`, a name, a
+  bracketed IPv6 literal, the two addresses §4.7 refuses by name and a leading-zero octet each
+  fail for a different reason; and that it is derived **once**, so a second load from a different
+  address changes nothing and an owner's edit to that entry survives. The hostname is driven
+  through the seam rather than through whatever the test environment reports, because a default
+  that agrees with the fallback by accident hides the branch that matters.
+- `settings-view.spec.ts`: the Settings screen against §4.5.2.1's declared hooks and never by
+  walking the markup. Add, edit, remove and activate; the list before the form and the form
+  present with no interaction, both of which are specified with reasons and are what a rearrange
+  would silently undo; the ports rendered and not editable; the token edited in the row and
+  masked; the address refused by the form with the message beside it and no throw reaching the
+  user; the USB note in the screen and not in the persisted label; the diagnostics rendering the
+  state and the plugin version, the unauthorized reason only while the state is `unauthorized`,
+  and **no** last error, since §4.5.2.1 says a view must not manufacture a surface that does not
+  exist (issue #176). Two assertions carry more than their size: one table of addresses driven
+  through the exported predicate, through the mutator and through the form, which is what
+  replaces the coverage a deliberately unreachable backstop can never have; and §4.5.3 on the
+  plugin version and the reason, asserted on the DOM rather than assumed from Svelte's default.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

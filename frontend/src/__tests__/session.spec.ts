@@ -90,6 +90,22 @@ function newHost(overrides: Partial<Omit<Host, 'id'>> = {}): Omit<Host, 'id'> {
   }
 }
 
+/**
+ * Reaches "no host active" deliberately, by persisting a settings blob whose
+ * `hosts` is already a valid empty array (SPEC 4.7: "An empty host list is a
+ * state, not a corruption ... a stored blob whose hosts is a valid empty
+ * array is left empty"). Since issue #134, `loadSettings()` on a *missing*
+ * blob derives an active entry (falling back to the prefilled Bluetooth
+ * default) rather than leaving nothing active, so most of this file's tests
+ * -- which are about the session's own behaviour once it holds a host list
+ * it built through addHost()/activateHost(), not about what a fresh install
+ * does -- need to reach their "nothing active yet" starting point this way
+ * instead of relying on that default by accident.
+ */
+function seedNoActiveHost(): void {
+  fakeStorage.setItem(SETTINGS_KEY, JSON.stringify({ hosts: [], activeHostId: null }))
+}
+
 // ---------------------------------------------------------------------------
 // Fixture builders for the messages the "real data through the client" tests
 // push, matching the shapes stores.spec.ts already validated against
@@ -146,6 +162,7 @@ function logLinesEnvelope(lines: string[], path = '/tmp/pwnagotchi.log'): Outgoi
 async function withOneClient() {
   const mods = await loadModules()
   const { loadSettings, addHost, activateHost, startSession } = mods
+  seedNoActiveHost()
   loadSettings()
   const host = addHost(newHost({ label: 'Original label', address: '172.20.10.9', token: 'tok-a' }))
   const created: FakeWsClient[] = []
@@ -266,9 +283,19 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
     expect(currentClient()).toBeNull()
   })
 
-  it('is null when startSession runs with no active host, and creates no client', async () => {
+  it('a fresh install already has an active host, and startSession() builds exactly one client for it (SPEC 4.7, issue #134)', async () => {
+    // No companion.settings blob at all: a genuine first-ever load. Before
+    // #134, defaultSettings() left activeHostId null and this test asserted
+    // that startSession() built nothing; #134 reverses that -- the active
+    // entry is now derived from the origin, falling back to the prefilled
+    // Bluetooth default when the origin is not a usable IPv4 literal. The
+    // fallback is forced deterministically here with the getHostname
+    // override rather than relied on via jsdom's own default location,
+    // which settings-origin.spec.ts already owns testing in full; this test
+    // only pins that the session reacts to that default the same way it
+    // reacts to any other active host.
     const { loadSettings, startSession, currentClient } = await loadModules()
-    loadSettings() // defaults: activeHostId is null (SPEC 4.7 defaultSettings)
+    loadSettings(() => 'not-an-ip-address')
 
     const created: FakeWsClient[] = []
     const stop = startSession({
@@ -279,13 +306,14 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
       },
     })
 
-    expect(created).toHaveLength(0)
-    expect(currentClient()).toBeNull()
+    expect(created).toHaveLength(1)
+    expect(currentClient()).toBe(asClient(created[0]!))
     stop()
   })
 
   it('creates exactly one client when a host becomes active after start, and currentClient() is it', async () => {
     const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost({ label: 'Unit A' }))
 
@@ -298,6 +326,12 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
       },
     })
     expect(created).toHaveLength(0)
+    // Dropped when this test was repurposed for the fresh-install case
+    // above; put back here, where "nothing active yet" is reached
+    // deliberately rather than by accident (SPEC 4.7's seedNoActiveHost()
+    // above), because "builds no client" alone does not pin that
+    // currentClient() itself reads null while nothing is active.
+    expect(currentClient()).toBeNull()
 
     activateHost(host.id)
 
@@ -309,6 +343,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 
   it('is null again after stop(), and stop() releases the client', async () => {
     const { loadSettings, addHost, activateHost, startSession, currentClient, connection } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
     const created: FakeWsClient[] = []
@@ -337,6 +372,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 
   it('calling the same stop twice is harmless: no second teardown, no throw, the client released exactly once', async () => {
     const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
     const created: FakeWsClient[] = []
@@ -359,6 +395,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 
   it('a stale stop from a previous session does not tear down the session started after it', async () => {
     const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
     const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.3' }))
@@ -435,6 +472,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 
   it('starting twice refuses loudly rather than building a second client, matching connectStores', async () => {
     const { loadSettings, addHost, activateHost, startSession } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
     const created: FakeWsClient[] = []
@@ -457,6 +495,63 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 4.8 (issue #134): "loadSettings() runs before the subscription, and since
+// issue #134 that ordering decides whether a socket opens." SPEC 4.7 has
+// defaultSettings() activate `bluetooth`, so settingsWritable's
+// module-level initial value -- before anything has read storage -- already
+// names an active host. A subscription set up ahead of the load would fire
+// once for that default and build a client for it, then again once the
+// load overwrote it with whatever was actually stored: a socket opened to
+// 172.20.10.2 on every start, including one whose stored settings name a
+// completely different unit, and a second client built right behind it.
+// Nothing in the public surface enforces the order directly, so this pins
+// it by observing what the session actually builds rather than by naming
+// an internal call order.
+// ---------------------------------------------------------------------------
+
+describe("loadSettings() runs before the activeHost subscription (4.8, issue #134)", () => {
+  it('a stored host that is not the Bluetooth default is what gets built -- not a transient client for the module default the wrong order would open first', async () => {
+    const { startSession, currentClient } = await loadModules()
+    // Written straight to storage, deliberately without this test calling
+    // loadSettings() itself first: the whole point is what startSession()
+    // does on its own, and a test that pre-loads would no longer be able
+    // to tell the two orderings apart.
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [{ id: 'unit-real', label: 'Unit A', address: '172.20.10.9', wsPort: 8082, httpPort: 8443, token: null }],
+        activeHostId: 'unit-real',
+      }),
+    )
+
+    const created: FakeWsClient[] = []
+    const stop = startSession({
+      createClient: (options) => {
+        const c = new FakeWsClient(options)
+        created.push(c)
+        return asClient(c)
+      },
+    })
+
+    // Exactly one client, ever: a subscription set up before loadSettings()
+    // would additionally build one for the module's own default (Bluetooth,
+    // 172.20.10.2, active since #134) before the load overwrote it, and
+    // that first client is counted here even though a correctly-ordered
+    // rebuild would go on to tear it down again.
+    expect(created).toHaveLength(1)
+    // The count alone cannot rule out a wrong-order implementation whose
+    // rebuild happens to collapse back to a single client with the right
+    // address by chance, so the assertion names the unit: the one client
+    // built must be for the stored host's address, not the default's.
+    expect(created[0]!.options.url).toContain('172.20.10.9')
+    expect(created[0]!.options.url).not.toContain('172.20.10.2')
+    expect(currentClient()).toBe(asClient(created[0]!))
+
+    stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 4.4.2 + 4.8: the switch is teardown, then resetStores(), then attach --
 // in that order, not merely all three eventually happening.
 // ---------------------------------------------------------------------------
@@ -464,6 +559,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 describe('switching hosts: teardown, then resetStores(), then attach, in that order (4.4.2, 4.8)', () => {
   it('pins the order: reordering either boundary is independently observable', async () => {
     const { loadSettings, addHost, activateHost, startSession, stats } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
     const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.3' }))
@@ -511,6 +607,7 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
 
   it('the old client is fully detached: a state it emits after the switch reaches nobody', async () => {
     const { loadSettings, addHost, activateHost, startSession, connection } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
     const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.3' }))
@@ -840,6 +937,7 @@ describe('the rebuild identity and the token (4.8, corrected)', () => {
 
   it('the client is never built with a token option: the session leaves companion.token as the only source', async () => {
     const { loadSettings, addHost, activateHost, startSession } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost({ label: 'Has a token', token: 'tok-should-not-be-forwarded' }))
     const created: FakeWsClient[] = []

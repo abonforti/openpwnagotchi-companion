@@ -76,11 +76,13 @@ export function currentClient(): WsClient | null {
  * calls it, and `lib/settings.ts` says as much: "the stores hold the
  * defaults until it runs." It runs before the subscription below is set
  * up, not after, so the very first evaluation of `activeHost` already
- * reflects whatever was persisted rather than the module's defaults --
- * subscribing first would fire once for the defaults (a no-op, since a
- * fresh install has no active host) and once more when `loadSettings()`
- * then overwrites the settings store, which is extra work for no benefit
- * and a second place to get the ordering right instead of one.
+ * reflects whatever was persisted rather than the module's defaults.
+ * That ordering is load-bearing, not a tidiness choice (SPEC 4.8, issue
+ * #134): `defaultSettings()` activates `bluetooth`, so the module's
+ * initial value already names a host, and subscribing before the load
+ * would build a client and open a socket to `172.20.10.2` on every start
+ * -- including one whose stored settings name a different unit -- before
+ * storage had even been read.
  *
  * Returns its own stop, to be called once, when the shell unmounts. That is
  * the only moment this layer can observe: backgrounding the app on a phone

@@ -7,16 +7,20 @@ import {
   formatBatteryPercent,
   formatChannel,
   formatCharging,
+  formatConnectionState,
   formatGpsFix,
   formatGpsSource,
   formatMode,
   formatNamedEvent,
   formatTemperature,
+  formatUnauthorizedCallToAction,
+  formatUnauthorizedReason,
   formatUnitTime,
   formatUptime,
   NEVER_REFRESHED,
 } from '../lib/format'
 import type { Gps } from '../lib/protocol'
+import type { ConnectionState, UnauthorizedReason } from '../lib/ws'
 
 // Written from SPEC.md 4.5.1.1's function table only, never from lib/format.ts
 // itself (companion-implementer is authoring that file in parallel). Every
@@ -615,5 +619,100 @@ describe('non-finite and negative-duration input is treated as not known', () =>
     expect(formatNamedEvent('TestNet_001', NaN)).toBe('TestNet_001')
     expect(formatNamedEvent(null, NaN)).toBe(DASH)
     expect(formatNamedEvent('TestNet_001', Infinity)).toBe('TestNet_001')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatConnectionState / formatUnauthorizedReason - SPEC.md 4.5.2.1: "The
+// copy lives in lib/format.ts ... Pinning the sentences themselves is then
+// possible and belongs with the formatter, in the way 4.5.1.1 pins the
+// Dashboard's banner text." Both are total switches with no default arm
+// over their respective closed enums (ConnectionState, UnauthorizedReason),
+// so every branch is reachable and every one is asserted here individually:
+// a case each, exact-matched, so a mutant merging or swapping two sentences
+// cannot pass the way SPEC.md 4.5.1.1's own account of that defect for the
+// Dashboard banner describes.
+// ---------------------------------------------------------------------------
+
+describe('formatConnectionState', () => {
+  it.each([
+    ['connecting', 'Connecting'],
+    ['connected', 'Connected'],
+    ['degraded', 'Connected (data is stale)'],
+    ['offline', 'Offline'],
+    ['unauthorized', 'Unauthorized'],
+    ['restarting', 'Restarting'],
+  ] as const)('%s -> %s', (state, expected) => {
+    expect(formatConnectionState(state as ConnectionState)).toBe(expected)
+  })
+
+  it('gives every state its own sentence: no two states share one', () => {
+    // A mutant that merges two branches (e.g. degraded returning the same
+    // string as connected) survives an assertion that only checks each
+    // sentence individually against its own pinned string if the two
+    // pinned strings themselves happened to collide - they do not here,
+    // and this test is what would catch the merge itself rather than
+    // relying on that coincidence.
+    const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'unauthorized', 'restarting']
+    const sentences = states.map((state) => formatConnectionState(state))
+    expect(new Set(sentences).size).toBe(states.length)
+  })
+})
+
+describe('formatUnauthorizedReason', () => {
+  it.each([
+    ['rejected', 'The unit refused the stored token.'],
+    ['required', 'The unit requires a token and none is stored.'],
+  ] as const)('%s -> %s', (reason, expected) => {
+    expect(formatUnauthorizedReason(reason as UnauthorizedReason)).toBe(expected)
+  })
+
+  it('gives the two reasons different sentences: a swap or a merge both fail this', () => {
+    // SPEC.md 4.5.1.1 records exactly this defect for the Dashboard's own
+    // pair of unauthorized sentences: "swapping the two unauthorized arms
+    // ... survived a test asserting only that both sentences mention a
+    // token and differ from each other." This test intentionally goes
+    // further than that weak shape by pinning each sentence to its exact
+    // reason above; this second assertion only adds that a merge (both
+    // reasons returning one shared string) is caught too.
+    expect(formatUnauthorizedReason('rejected')).not.toBe(formatUnauthorizedReason('required'))
+  })
+})
+
+describe('formatUnauthorizedCallToAction', () => {
+  it.each([
+    ['rejected', 'Fix it in Settings.'],
+    ['required', 'Add it in Settings.'],
+  ] as const)('%s -> %s', (reason, expected) => {
+    expect(formatUnauthorizedCallToAction(reason as UnauthorizedReason)).toBe(expected)
+  })
+
+  it('gives the two reasons different calls to action: a swap or a merge both fail this', () => {
+    expect(formatUnauthorizedCallToAction('rejected')).not.toBe(formatUnauthorizedCallToAction('required'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC.md 4.5.2.1 (amended): "Those two sentences are also half of the
+// Dashboard's banner ... the banner is this sentence followed by its call
+// to action ... One source, not two." This is the assertion the review
+// asked for, and it matters more than either per-function table above: it
+// pins that the composition of formatUnauthorizedReason and
+// formatUnauthorizedCallToAction reproduces SPEC.md 4.5.1.1's own banner
+// table byte for byte, which is what would catch the two copies drifting
+// apart if a future edit changed one function's wording without the
+// banner's composition (or the table itself) following. dashboard.spec.ts
+// separately pins that Dashboard.svelte actually calls these two functions
+// rather than composing its own copy; this test pins that the composition
+// itself is correct, independent of who calls it.
+// ---------------------------------------------------------------------------
+
+describe('the Dashboard unauthorized banner is this composition (SPEC 4.5.1.1, 4.5.2.1)', () => {
+  it.each([
+    ['rejected', 'The unit refused the stored token. Fix it in Settings.'],
+    ['required', 'The unit requires a token and none is stored. Add it in Settings.'],
+  ] as const)('%s composes to the pinned banner sentence', (reason, pinnedBannerSentence) => {
+    const composed = `${formatUnauthorizedReason(reason as UnauthorizedReason)} ${formatUnauthorizedCallToAction(reason as UnauthorizedReason)}`
+    expect(composed).toBe(pinnedBannerSentence)
   })
 })

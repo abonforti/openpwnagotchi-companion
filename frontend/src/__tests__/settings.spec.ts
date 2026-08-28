@@ -111,6 +111,18 @@ async function loadModule() {
   return import('../lib/settings')
 }
 
+/**
+ * Drives loadSettings()'s getHostname seam deterministically, the way
+ * settings-origin.spec.ts does, instead of stubbing the global `location`
+ * object. Only used here to force the derivation branch on demand; the
+ * derivation's own shape (the "origin" id, the two prefilled entries beside
+ * it, the address-only/no-ports rule) is settings-origin.spec.ts's job and
+ * is not re-tested in this file.
+ */
+function hostnameOf(value: string): () => string {
+  return () => value
+}
+
 function newHost(overrides: Partial<Omit<Host, 'id'>> = {}): Omit<Host, 'id'> {
   return {
     label: 'Test unit',
@@ -301,6 +313,76 @@ describe('a hostile persisted blob does not stop the app from starting (4.7)', (
 })
 
 // ---------------------------------------------------------------------------
+// 4.7 was amended for issue #134: "Those defaults are the ones a first run
+// produces, derivation included: a blob nothing can read leaves no edit of
+// the owner's to preserve, so the argument against re-deriving does not
+// apply, and the address that has just served the page is still the
+// address that works." The tests above only pinned well-formedness for
+// each unparseable shape; these pin that the *same* shapes now also take
+// the derive-from-hostname branch rather than the plain, non-active
+// defaults - forced deterministically through the getHostname seam rather
+// than left to whatever jsdom's own location happens to report, since a
+// test that only worked by accident of the test runner's default URL would
+// prove nothing about the rule.
+//
+// This is one of the three cases SPEC 4.7 now separates by name, and the
+// one most easily confused with the "every host dropped" case just below:
+// both start from a `companion.settings` value that could not, in the end,
+// be trusted, but only this one is first run. A blob that parses and then
+// loses every host to repair is a returning owner whose data is gone, not
+// a first-ever load, and 4.7 draws that line explicitly (no derivation).
+// ---------------------------------------------------------------------------
+
+describe('a blob that will not parse takes the first-run path, derivation included (4.7, issue #134)', () => {
+  it('not JSON at all: derives the origin host and persists it', async () => {
+    fakeStorage.setItem(SETTINGS_KEY, 'not json at all {{{')
+    const { loadSettings } = await loadModule()
+
+    const result = loadSettings(hostnameOf('172.20.10.9'))
+
+    const origin = result.hosts.find((h) => h.id === 'origin')
+    expect(origin?.address).toBe('172.20.10.9')
+    expect(result.activeHostId).toBe('origin')
+    // Persisted, not merely returned: a later load must see the same host
+    // rather than re-deriving it from whatever the origin happens to be by
+    // then (4.7: "derived once and then it is a host like any other").
+    const persisted = fakeStorage.getItem(SETTINGS_KEY)
+    expect(persisted).not.toBeNull()
+    expect(JSON.parse(persisted as string).activeHostId).toBe('origin')
+  })
+
+  it('not JSON at all, with an origin that is not a usable IPv4 address: falls back to the prefilled Bluetooth default, same as a missing key', async () => {
+    fakeStorage.setItem(SETTINGS_KEY, 'not json at all {{{')
+    const { loadSettings } = await loadModule()
+
+    const result = loadSettings(hostnameOf('not-an-ip-address'))
+
+    expect(result.activeHostId).toBe('bluetooth')
+    expect(result.hosts.some((h) => h.id === 'origin')).toBe(false)
+  })
+
+  it('valid JSON of the wrong type (a bare string) also derives: the rule is "cannot be trusted", not "failed to parse as JSON"', async () => {
+    fakeStorage.setItem(SETTINGS_KEY, JSON.stringify('just a string'))
+    const { loadSettings } = await loadModule()
+
+    const result = loadSettings(hostnameOf('172.20.10.11'))
+
+    expect(result.activeHostId).toBe('origin')
+    expect(result.hosts.find((h) => h.id === 'origin')?.address).toBe('172.20.10.11')
+  })
+
+  it('a read that throws is treated exactly like a blob that will not parse: it derives too, not just the plain defaults', async () => {
+    fakeStorage.throwOnGetKeys.add(SETTINGS_KEY)
+    const { loadSettings } = await loadModule()
+
+    const result = loadSettings(hostnameOf('172.20.10.13'))
+
+    expect(result.activeHostId).toBe('origin')
+    expect(result.hosts.find((h) => h.id === 'origin')?.address).toBe('172.20.10.13')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 4.7: "A host with no usable id or address is dropped; every other bad
 // field is repaired." Losing one field and losing the entry are different
 // outcomes, pinned separately here.
@@ -355,7 +437,13 @@ describe('a host with no usable id or address is dropped, everything else is rep
 // ---------------------------------------------------------------------------
 // 4.7: "An empty host list is a state, not a corruption" - but only when it
 // is genuinely empty. A list emptied by every entry being dropped is a
-// different thing, and the defaults come back.
+// different thing, and the defaults come back. This is the second of the
+// three cases 4.7 now separates by name, and the pair below it (a
+// deliberately empty array vs. one emptied by dropping) is the one a
+// careless test is most likely to merge, since both start from `hosts: []`
+// after parsing. Neither derives from the origin: derivation is first-run
+// only (the describe block above), and both of these cases presuppose a
+// `companion.settings` value that parsed, which a first run never had.
 // ---------------------------------------------------------------------------
 
 describe('an empty host list is a state, not corruption - unless every entry was dropped (4.7)', () => {
@@ -371,17 +459,88 @@ describe('an empty host list is a state, not corruption - unless every entry was
     expect(defaultHosts().length).toBeGreaterThan(0)
   })
 
+  it('a deliberately empty list does not derive either, even when the origin is a usable IPv4 address', async () => {
+    // Distinguishes "an empty array is left as data" from "an empty array
+    // falls through to the same first-run branch a missing key takes":
+    // both would produce an empty-then-nonempty-looking result if this case
+    // quietly derived, but 4.7 reserves derivation for a missing/unreadable
+    // key. A usable origin is deliberately supplied so a wrongly-derived
+    // implementation cannot hide behind an unusable one.
+    const emptyBlob: Settings = { hosts: [], activeHostId: null }
+    fakeStorage.setItem(SETTINGS_KEY, JSON.stringify(emptyBlob))
+    const { loadSettings } = await loadModule()
+
+    const result = loadSettings(hostnameOf('172.20.10.9'))
+
+    expect(result.hosts).toEqual([])
+    expect(result.activeHostId).toBeNull()
+  })
+
   it('a list emptied because every entry was dropped restores the defaults instead of staying empty', async () => {
     fakeStorage.setItem(
       SETTINGS_KEY,
       JSON.stringify({ hosts: [{ label: 'No id or address at all' }], activeHostId: null }),
     )
     const { loadSettings, defaultHosts } = await loadModule()
-    const result = loadSettings()
+    // A usable IPv4 origin, driven explicitly: under jsdom's own default
+    // hostname (not a usable address) the deriving and non-deriving
+    // branches both fall back to the same Bluetooth-active result, so an
+    // assertion made under that default would be true of either branch and
+    // would not actually be guarding against the every-host-dropped path
+    // wrongly deriving. Only a usable origin makes the two diverge.
+    const result = loadSettings(hostnameOf('172.20.10.9'))
     const defaults = defaultHosts()
     expect(result.hosts.length).toBe(defaults.length)
     expect(result.hosts.length).toBeGreaterThan(0)
     expect(result.hosts.map((h) => h.address).sort()).toEqual(defaults.map((h) => h.address).sort())
+    // SPEC 4.7: "those defaults have Bluetooth active" -- nothing chosen is
+    // never left as nothing active. With a usable origin supplied, this is
+    // also the assertion that catches a wrongly-deriving implementation:
+    // deriving would activate an "origin" host instead.
+    expect(result.activeHostId).toBe('bluetooth')
+  })
+
+  it('every host dropped restores the plain defaults, not the derived ones, even when the origin is a usable IPv4 address (4.7: "No derivation")', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ hosts: [{ label: 'No id or address at all' }], activeHostId: null }),
+    )
+    const { loadSettings, defaultHosts } = await loadModule()
+
+    const result = loadSettings(hostnameOf('172.20.10.9'))
+
+    // A first-run-derived result would mint an "origin" host from this
+    // usable IPv4 hostname and activate it; this case is explicitly not
+    // first run, so no "origin" host appears, and the active entry is the
+    // prefilled Bluetooth default rather than the one derived from the
+    // address the page happened to be served on.
+    expect(result.hosts.some((h) => h.id === 'origin')).toBe(false)
+    expect(result.activeHostId).toBe('bluetooth')
+    expect(result.hosts.map((h) => h.address).sort()).toEqual(defaultHosts().map((h) => h.address).sort())
+  })
+
+  it('the boundary between "stays empty" and "restores defaults" is one dropped host, not a fuzzy threshold', async () => {
+    // The two blobs below differ by exactly the one thing 4.7's rule turns
+    // on: whether `hosts` started non-empty and lost every entry, or
+    // started empty. A parser that gets the boundary condition backwards -
+    // `hosts.length > 0` written as `>=`, say - collapses one of these into
+    // the other; this test needs both outcomes in the same run to catch
+    // that, where the two tests above only pin each shape in isolation.
+    const { loadSettings: loadA, defaultHosts: defaultHostsA } = await loadModule()
+    fakeStorage.setItem(SETTINGS_KEY, JSON.stringify({ hosts: [], activeHostId: null }))
+    const stayedEmpty = loadA()
+
+    vi.resetModules()
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ hosts: [{ label: 'No id or address at all' }], activeHostId: null }),
+    )
+    const { loadSettings: loadB } = await loadModule()
+    const restoredDefaults = loadB()
+
+    expect(stayedEmpty.hosts).toEqual([])
+    expect(restoredDefaults.hosts.length).toBe(defaultHostsA().length)
+    expect(restoredDefaults.hosts.length).toBeGreaterThan(0)
   })
 })
 
@@ -644,9 +803,22 @@ describe('loadSettings reconciles companion.token (4.7)', () => {
       }),
     )
     const { loadSettings } = await loadModule()
-    const result = loadSettings()
+    // A usable IPv4 origin, driven explicitly and not left to jsdom's own
+    // default hostname (not a usable address, under which the derived and
+    // restored-defaults results are the same host list and this test would
+    // not be able to tell them apart). Forcing a usable origin makes the
+    // derived-vs-restored distinction visible in this same test rather
+    // than leaving it to a neighbour that only checks host count.
+    const result = loadSettings(hostnameOf('172.20.10.9'))
     expect(result.hosts.some((h) => h.id === 'unit-y')).toBe(false)
-    expect(result.activeHostId).toBeNull()
+    // Every host was dropped (unit-y was the only one), so this is the
+    // "every-host-dropped" case, not the dangling-id case: SPEC 4.7 now
+    // restores the defaults with Bluetooth active rather than leaving
+    // nothing active or deriving from the origin, so the key is reconciled
+    // to Bluetooth's own token (null) rather than to a derived "origin"
+    // host's, or merely cleared for lack of an active host.
+    expect(result.hosts.some((h) => h.id === 'origin')).toBe(false)
+    expect(result.activeHostId).toBe('bluetooth')
     expect(fakeStorage.getItem(TOKEN_KEY)).toBeNull()
   })
 
@@ -667,12 +839,20 @@ describe('loadSettings reconciles companion.token (4.7)', () => {
     expect(fakeStorage.getItem(TOKEN_KEY)).toBeNull()
   })
 
-  it('a first-ever load, with no settings blob but a token already in the key, clears it since no host is active', async () => {
+  // SPEC.md 4.7 was amended for issue #134 while this suite already existed:
+  // a first-ever load is no longer left with no active host. It derives one
+  // from the origin, falling back to the Bluetooth default when the origin
+  // is not a usable IPv4 address (settings-origin.spec.ts owns that
+  // derivation in full); this test only keeps its original point, that a
+  // leftover token from a previous install does not survive into a fresh
+  // one, updated for the host that is now active on a fresh install rather
+  // than none.
+  it('a first-ever load with a non-address origin activates the Bluetooth default and clears a leftover token (issue #134)', async () => {
     fakeStorage.setItem(TOKEN_KEY, 'leftover-token')
     // companion.settings is deliberately left unset: first run.
     const { loadSettings } = await loadModule()
-    const result = loadSettings()
-    expect(result.activeHostId).toBeNull()
+    const result = loadSettings(() => 'not-an-ip-address')
+    expect(result.activeHostId).toBe('bluetooth')
     expect(fakeStorage.getItem(TOKEN_KEY)).toBeNull()
   })
 
@@ -1142,9 +1322,20 @@ describe('host CRUD (4.7)', () => {
 // ---------------------------------------------------------------------------
 
 describe('activeHost store (4.7)', () => {
-  it('is null before any host is activated', async () => {
+  it('is the prefilled Bluetooth default on import alone, before loadSettings() ever runs (4.7: defaultSettings() has Bluetooth active)', async () => {
+    // Before this change the stores' initial value (defaultSettings(),
+    // shared with the every-host-dropped path pinned above) had
+    // activeHostId: null, so this store read null on plain import. It now
+    // reads the prefilled Bluetooth host instead, for the same reason: an
+    // owner is never shown nothing active when something is available to
+    // fall back to, including in the brief window before loadSettings()
+    // has read storage. SPEC 4.8's own ordering (the session calls
+    // loadSettings() before it ever subscribes) means nothing in the app
+    // actually observes this transient value, but the store's own contract
+    // -- "the stores hold the defaults until loadSettings() runs" -- means
+    // whatever defaultSettings() says is exactly what this reads.
     const { activeHost } = await loadModule()
-    expect(get(activeHost)).toBeNull()
+    expect(get(activeHost)?.id).toBe('bluetooth')
   })
 
   it('reflects the activated host', async () => {

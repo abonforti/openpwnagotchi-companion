@@ -260,6 +260,53 @@ def test_a_fully_valid_configuration_logs_no_warning(load_plugin, full_options, 
 
 
 # ---------------------------------------------------------------------------
+# The scan runs even when the plugin then refuses to start
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_key_is_still_named_when_tls_material_is_unusable(
+    full_options, harness, bind_recorder, caplog, tmp_path
+):
+    """SPEC 2.6/2.15: unusable TLS material makes `on_loaded` start no
+    listener at all and return early. SPEC 2.2.1's unknown-key scan is
+    unconditional at load, so it must still fire in that case - a compound
+    failure the rule exists for, since the misspelling is often exactly what
+    made the TLS material look wrong (a typo'd `tls_cert`/`tls_key` would
+    produce this same shape). This does not use `load_plugin`: that fixture
+    asserts the plugin came up, which is the opposite of what this test
+    needs, so `Companion` is driven directly, the way
+    `tests/test_tls_startup.py` does for the same refusal.
+    """
+    config = dict(full_options)
+    config["frobnicate_level"] = "high"
+    config["tls_cert"] = str(tmp_path / "absent.crt")
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = config
+    try:
+        with caplog.at_level("WARNING"):
+            plugin.on_loaded()
+
+        assert plugin._router is None, (
+            "unusable TLS material must make on_loaded refuse to start "
+            "(SPEC 2.6/2.15), which is the premise of this test"
+        )
+        assert bind_recorder.addresses == [], (
+            "no plaintext fallback, no listener at all"
+        )
+
+        matches = warnings_mentioning(caplog, "frobnicate_level")
+        assert len(matches) == 1, (
+            "the unknown-key warning (SPEC 2.2.1) must still fire even when "
+            f"the plugin then refuses to start over unusable TLS material; "
+            f"got {matches}"
+        )
+    finally:
+        plugin.on_unload()
+
+
+# ---------------------------------------------------------------------------
 # The motivating misspelling, by name (issue #137)
 # ---------------------------------------------------------------------------
 

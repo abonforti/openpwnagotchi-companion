@@ -103,6 +103,13 @@ against real hardware.
 
 ### Added
 
+- **A configuration key the plugin does not know is named at `WARNING`, once, at load.** The
+  message gives the key and the set of keys that are accepted, and the plugin comes up on its
+  defaults as before. Nothing was said until now, so `bind_address` for `bind_addresses` - a
+  singular that reads correctly and binds nothing - looked exactly like a working configuration.
+  `enabled` is pwnagotchi's own key and never warns, and the withdrawn `interfaces` keeps its own
+  message from the breaking change above rather than being reported twice. A block with nothing
+  but valid keys logs nothing at all (issue #137).
 - `tools/gen-ca.sh` and `tools/gen-cert.sh`: a private CA and an `iPAddress`-SAN server
   certificate, non-interactive and idempotent, encoding the three constraints iOS enforces
   silently (critical `basicConstraints`, IP SANs and never `DNS:`, validity under 825 days).

@@ -208,12 +208,12 @@
         "battery": { "$ref": "#/$defs/Battery" },
         "temperature": { "type": ["integer", "null"], "description": "pwnagotchi.temperature(), celsius." },
         "handshakes": {
-          "type": "integer",
-          "description": "Count of *.pcapng in the handshake directory. Matches the number shown on the device display, which uses utils.total_unique_handshakes."
+          "type": ["integer", "null"],
+          "description": "Count of *.pcapng in the handshake directory. Matches the number shown on the device display, which uses utils.total_unique_handshakes. Null means the handshake directory is unknown, not that there are no captures; null together with handshakesTotal."
         },
         "handshakesTotal": {
-          "type": "integer",
-          "description": "Count of *.pcapng plus *.pcap. Always >= handshakes."
+          "type": ["integer", "null"],
+          "description": "Count of *.pcapng plus *.pcap. Always >= handshakes. Null means the handshake directory is unknown, not that there are no captures; null together with handshakes."
         },
         "peers": { "type": "integer", "description": "len(agent._peers)." },
         "accessPoints": { "type": "integer", "description": "len(agent._access_points)." },

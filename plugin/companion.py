@@ -45,7 +45,7 @@ import pwnagotchi
 import pwnagotchi.plugins as plugins
 
 __author__ = "https://github.com/abonforti"
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __license__ = "GPL3"
 __description__ = (
     "Self-hosted companion backend: serves an installable PWA over HTTPS and "
@@ -105,6 +105,7 @@ DEFAULTS: dict[str, Any] = {
     "gps_log_path": "/var/tmp/pwnagotchi_gps.log",
     "mirror_auto_interval": 5,
     "keepalive_interval": 20,
+    "handshake_dir": "",
 }
 
 HANDSHAKE_LIMIT = 500
@@ -1350,14 +1351,21 @@ class HandshakeStore:
     only holds the current session. Two counts are reported: `pcapng` matches
     what the e-ink display shows (the stock counter globs *.pcapng only, SPEC
     F15) and `total` is the honest figure including legacy .pcap captures.
+
+    `directory` is `None` when the capture path is unknown (SPEC 2.5): no
+    `handshake_dir` configured and no agent to ask, or an agent whose
+    `_config` read failed. That is distinct from a known directory that
+    happens to be missing or unreadable, which is a real answer of zero.
     """
 
-    def __init__(self, directory: str, limit: int = HANDSHAKE_LIMIT) -> None:
+    def __init__(self, directory: str | None, limit: int = HANDSHAKE_LIMIT) -> None:
         self._directory = directory
         self._limit = limit
 
-    def counts(self) -> tuple[int, int]:
-        """Returns (pcapng_count, total_count)."""
+    def counts(self) -> tuple[int, int] | tuple[None, None]:
+        """Returns (pcapng_count, total_count), or (None, None) if the directory is unknown."""
+        if self._directory is None:
+            return None, None
         pcapng = total = 0
         for name in self._names():
             total += 1
@@ -1396,7 +1404,9 @@ class HandshakeStore:
         return records[: self._limit], truncated, total
 
     def _names(self) -> list[str]:
-        """Capture filenames in the directory. Missing directory yields nothing."""
+        """Capture filenames in the directory. Missing or unknown directory yields nothing."""
+        if self._directory is None:
+            return []
         try:
             return [
                 name
@@ -3015,12 +3025,25 @@ class Companion(plugins.Plugin):
     # -- internals ---------------------------------------------------------
 
     def _handshake_store(self) -> HandshakeStore:
-        """A store over the configured capture directory, read fresh each time."""
-        directory = ""
+        """A store over the configured capture directory, read fresh each time.
+
+        `handshake_dir` wins when set to a non-empty string (SPEC 2.5): it is
+        the one an operator can set on a unit whose agent never arrives.
+        Otherwise fall back to the agent's own bettercap config (F14), and
+        only when that too yields a non-empty string. Neither source may
+        contribute an empty path: a store over one scans nothing and reports
+        a confident zero, which is this ticket's own defect written a second
+        time. If neither source has a usable path, the directory is unknown.
+        """
+        configured = option(self.options, "handshake_dir")
+        if isinstance(configured, str) and configured:
+            return HandshakeStore(configured)
         try:
             directory = self._agent._config["bettercap"]["handshakes"]
         except Exception:
-            directory = ""
+            directory = None
+        if not isinstance(directory, str) or not directory:
+            directory = None
         return HandshakeStore(directory)
 
     def broadcast(self, message: Mapping[str, Any]) -> None:

@@ -151,10 +151,10 @@ export interface Stats {
   "battery": Battery;
   /** pwnagotchi.temperature(), celsius. */
   "temperature": number | null;
-  /** Count of *.pcapng in the handshake directory. Matches the number shown on the device display, which uses utils.total_unique_handshakes. */
-  "handshakes": number;
-  /** Count of *.pcapng plus *.pcap. Always >= handshakes. */
-  "handshakesTotal": number;
+  /** Count of *.pcapng in the handshake directory. Matches the number shown on the device display, which uses utils.total_unique_handshakes. Null means the handshake directory is unknown, not that there are no captures; null together with handshakesTotal. */
+  "handshakes": number | null;
+  /** Count of *.pcapng plus *.pcap. Always >= handshakes. Null means the handshake directory is unknown, not that there are no captures; null together with handshakes. */
+  "handshakesTotal": number | null;
   /** len(agent._peers). */
   "peers": number;
   /** len(agent._access_points). */

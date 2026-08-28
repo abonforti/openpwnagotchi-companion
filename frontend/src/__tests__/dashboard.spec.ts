@@ -648,6 +648,78 @@ describe('the handshake counters', () => {
     expect(onUnit, 'handshakesOnUnit must appear when the two disagree').not.toBeNull()
     expect((onUnit?.textContent ?? '').trim()).toContain('3')
   })
+
+  // SPEC.md amended 4.5.1.1: "Both counts can be null ... the plugin sends
+  // null for handshakes and handshakesTotal when it does not know where the
+  // captures are (§2.5), so the handshake counter dashes on a null exactly
+  // as it does on a missing stats." (issue #146).
+  it('dashes the handshake counter with data-empty when both counts are null (unknown directory)', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ handshakes: null, handshakesTotal: null }))
+    await settle()
+
+    expect(visibleFieldText('handshakes')).toBe(DASH)
+    expect(isEmpty('handshakes')).toBe(true)
+  })
+
+  // "The handshakesOnUnit line is rendered only when both counts are known
+  // and they differ: with a null on either side there is no disagreement to
+  // explain, and a row reading 'On the unit's own display: —' beside a
+  // dashed total explains nothing while implying the app looked and found
+  // something absent. One dash on the counter is the whole of what the app
+  // knows." The row must be absent from the DOM entirely, not present and
+  // dashed - fieldOrNull, not fieldText, is what tells the two apart.
+  it('omits handshakesOnUnit entirely, rather than dashing it, when both counts are null', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ handshakes: null, handshakesTotal: null }))
+    await settle()
+
+    expect(fieldOrNull('handshakesOnUnit')).toBeNull()
+  })
+
+  it('omits handshakesOnUnit when only handshakesTotal is null, even though handshakes is a number', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    // Not a shape production ever sends - SPEC 2.5 pairs the two counts,
+    // null together or neither - but the schema does not forbid it, and
+    // SPEC 4.5.1.1's rule reads "with a null on either side", not only the
+    // total's. A client asserting only on handshakesTotal here would still
+    // pass a mutant that reads the disagreement off handshakes alone.
+    client.emitMessage(statsEnvelope({ handshakes: 3, handshakesTotal: null }))
+    await settle()
+
+    expect(fieldOrNull('handshakesOnUnit')).toBeNull()
+  })
+
+  it('omits handshakesOnUnit when only handshakes is null, even though handshakesTotal is a number', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ handshakes: null, handshakesTotal: 5 }))
+    await settle()
+
+    expect(fieldOrNull('handshakesOnUnit')).toBeNull()
+  })
+
+  it('still shows handshakesOnUnit when both counts are known and differ, alongside the null cases above', async () => {
+    // Restates the pre-existing "disagree" test explicitly beside the three
+    // null cases, so a mutant that hides the row unconditionally (rather
+    // than only on a null) cannot pass by making every case above vacuous.
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ handshakes: 3, handshakesTotal: 5 }))
+    await settle()
+
+    const onUnit = fieldOrNull('handshakesOnUnit')
+    expect(onUnit).not.toBeNull()
+    expect((onUnit?.textContent ?? '').trim()).toContain('3')
+  })
 })
 
 // ---------------------------------------------------------------------------

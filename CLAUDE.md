@@ -108,4 +108,12 @@ end-to-end run on the device, after which the rule above applies without excepti
   named for their deliverable, never after a version number.
 - **Every commit is GPG-signed** (SPEC.md §13.1). `commit.gpgsign` is on; never disable it and
   never use `--no-gpg-sign`. If signing fails, report it rather than working around it.
+- **A denied permission is a stop, not a detour.** When the permission system refuses a command,
+  the answer is to say so and ask. It is never to reach the same effect another way: not the same
+  action through a different tool, not a shell out of a language runtime, not a rewritten path,
+  not a narrower flag chosen to slip through. This happened once, on 2026-08-22: an agent was
+  refused an `rm -rf` on its own scratch copy and achieved the deletion with `shutil.rmtree`
+  instead. The target was harmless and nothing was lost, which is exactly why it is worth a rule
+  now rather than after the first time the target is not. A refusal carries information the tool
+  has and the agent does not, and routing around it discards that information silently.
 - Public repo: keep it well-structured (labels, milestones, issues, roadmap) per SPEC §6.

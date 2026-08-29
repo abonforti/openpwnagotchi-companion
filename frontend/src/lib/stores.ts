@@ -83,71 +83,74 @@ function upsertPeer(peer: Peer): void {
   })
 }
 
-// SPEC 4.4.1: at most one refresh in flight per client, so a burst of
-// captures costs one round trip and not one per capture. Owner, not a bare
-// flag, because a host switch (SPEC 4.4.2) can leave A's refresh pending
-// after B attaches; comparing the owner to the requesting client, rather
-// than reusing attachedClient here, is what tells B's push apart from A's
-// stale one and lets B send its own request instead of coalescing into a
-// reply that will never reach a store B did not write from. Cleared from
-// the settle handlers below only, and only when the owner is still the
-// settling client: every request() eventually settles, either on its
-// reply, on its own 15 s timeout, or via close() rejecting pending reads,
-// so the owner cannot wedge and a reset would only break coalescing across
-// a remount on the same client.
-let handshakesRefreshOwner: WsClient | null = null
-
-function refreshHandshakes(client: WsClient): void {
-  if (handshakesRefreshOwner === client) return
-  handshakesRefreshOwner = client
-  client
-    .request('get_handshakes')
-    .catch(() => {
-      // Not fatal here: the reply, when it does arrive, still writes the
-      // list through the handshakes_list case below like any other. A
-      // failed or timed-out attempt just means this particular capture
-      // is not reflected until the next push or a manual reload of the
-      // view asks again.
-    })
-    .finally(() => {
-      if (handshakesRefreshOwner === client) {
-        handshakesRefreshOwner = null
-      }
-    })
+/**
+ * SPEC 4.4.1/4.5.2.3/4.5.2.4: a per-client coalescing owner for a read that
+ * must have at most one request in flight, shared by refreshHandshakes,
+ * refreshAccessPoints and refreshPeers below rather than pasted a third
+ * time -- the first correction to any one of them is how it would fail to
+ * reach the other two.
+ *
+ * Owner, not a bare flag, because a host switch (SPEC 4.4.2) can leave A's
+ * refresh pending after B attaches; comparing the owner to the requesting
+ * client, rather than reusing attachedClient here, is what tells B's push
+ * apart from A's stale one and lets B send its own request instead of
+ * coalescing into a reply that will never reach a store B did not write
+ * from. Cleared from the settle handler below only, and only when the
+ * owner is still the settling client: every request() eventually settles,
+ * either on its reply, on its own 15 s timeout, or via close() rejecting
+ * pending reads, so the owner cannot wedge and a reset would only break
+ * coalescing across a remount on the same client.
+ *
+ * `send`'s rejection is always swallowed here: none of the three callers
+ * treats a failed or timed-out refresh as fatal, each for its own reason
+ * given beside its own call below, and every read settles regardless.
+ */
+function createCoalescedRefresh(
+  send: (client: WsClient) => Promise<unknown>,
+): (client: WsClient) => void {
+  let owner: WsClient | null = null
+  return (client: WsClient) => {
+    if (owner === client) return
+    owner = client
+    send(client)
+      .catch(() => {
+        // See the comment beside each call site for why this is not fatal.
+      })
+      .finally(() => {
+        if (owner === client) {
+          owner = null
+        }
+      })
+  }
 }
 
-// SPEC 4.5.2.3: access_points gets the same per-client coalescing as
-// handshakes above, and for the same reason -- a host switch (SPEC 4.4.2)
-// can leave unit A's request in flight when B attaches, and the owner is
-// compared against the requesting client so B sends its own rather than
-// coalescing into a reply that will never reach a store B did not write
-// from.
-let accessPointsRefreshOwner: WsClient | null = null
+// SPEC 4.4.1: not fatal here: the reply, when it does arrive, still writes
+// the list through the handshakes_list case below like any other. A failed
+// or timed-out attempt just means this particular capture is not reflected
+// until the next push or a manual reload of the view asks again.
+const refreshHandshakes = createCoalescedRefresh((client) => client.request('get_handshakes'))
 
-function refreshAccessPoints(client: WsClient): void {
-  if (accessPointsRefreshOwner === client) return
-  accessPointsRefreshOwner = client
-  client
-    .request('get_access_points')
-    .catch(() => {
-      // Not fatal here either: access_points is also pushed on wifi_update
-      // and once at the start of every session (initial_burst), so a
-      // failed or timed-out refresh only means this particular ask did not
-      // shorten the wait for one of those.
-    })
-    .finally(() => {
-      if (accessPointsRefreshOwner === client) {
-        accessPointsRefreshOwner = null
-      }
-    })
-}
+// SPEC 4.5.2.3: not fatal here either: access_points is also pushed on
+// wifi_update and once at the start of every session (initial_burst), so a
+// failed or timed-out refresh only means this particular ask did not
+// shorten the wait for one of those.
+const refreshAccessPoints = createCoalescedRefresh((client) => client.request('get_access_points'))
+
+// SPEC 4.5.2.4: not fatal here either, and for the strongest version of the
+// same reason -- peers_list has no push counterpart at all (unlike
+// wifi_update/handshake), so a failed refresh here is not "the next push
+// will carry it", it is "nothing will until this view asks again", which
+// is exactly what its own refresh control and its own becoming-current
+// trigger (lib/viewRefresh.ts) are for.
+export const refreshPeers = createCoalescedRefresh((client) => client.request('get_peers'))
 
 /**
- * SPEC 4.5.2.3: the Wi-Fi view's own refresh, asked for on two occasions --
- * opening the view and its own refresh control -- and by no timer, the
- * argument SPEC 4.3.7 already made against client polling being stronger
- * here: a list re-fetched on a schedule spends round trips on a link whose
- * round trips are the expensive part.
+ * SPEC 4.5.2.3: the Wi-Fi view's own refresh, asked for on three occasions
+ * -- the route becoming `/wifi`, its own refresh control, and the active
+ * host changing under a view that is already current (lib/viewRefresh.ts)
+ * -- and by no timer, the argument SPEC 4.3.7 already made against client
+ * polling being stronger here: a list re-fetched on a schedule spends round
+ * trips on a link whose round trips are the expensive part.
  *
  * Both lists are fetched together, not only the visible segment, so a
  * badge nobody is looking at still carries a current count. This lives

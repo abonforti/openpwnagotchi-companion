@@ -118,7 +118,12 @@
          visit reads as a bug (SPEC 4.5). -->
     {#each routes as route (route.id)}
       {@const View = views[route.id]}
-      <div class="view-slot" hidden={$currentRoute.id !== route.id}>
+      <!-- data-view-slot is pinned in SPEC 4.5.2.5's DOM hooks: the Log
+           view is the only one that needs it, and that section's own
+           Geometry paragraph says why (app.css's rule keyed on it says the
+           rest). A plain attribute selector, not :has(), whose support on
+           SPEC 4.2.1's pinned iOS floor was not verified for this change. -->
+      <div class="view-slot" data-view-slot={route.id} hidden={$currentRoute.id !== route.id}>
         <View />
       </div>
     {/each}

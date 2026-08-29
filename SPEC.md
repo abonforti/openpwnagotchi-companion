@@ -2361,6 +2361,7 @@ of information that would have helped.
 | `pasv_requires_auto` | PASV was requested from a mode that is not AUTO | on the control itself: PASV is reachable only from AUTO, and the unit is in MANU |
 | `pasv_unavailable` | the `pasv_mode` plugin is not installed | the PASV control is absent rather than present-and-failing, since this one does not change while the unit runs |
 | `no_frame` | the display frame has not been written yet | in the Mirror view: not an error, the unit has not drawn yet |
+| `log_unavailable` | the log file, or the configuration naming it, could not be read -- including because there is no agent to read the configuration from (§2.6.0) | in the Log view, with its own sentence (§4.5.2.5). The no-agent case is a unit in manual mode, which is a unit somebody is probably trying to debug, so an unreadable log must not look like an empty one |
 | everything else | | the diagnostics line in Settings, which is where an unrecognised code goes rather than nowhere |
 
 The rule behind the table: an error that names a condition the user can change belongs **next to
@@ -3567,7 +3568,7 @@ the current view** asks, a control on the view asks, and **the active host chang
 that is already current** asks.
 
 The third was found by implementing the first, and it is a different fact rather than a special
-case of it: switching unit is done from Settings (§4.6) and the owner then navigates to Wi-Fi, so
+case of it: switching unit is done from Settings (§4.5.1) and the owner then navigates to Wi-Fi, so
 the route does change -- but they may equally switch and come back to a Wi-Fi view that never
 stopped being current, and §4.5 keeps it mounted throughout. What is being asked is not "has the
 route changed" but "is this list the current unit's", and the honest expression of that is the
@@ -3847,6 +3848,211 @@ Declared here, per §4.5.1.1, and closed.
 
 The second is §4.5.2.3's sentence, unchanged and shared: it says nothing about which list it is
 under, because the reason it appears has nothing to do with the list.
+
+
+#### 4.5.2.5 The Log, and the one timer this client is allowed (issue #193)
+
+§4.5.2 asks for a live tail with a text filter and an auto-scroll toggle, and §4.5.1 adds a
+font-size control and a level filter. Three of those five are buildable today and this section
+says what happens to the other two.
+
+##### There is no log push, so "live" costs a timer
+
+`log_lines` exists only as a reply to `get_log` (§2.9), and §4.4.1 has the store **replace**
+rather than append, because the plugin owns the tail and the clamp and a second buffer in the app
+would diverge from it. So a tail that follows means the client asking again on a schedule, which
+§4.5.2.3 forbids every other view and which §4.3.7 argued against for `stats`.
+
+**It is allowed here, once, and the exception is argued rather than assumed.** §4.3.7's case
+against polling was that the unit already broadcasts what the client needs, so a poll pays a round
+trip for something arriving anyway. That does not hold here: nothing arrives anyway. §4.5.2.3's
+case was that a list re-fetched on a schedule spends round trips on a link whose round trips are
+expensive, for a phone in a pocket. That half still holds, and it is what shapes the exception
+rather than removing it.
+
+**The follow is opt-in, off on arrival, and stops the moment the view is not current.** An owner
+who opens the Log to read what already happened pays nothing. An owner watching a unit misbehave
+turns it on, and can see that they did.
+
+**Turning it on asks immediately, and then every ten seconds.** Waiting out the first interval
+before anything happens is a control that appears not to work, and the owner turning it on is
+asking to see what is happening *now* rather than what will be happening shortly.
+
+**The toggle survives navigating away and back; only the asking stops.** §4.5 keeps every view
+mounted, and this control is no different from the Wi-Fi segment in that respect: an owner who
+checks the Dashboard and comes back finds Follow as they left it, and the timer resumes with the
+view. Resetting it silently would leave somebody watching a log that stopped updating for a reason
+nothing on the screen gives.
+
+**This is the whole of the exception.** Nothing else in this client may hold a timer, and a second
+one arriving here later is a specification question rather than a local decision -- §4.5.2.3 says
+so for every other view, and the argument that carved this one out is specific to there being no
+push.
+
+**The interval is 10 seconds.** The reasoning is a bracket rather than a preference: the plugin's
+own ticker runs at `keepalive_interval`, 20 s by default (§2.4), so the Dashboard beside it is
+already up to 20 s behind the unit; a log that followed more slowly than that would be visibly
+behind a screen the owner can compare it against. Below about 5 s the round trips cost more than
+the freshness is worth on this link. Ten sits between, and is written down here so it is a
+decision rather than a number somebody typed.
+
+**Each ask carries no `lines` value**, so the plugin's own default and clamp decide the window
+(§2.9). The client does not restate 200: the clamp lives in one place, and a client that names a
+number is a second opinion about how much log is worth sending.
+
+##### The three occasions are §4.5.2.3's, adopted rather than restated
+
+The route becoming `/log`, the refresh control, and the active host changing under a view that is
+already current, exactly as §4.5.2.4 adopted them for Peers. §4.5.2.3 keeps the reasoning; the
+follow timer above is an addition to that list on this screen only, not a replacement for it.
+
+##### The filter filters what is on the screen, not what is asked for
+
+The text filter is applied to the buffer the app already holds, and never to the request. The
+plugin owns the tail, so filtering at the source would mean the last 200 *matching* lines, which
+is a different and much more expensive question, and it would make the buffer's meaning depend on
+a control the owner is still typing into. Matching is a plain case-insensitive substring: the
+field is a filter and not a query language, and a regular expression typed into a phone in the
+field is a way to hide lines by accident.
+
+##### The level filter is not built, and the reason is a rule rather than a shortage of time
+
+§4.5.1 asks for one. A level filter has to find the level inside a line, and **what a line looks
+like is not a pinned fact**: §2.9 returns opaque strings, §11 has no entry for the format, and
+§11.1 forbids using what is not pinned. Matching `[INFO]`, `INFO:` or any other shape would be a
+guess about somebody else's logging configuration, shipped as a feature and wrong on the first
+unit that configured its own.
+
+What unblocks it is the mechanism §11 already has, a **dated observation** of real lines from a
+unit, and that is issue #194. This is recorded here rather than left as an omission because the
+next person to read §4.5.1 will otherwise assume the filter was forgotten.
+
+##### Following and scrolling are one control
+
+§4.5.2 names an auto-scroll toggle and a live tail as two things. They are one: auto-scroll with
+nothing arriving scrolls to the same place it already is, and following without scrolling puts new
+lines below the fold of a view whose whole purpose is watching. So there is one toggle, it is
+called Follow, and it does both -- re-asking while the view is current, and keeping the newest
+line in sight. Turning it off leaves the buffer where it is rather than jumping.
+
+**Keeping the newest line in sight means scrolling the container to its end after every buffer
+change, and only while following.** Not on every render, which would fight an owner scrolling
+back through what they came to read, and not once on the tap, which would drift out of date on
+the next interval. A buffer that replaces rather than appends (§4.4.1) has no anchor to preserve,
+so there is nothing subtler to do here and nothing to be clever about.
+
+##### An unreadable log is not an empty one
+
+`get_log` answers `error` code `log_unavailable` when the file is missing or unreadable, when the
+configuration carries no log path, or when there is **no agent to read that configuration from**
+(§2.6.0, §2.9). That last case is a unit in manual mode, which is a unit somebody is very likely
+trying to debug, so this is the screen where the distinction is worth the most. It gets its own
+sentence, and it names the ticket that would fix the common cause rather than only reporting the
+symptom (issue #154).
+
+##### Every line is hostile
+
+§4.5.3 names log lines specifically: a pwnagotchi logs the SSIDs it just saw, so a line is a
+string a stranger chose with a timestamp in front of it. Rendered as text, like everything else,
+and the filter must not build markup out of the match either: **a matched substring is not
+highlighted**, because highlighting means splitting a hostile string and putting the pieces into
+elements, which is the one operation §4.5.3 exists to prevent and buys a wrapper around a word.
+
+##### Geometry
+
+The log area **fills what is left and scrolls inside itself**, in both orientations, and nothing
+below it is pushed off the screen.
+
+**The height starts at the view slot and is a percentage, not an inset.** This is written here
+once, and the code points at it rather than restating it: `position: absolute; inset: 0` resolves
+against the containing block's **padding** box, and `main` carries the header and bar as its own
+padding, so an inset box lands back across the strip the padding reserved -- forty pixels of
+overflow on every engine and orientation, which is issue #38's defect exactly, and which the first
+attempt at this reproduced. A percentage height on an in-flow box resolves against the **content**
+box instead, and picks up whichever sides carry the padding in the current layout, so it survives
+§4.5.1's rail without a second copy of the formula. That last part is why the fix is not a
+`calc()` in the view: restating the bar's height in a second file is the arrangement §4.5.1 already
+refuses for the bar itself. This closes issue #38, which found the mockup's log box
+overflowing its own container at 874x402 -- landscape being the orientation §4.5.1 says the Log
+exists for, and therefore the worst place for the defect. §10.5's geometry invariant already
+asserts the shell owns every strip of the viewport; this adds that the log's own box stops where
+the view area does, with both orientations and an empty and a full buffer covered.
+
+##### The font size is kept while the app is open, and not persisted
+
+§4.5.1 persists the theme choice across launches and says nothing about this control. It is not
+persisted here, and the reason is that persistence belongs with the theme and the density controls
+that §4.5.1 describes and nothing has built: a storage key written now for one control means two
+places deciding what survives a launch, and the second one arrives with the settings that were
+always going to own it. Kept while the app is open, like the Wi-Fi segment choice (§4.5).
+
+##### The DOM hooks
+
+Declared here, per §4.5.1.1, and closed.
+
+- `data-view="log"` on the view root, as §4.5 requires of every view.
+- `data-log-lines` on the scrolling container, and `data-log-line` on each rendered line. **The
+  container is always present**, empty buffer or not. It is the box the geometry rule below is
+  about, and issue #38's own criteria require measuring it with the log both empty and full; a
+  container that appears only once lines arrive is a different layout in the state a fresh launch
+  spends the most time in, and the one nobody would have measured.
+- `data-action` on the controls, over `refresh`, `follow` and `font-size`, with the follow control
+  carrying `aria-pressed` because it is a toggle rather than a command.
+- `data-font-size` on the view root, over `small`, `medium` and `large`. **The control cycles**
+  those three in that order and wraps, which is one control rather than three and no popover; the
+  root carries the step so the styling and a test read the same fact, and neither has to infer it
+  from a rendered size.
+- `data-log-filter` on the filter input, which carries an accessible name of its own rather than
+  a placeholder: a placeholder is not a name, and every other input in this app is labelled
+  (§4.5.1.1). Its label is in the copy table below with everything else the screen says.
+- `data-empty-message` on the element carrying the empty, unavailable or not-connected sentence,
+  with `role="status"`, absent when lines are rendered.
+- `data-view-slot` on each of the shell's view slots in `App.svelte`, carrying the view's id. It
+  is the shell's hook rather than this view's, and it is declared here because this view is the
+  only thing that needs it and the reason is the geometry rule below: a scoped stylesheet cannot
+  reach the slot its own view is mounted into, and the slot is where the height has to start. It
+  is named in a closed list so that a comment in `App.svelte` claiming SPEC targets it is true
+  rather than merely plausible.
+
+##### The copy
+
+| condition | sentence |
+|---|---|
+| no lines, connected | The unit's log is empty. |
+| no lines, not connected | Not connected, so this list has not been read. |
+| no lines held, and the unit answered `log_unavailable` | The unit could not read its log. With no agent it has no configuration to find the path in. |
+| lines held, none matching the filter | No lines match the filter. |
+
+**Not connected outranks an unreadable log.** `log_unavailable` is an answer from a session that
+has since ended, and nothing clears it when the socket drops -- `resetStores()` runs on an
+explicit disconnect and on `unauthorized`, not on an ordinary drop (§4.4.2). Left ranked the other
+way, a unit that answered once and then went out of range leaves the screen asserting that it has
+no agent, indefinitely and about a connection that no longer exists, which is §4.3.1's argument
+against a mirror that keeps showing the last thing it saw.
+
+**A held buffer wins over a failed refresh.** The row above is qualified deliberately: the
+sentence appears only when there is nothing to show. A unit that delivered lines and then failed a
+later refresh keeps its lines on screen, because they are still the last thing that unit said and
+replacing them with a sentence would discard the reading in order to report the failure to get a
+newer one. What that costs is honest and is accepted: the screen does not say the last refresh
+failed, and until the diagnostics line of issue #176 exists there is nowhere for it to say so
+without taking the log away.
+
+**An empty log wins over an unmatched filter.** When there are no lines at all and a filter is
+also typed, the sentence is the empty one: *No lines match the filter* would blame the filter for
+an absence that has nothing to do with it, and would send somebody to clear a field that was never
+the reason.
+
+| control | label |
+|---|---|
+| follow, off | Follow |
+| follow, on | Following |
+| font size | Text size |
+| the filter input's label | Filter |
+
+The not-connected sentence is §4.5.2.3's, shared unchanged, as §4.5.2.4 already shares it: it says
+nothing about which list it sits under, because the reason it appears has nothing to do with the
+list.
 
 
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
@@ -5043,6 +5249,23 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   and not the other is not merely wrong, it is inconsistent, and an inconsistent comparator gives
   an order that depends on the array's length and the engine's strategy -- right in a test with
   three rows and wrong in the field with thirty.
+- `log-view.spec.ts`: the Log view against §4.5.2.5's declared hooks. What it pins that no other
+  view's tests can: the follow timer, which is the only timer this client is allowed -- off on
+  arrival, asking immediately on the tap and then at the interval rather than merely eventually,
+  stopping when the view is no longer current, and surviving the trip away and back with the
+  control and the timer both as they were. This is the one file where advancing a clock is
+  correct rather than evidence of the thing §4.5.2.3 forbids. Also `log_unavailable` reaching the
+  screen as its own sentence rather than as a swallowed rejection, with the code itself asserted
+  absent from the DOM; the filter narrowing what is rendered and sending nothing, and a match
+  rendering as one text node because highlighting would mean splitting a hostile string into
+  elements; the buffer replacing rather than appending; and an empty log beating an unmatched
+  filter, which is a precedence rule and not a sentence.
+  The e2e side carries issue #38's own criterion in `geometry.spec.ts`, and it earned its place
+  immediately: it failed on all four projects, with the log box forty pixels past the views area,
+  because `position: absolute; inset: 0` resolves against the containing block's **padding** box
+  while the views area is its **content** box. The change would otherwise have shipped closing an
+  issue whose defect it still had. The full-buffer half of that criterion is a stated skip naming
+  issue #185, because an e2e with no unit attached cannot fill a log.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

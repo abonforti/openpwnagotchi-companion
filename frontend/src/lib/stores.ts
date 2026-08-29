@@ -13,6 +13,7 @@ import type {
   Gps,
   OutgoingHandshakesList,
   OutgoingMessage,
+  OutgoingScreenImage,
   Peer,
   Stats,
 } from './protocol'
@@ -33,6 +34,9 @@ export type HandshakesList = OutgoingHandshakesList['data']
 
 const EMPTY_HANDSHAKES: HandshakesList = { entries: [], truncated: false, total: 0 }
 
+/** SPEC 4.4.1's `screen` row: the `screen_image` reply's `data`, `png` and `mtime` both. */
+export type ScreenFrame = OutgoingScreenImage['data']
+
 const connectionWritable = writable<ConnectionView>({ state: 'offline', unauthorizedReason: null })
 const statsWritable = writable<Stats | null>(null)
 const accessPointsWritable = writable<AccessPoint[]>([])
@@ -48,6 +52,16 @@ const logWritable = writable<string[]>([])
 const logUnavailableWritable = writable<boolean>(false)
 const gpsWritable = writable<Gps | null>(null)
 const faceWritable = writable<FaceStatus | null>(null)
+// SPEC 4.4.1's `screen` row: held like every other store rather than read off
+// the request's promise, so the one message type heavy enough to tempt a
+// shortcut gets none. Only ever written from the `screen_image` case below --
+// a failed `get_screen`, including a `no_frame` answer, writes nothing, so a
+// previously held frame is not discarded by a later ask that did not
+// succeed. `no_frame` and a store that was already empty read the same way
+// on screen regardless (SPEC 4.5.2.6's copy table treats them as one
+// sentence), so there is nothing this store needs to record about the answer
+// beyond what arrived.
+const screenWritable = writable<ScreenFrame | null>(null)
 // SPEC 4.4.1: `channel` is the later of its two sources, `stats` and
 // `channel_hop`; a plain writable set from both handlers below already
 // gives that for free.
@@ -62,6 +76,7 @@ export const log: Readable<string[]> = { subscribe: logWritable.subscribe }
 export const logUnavailable: Readable<boolean> = { subscribe: logUnavailableWritable.subscribe }
 export const gps: Readable<Gps | null> = { subscribe: gpsWritable.subscribe }
 export const face: Readable<FaceStatus | null> = { subscribe: faceWritable.subscribe }
+export const screen: Readable<ScreenFrame | null> = { subscribe: screenWritable.subscribe }
 export const channel: Readable<number | null> = { subscribe: channelWritable.subscribe }
 
 // SPEC 4.4.1: capabilities has no writer of its own, it arrives inside
@@ -258,6 +273,24 @@ export const refreshLog = createCoalescedRefresh(
   },
 )
 
+/**
+ * SPEC 4.5.2.6: the Mirror view's own refresh, asked for on the same three
+ * occasions as every other list view (lib/viewRefresh.ts's watchViewRefresh)
+ * and, on the terms that section grants, by the second timer it allows
+ * (watchViewFollow) -- both calling this one function, the same shape
+ * refreshLog gives the Log's own two callers.
+ *
+ * Not fatal here, for the reason `refreshWifiLists`'s own comment gives for
+ * the two reads it wraps: a failed or timed-out `get_screen` -- including a
+ * `no_frame` answer -- just means the screen keeps whatever it already held,
+ * and the next occasion asks again. There is no flag to set for a `no_frame`
+ * answer the way `refreshLog` sets one for `log_unavailable`: SPEC 4.5.2.6's
+ * copy table gives that answer the same sentence a store that was never
+ * written gets, so nothing beyond the plain swallow-and-release this helper
+ * already does is needed.
+ */
+export const refreshScreen = createCoalescedRefresh((client) => client.request('get_screen'))
+
 function handleMessage(message: OutgoingMessage, client: WsClient): void {
   switch (message.type) {
     case 'stats':
@@ -309,6 +342,12 @@ function handleMessage(message: OutgoingMessage, client: WsClient): void {
     case 'gps_update':
       gpsWritable.set(message.data)
       break
+    case 'screen_image':
+      // SPEC 4.4.1's `screen` row: on demand only, never pushed (SPEC 2.10),
+      // so this case only ever fires as the reply to refreshScreen's own
+      // get_screen.
+      screenWritable.set(message.data)
+      break
     case 'face_status':
       faceWritable.set(message.data)
       break
@@ -345,6 +384,7 @@ export function resetStores(): void {
   gpsWritable.set(null)
   faceWritable.set(null)
   channelWritable.set(null)
+  screenWritable.set(null)
 }
 
 // SPEC 4.4.2: one client at a time. The stores above are module singletons,

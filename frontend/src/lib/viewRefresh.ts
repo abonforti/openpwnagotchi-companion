@@ -114,20 +114,30 @@ export function watchViewRefresh(
 }
 
 export interface ViewFollowHandle {
-  /** Arms or disarms the timer. Called from the Log view's own follow control. */
+  /**
+   * Arms or disarms the timer. Called from the Log view's own follow
+   * control (SPEC 4.5.2.5) and from the Mirror view's own auto-refresh
+   * toggle (SPEC 4.5.2.6), the second call site that section grants on the
+   * first one's terms.
+   */
   setFollowing(following: boolean): void
 }
 
 /**
- * SPEC 4.5.2.5: the one timer this client is allowed, and the mechanism for
- * it, not the interval or which view carries it -- both of those are the
- * Log's own and are passed in rather than hardcoded here, so this file goes
- * on knowing nothing about any one screen.
+ * SPEC 4.5.2.5: the one timer this client was allowed, and the mechanism
+ * for it, not the interval or which view carries it -- both of those are
+ * each caller's own and are passed in rather than hardcoded here, so this
+ * file goes on knowing nothing about any one screen. SPEC 4.5.2.6 granted a
+ * second call site on the first one's own terms rather than assuming one,
+ * which is why this docstring cites both sections rather than only the
+ * first.
  *
  * The exception is argued in SPEC 4.5.2.5, not repeated here: `log_lines`
  * only ever answers `get_log` (SPEC 2.9), so nothing arrives on its own, and
  * a tail that follows means asking again on a schedule -- the one case
- * where §4.5.2.3's "and no timer" does not hold.
+ * where §4.5.2.3's "and no timer" does not hold. SPEC 4.5.2.6 carries the
+ * same argument for `screen_image`, which likewise only ever answers
+ * `get_screen` (SPEC 2.10) and is never pushed.
  *
  * `following` is opt-in and starts disarmed; only a call to `setFollowing`
  * arms it, and it is not reset by navigation -- SPEC 4.5 keeps the view
@@ -153,14 +163,18 @@ export interface ViewFollowHandle {
  * Unlike `watchViewRefresh`, this does not also fire on the route becoming
  * current or on a host switch on its own: SPEC 4.5.2.5 adopts §4.5.2.3's
  * three occasions for the Log through `watchViewRefresh`, called alongside
- * this with the same `tick`/`refresh` function, and follow is an addition
- * on top of that -- a fourth occasion, on a clock, while the toggle is on --
- * not a replacement for the other three. This is also the whole of SPEC
- * 4.5.2.5's exception to "no view holds a timer": nothing else in this
- * client may reach for a second one, which is why this function takes a
- * `routeId` rather than being armed from any view that imports it, and
- * `intervalMs` rather than a constant baked in here, so the one call site
- * that exists today is also the only one a reviewer needs to check.
+ * this with the same `tick`/`refresh` function -- and SPEC 4.5.2.6 does the
+ * same for the Mirror, calling `watchViewRefresh` and this function side by
+ * side with `refreshScreen` the way `Log.svelte` calls both with
+ * `refreshLog`. Follow is an addition on top of the three occasions, not a
+ * replacement for them, in both views: a fourth occasion, on a clock, while
+ * the toggle is on. This is also the whole of the exception SPEC 4.5.2.5
+ * opened and SPEC 4.5.2.6 extended once, by name, to a second call site --
+ * `Log.svelte` and `Mirror.svelte`, and no other view may reach for a
+ * third, which is why this function takes a `routeId` rather than being
+ * armed from any view that imports it, and `intervalMs` rather than a
+ * constant baked in here, so the two call sites that exist today are also
+ * the only two a reviewer needs to check.
  */
 export function watchViewFollow(
   routeId: ViewId,

@@ -4,6 +4,7 @@
   // and lays out what those functions return. No client, no socket, no
   // fetch: the adapter that writes these stores lives elsewhere (SPEC 4.8).
   import {
+    CANCEL_LABEL,
     DASH,
     EMPTY_LABEL,
     NEVER_REFRESHED,
@@ -19,7 +20,9 @@
     formatUnauthorizedCallToAction,
     formatUnauthorizedReason,
     formatUptime,
+    type ControlId,
   } from '../lib/format'
+  import { cancelControl, confirmControl, controls, requestControl } from '../lib/controls'
   import { channel, connection, face, gps, stats } from '../lib/stores'
 
   const s = $derived($stats)
@@ -27,6 +30,44 @@
   const gpsReading = $derived($gps)
   const faceStatus = $derived($face)
   const conn = $derived($connection)
+
+  // SPEC 4.5.2.2: lib/controls.ts owns every rule about these four -- which
+  // mode the switch offers, whether PASV is disabled, what is pending and
+  // what a control currently says. This view lays out $controls in the
+  // order the section fixes: mode, PASV, reboot, shutdown.
+  const controlsView = $derived($controls)
+  const CONTROL_IDS: ControlId[] = ['mode', 'pasv', 'reboot', 'shutdown']
+
+  // SPEC 4.5.2.2: "focus moves to Cancel, not to Confirm" on arming -- the
+  // button that was tapped no longer exists once a control arms, so focus
+  // has to go somewhere, and landing it on Confirm would defeat the
+  // two-step in exactly the case the two-step is for.
+  //
+  // A Svelte action, not a component-level ref. An action runs exactly
+  // once, on its own element when that element is created, so there is no
+  // shared slot for a second control's mount or unmount to write to -- the
+  // ordering question this replaces cannot arise, rather than having been
+  // shown to arise and then closed.
+  //
+  // The version it replaced -- one $state slot shared by all four
+  // controls' Cancel buttons, written through bind:this, read by a single
+  // $effect -- was not observed to fail. It was suspected on a reading of
+  // Svelte 5's flush order: arming a lower-indexed control while a
+  // higher-indexed one is armed changes both branches in the same
+  // reactive flush, and if each-block reconciliation applies the new
+  // control's bind:this write before the old control's teardown (which
+  // nulls the slot on unmount), the teardown would clobber the write and
+  // the effect would find nothing to focus. A test written to catch that
+  // in both directions passed against the shared-slot version, so the
+  // suspicion did not reproduce. What that does and does not show is
+  // narrower than it looks: jsdom is the only place the armed state is
+  // reachable today -- the e2e suite cannot reach it at all (issue #185)
+  // -- so a real browser has never been asked, and "passed in jsdom" is
+  // not "the hazard does not exist there". The action is kept because it
+  // removes the question rather than because the question was answered.
+  function focusOnMount(node: HTMLButtonElement): void {
+    node.focus()
+  }
 
   interface FieldRow {
     id: string
@@ -279,6 +320,49 @@
   </div>
 {/snippet}
 
+<!-- SPEC 4.5.2.2: the confirm is inline, not a dialog -- tapping a control
+     replaces it with its own confirm/cancel pair in the space the control
+     occupied, so the question stays next to the thing that asked it. -->
+{#snippet control(id: ControlId)}
+  {@const c = controlsView[id]}
+  {#if c.visible}
+    <div class="control" data-control={id} data-control-state={c.state}>
+      {#if c.state === 'armed'}
+        <div class="control-actions">
+          <button type="button" data-action="confirm" onclick={() => confirmControl(id)}>
+            {c.confirmLabel}
+          </button>
+          <button
+            type="button"
+            data-action="cancel"
+            use:focusOnMount
+            onclick={cancelControl}
+          >
+            {CANCEL_LABEL}
+          </button>
+        </div>
+        <!-- SPEC 4.5.2.2: the consequence has no hook of its own -- it is
+             this same data-control-message element, which data-control-state
+             already says is carrying it. A second hook would exist only so
+             a test could ask the question the state attribute answers. -->
+        <p class="control-message" data-control-message role="alert">{c.consequence}</p>
+      {:else}
+        <button
+          type="button"
+          data-action="request"
+          disabled={c.disabled}
+          onclick={() => requestControl(id)}
+        >
+          {c.requestLabel}
+        </button>
+        {#if c.message !== null}
+          <p class="control-message" data-control-message role="alert">{c.message}</p>
+        {/if}
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <section class="view" data-view="dashboard" aria-labelledby="view-title-dashboard">
   <h1 id="view-title-dashboard">Dashboard</h1>
 
@@ -331,6 +415,15 @@
   <div class="fields">
     {#each gpsFields as row (row.id)}
       {@render field(row)}
+    {/each}
+  </div>
+
+  <!-- SPEC 4.5.2.2: the controls sit at the end of the Dashboard, under the
+       readings -- the card answers "is my unit all right", the controls are
+       what an owner reaches for after reading the answer. -->
+  <div class="controls">
+    {#each CONTROL_IDS as id (id)}
+      {@render control(id)}
     {/each}
   </div>
 </section>
@@ -413,6 +506,65 @@
   .field-value {
     font-variant-numeric: tabular-nums;
     text-align: right;
+  }
+
+  /* SPEC 4.5.2.2: the controls sit at the end of the card, under the
+     readings. SPEC 4.5.1: adjacent controls carry a gap, not just a floor
+     on their own size -- two 44px targets flush against each other are easy
+     to hit wrongly, which matters most where the neighbour restarts or
+     powers off the unit. */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .control-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  /* SPEC 4.5.2.2: one data-control-message element carries every sentence a
+     control has to show -- the disabled reason, a failure, an abandonment,
+     the pending sentence, and (while armed) the consequence -- so this rule
+     is neutral rather than styled for the failure case alone. */
+  .control-message {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.875rem;
+  }
+
+  /* app.css sets a button's size and font but not its colours (see the same
+     note in Settings.svelte): a button with nothing else applied paints
+     WebKit's platform default under whatever foreground this view
+     inherits, light text on light grey, invisible in the dark palette on
+     that engine specifically. Every surface a control sits on is
+     var(--bg), so an explicit background and colour are what stop the
+     platform default from ever being reached. */
+  .control button {
+    min-height: 44px;
+    padding: 0 1rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .control button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .control [data-action='confirm'] {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   /* Present in the DOM and read by assistive tech, invisible otherwise. A

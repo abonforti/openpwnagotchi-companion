@@ -9,6 +9,7 @@ import {
   orientationOf,
   rectOf,
 } from './helpers'
+import type { Rect } from './helpers'
 
 /**
  * SPEC 10.5: "touch targets at 44px". SPEC 4.2 asks for large touch targets,
@@ -35,6 +36,81 @@ const GAP = 4
 // below is a flex track of a fixed size rather than an edge two boxes share, so
 // it measures exactly and is asserted exactly.
 const EPSILON_OVERLAP = 1
+
+interface LabeledRect {
+  label: string
+  rect: Rect
+}
+
+/**
+ * SPEC 4.5.1's separation rule -- both the GAP between neighbours and the
+ * FLOOR each keeps once that gap is outside its own box -- extracted so the
+ * navigation bar/rail and the SPEC 4.5.2.2 controls below assert it from one
+ * expression rather than two. Sorts `items` along `axis` and walks them
+ * pairwise, exactly as the original navigation-only test did.
+ */
+function assertHeldApart(
+  items: LabeledRect[],
+  axis: 'horizontal' | 'vertical',
+  describeAs: { plural: string; singular: string },
+): void {
+  const horizontal = axis === 'horizontal'
+  const ordered = [...items].sort((a, b) =>
+    horizontal ? a.rect.left - b.rect.left : a.rect.top - b.rect.top,
+  )
+
+  // Walked pairwise with the previous entry carried forward, rather than by
+  // index: the first pass has no predecessor and every later one does, which
+  // is a case the loop runs rather than a guard it can never reach.
+  let before: LabeledRect | undefined
+  for (const after of ordered) {
+    if (before === undefined) {
+      before = after
+      continue
+    }
+    const gap = horizontal
+      ? after.rect.left - before.rect.right
+      : after.rect.top - before.rect.bottom
+    const axisWord = horizontal ? 'horizontally' : 'vertically'
+
+    expect(
+      gap,
+      `${describeAs.plural} "${before.label}" and "${after.label}" are ${gap.toFixed(1)}px apart ` +
+        `${axisWord}, under the ${GAP}px separation SPEC 4.5.1 requires`,
+    ).toBeGreaterThanOrEqual(GAP)
+
+    // The gap is separation *between* controls, not a margin carved out of
+    // one. Both boxes are measured hit boxes, so a layout that reached the
+    // gap by shrinking its entries fails here on the size floor rather than
+    // passing on the separation.
+    for (const entry of [before, after]) {
+      const extent = horizontal ? entry.rect.width : entry.rect.height
+      expect(
+        extent,
+        `${describeAs.singular} "${entry.label}" measures ${extent.toFixed(1)}px along the axis ` +
+          `once the ${GAP}px gap is outside its box, under the ${FLOOR}px floor`,
+      ).toBeGreaterThanOrEqual(FLOOR)
+    }
+
+    before = after
+  }
+}
+
+/**
+ * Which axis a set of boxes is actually laid out on, read from their spread
+ * rather than assumed: this file does not read Dashboard.svelte or
+ * lib/controls.ts, so it has no way to know whether the state controls of
+ * SPEC 4.5.2.2 stack in a column or sit in a row, the way the navigation
+ * test above knows from `expectedLayout`. Whichever spread is larger is the
+ * axis the boxes are ordered on.
+ */
+function dominantAxis(rects: Rect[]): 'horizontal' | 'vertical' {
+  const lefts = rects.map((rect) => rect.left)
+  const tops = rects.map((rect) => rect.top)
+  const xSpread = Math.max(...lefts) - Math.min(...lefts)
+  const ySpread = Math.max(...tops) - Math.min(...tops)
+  return xSpread >= ySpread ? 'horizontal' : 'vertical'
+}
 
 test.describe('every navigation target is at least 44px', () => {
   test('the bar or rail entries, including More', async ({ page }, testInfo) => {
@@ -128,54 +204,86 @@ test.describe('every navigation target is at least 44px', () => {
     // the second half of the first failure; a dead band between them is what
     // makes a mis-hit recoverable, and on this bar the neighbour of a harmless
     // entry can be one that reboots the unit.
-    const entries = []
+    const entries: LabeledRect[] = []
     for (const slot of BAR_SLOTS) {
-      entries.push({ slot, rect: await rectOf(page.locator(`[data-nav="${slot}"]`)) })
+      entries.push({ label: slot, rect: await rectOf(page.locator(`[data-nav="${slot}"]`)) })
     }
 
-    // The bar lays its entries out along x, the rail along y. Ordering is taken
-    // from the measured geometry rather than from BAR_SLOTS, so that a bar
-    // whose entries are reordered visually is still checked between the pairs
-    // that are actually neighbours on screen.
-    const horizontal = layout === 'bar'
-    const ordered = [...entries].sort((a, b) =>
-      horizontal ? a.rect.left - b.rect.left : a.rect.top - b.rect.top,
-    )
-
-    // Walked pairwise with the previous entry carried forward, rather than by
-    // index: the first pass has no predecessor and every later one does, which
-    // is a case the loop runs rather than a guard it can never reach.
-    let before: (typeof entries)[number] | undefined
-    for (const after of ordered) {
-      if (before === undefined) {
-        before = after
-        continue
-      }
-      const gap = horizontal
-        ? after.rect.left - before.rect.right
-        : after.rect.top - before.rect.bottom
-      const axis = horizontal ? 'horizontally' : 'vertically'
-
-      expect(
-        gap,
-        `${layout} entries "${before.slot}" and "${after.slot}" are ${gap.toFixed(1)}px apart ` +
-          `${axis}, under the ${GAP}px separation SPEC 4.5.1 requires`,
-      ).toBeGreaterThanOrEqual(GAP)
-
-      // The gap is separation *between* controls, not a margin carved out of
-      // one. Both boxes are measured hit boxes, so a bar that reached the gap
-      // by shrinking its entries fails here on the size floor rather than
-      // passing on the separation.
-      for (const entry of [before, after]) {
-        const extent = horizontal ? entry.rect.width : entry.rect.height
-        expect(
-          extent,
-          `${layout} entry "${entry.slot}" measures ${extent.toFixed(1)}px along the bar axis ` +
-            `once the ${GAP}px gap is outside its box, under the ${FLOOR}px floor`,
-        ).toBeGreaterThanOrEqual(FLOOR)
-      }
-
-      before = after
-    }
+    // The bar lays its entries out along x, the rail along y -- known from
+    // `expectedLayout` here, unlike the controls below, which have no such
+    // declared layout to read.
+    const axis = layout === 'bar' ? 'horizontal' : 'vertical'
+    assertHeldApart(entries, axis, { plural: `${layout} entries`, singular: `${layout} entry` })
   })
 })
+
+/**
+ * SPEC 4.5.2.2's state controls (issue #184): the same floor and the same
+ * separation as navigation, and the same reason SPEC 4.5.1's paragraph
+ * gives for asking for both -- "a small target is hard to hit, while two
+ * large targets flush against each other are easy to hit *wrongly*, which
+ * matters most where the neighbour does something serious." Reboot next to
+ * Shut down is the case that sentence is written about.
+ *
+ * This suite runs against the built app with no unit attached (SPEC 10.5),
+ * so `stats` never arrives. Two consequences follow, both from SPEC 4.5.2.2
+ * itself rather than assumed here: `capabilities` lives inside `stats`
+ * (SPEC 4.4.1), and the PASV control's own rule is `capabilities.pasv`, so
+ * it never renders; and the connection never leaves `connecting`, so every
+ * rendered control is disabled by `canSendCommand('connecting')` being
+ * false. Neither stops a geometry measurement -- a disabled control is
+ * still laid out -- but the second is why the armed pair (Confirm next to
+ * Cancel) is not measured below; see the note at the end of this file.
+ */
+test.describe('the state controls of SPEC 4.5.2.2 respect the floor and the gap', () => {
+  // Mode, reboot and shutdown are rendered before the first stats frame
+  // (SPEC 4.5.2.2); PASV is not, for the reason above.
+  const RENDERED_CONTROLS = ['mode', 'reboot', 'shutdown'] as const
+
+  test('every rendered control clears 44px in both dimensions', async ({ page }) => {
+    await gotoView(page, 'dashboard')
+
+    for (const control of RENDERED_CONTROLS) {
+      const button = page.locator(`[data-control="${control}"] [data-action="request"]`)
+      await expect(button, `the ${control} control has no [data-action="request"]`).toHaveCount(1)
+
+      const rect = await rectOf(button)
+      expect(
+        rect.width,
+        `${control} request button is ${rect.width.toFixed(1)}px wide, under the ${FLOOR}px floor`,
+      ).toBeGreaterThanOrEqual(FLOOR)
+      expect(
+        rect.height,
+        `${control} request button is ${rect.height.toFixed(1)}px tall, under the ${FLOOR}px floor`,
+      ).toBeGreaterThanOrEqual(FLOOR)
+    }
+  })
+
+  test('adjacent controls, Reboot next to Shut down among them, are held apart by the gap', async ({
+    page,
+  }) => {
+    await gotoView(page, 'dashboard')
+
+    const items: LabeledRect[] = []
+    for (const control of RENDERED_CONTROLS) {
+      items.push({
+        label: control,
+        rect: await rectOf(page.locator(`[data-control="${control}"] [data-action="request"]`)),
+      })
+    }
+
+    const axis = dominantAxis(items.map((item) => item.rect))
+    assertHeldApart(items, axis, { plural: 'controls', singular: 'control' })
+  })
+})
+
+// The armed pair -- Confirm next to Cancel -- is the pair SPEC 4.5.1's
+// paragraph is actually about, and it is deliberately not measured above.
+// Reaching it means clicking a control's own [data-action="request"], and
+// every one of them is disabled for the reason given on the describe block
+// above: this suite has no unit to attach, the connection never leaves
+// `connecting`, and a disabled button refuses a Playwright click rather
+// than accepting one. Forcing the click past actionability would measure a
+// state no real tap on this build can ever produce, which is worse than not
+// measuring it. Reaching the armed state honestly needs a fake-unit seam
+// this e2e layer does not have.

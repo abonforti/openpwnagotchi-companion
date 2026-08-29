@@ -116,6 +116,51 @@ function refreshHandshakes(client: WsClient): void {
     })
 }
 
+// SPEC 4.5.2.3: access_points gets the same per-client coalescing as
+// handshakes above, and for the same reason -- a host switch (SPEC 4.4.2)
+// can leave unit A's request in flight when B attaches, and the owner is
+// compared against the requesting client so B sends its own rather than
+// coalescing into a reply that will never reach a store B did not write
+// from.
+let accessPointsRefreshOwner: WsClient | null = null
+
+function refreshAccessPoints(client: WsClient): void {
+  if (accessPointsRefreshOwner === client) return
+  accessPointsRefreshOwner = client
+  client
+    .request('get_access_points')
+    .catch(() => {
+      // Not fatal here either: access_points is also pushed on wifi_update
+      // and once at the start of every session (initial_burst), so a
+      // failed or timed-out refresh only means this particular ask did not
+      // shorten the wait for one of those.
+    })
+    .finally(() => {
+      if (accessPointsRefreshOwner === client) {
+        accessPointsRefreshOwner = null
+      }
+    })
+}
+
+/**
+ * SPEC 4.5.2.3: the Wi-Fi view's own refresh, asked for on two occasions --
+ * opening the view and its own refresh control -- and by no timer, the
+ * argument SPEC 4.3.7 already made against client polling being stronger
+ * here: a list re-fetched on a schedule spends round trips on a link whose
+ * round trips are the expensive part.
+ *
+ * Both lists are fetched together, not only the visible segment, so a
+ * badge nobody is looking at still carries a current count. This lives
+ * beside refreshHandshakes rather than in a module of its own: it is the
+ * same per-client coalescing pattern applied to a second read, sharing this
+ * file's writable stores and its WsClient import, and a wrapper module
+ * would only exist to re-export what is already here.
+ */
+export function refreshWifiLists(client: WsClient): void {
+  refreshAccessPoints(client)
+  refreshHandshakes(client)
+}
+
 function handleMessage(message: OutgoingMessage, client: WsClient): void {
   switch (message.type) {
     case 'stats':

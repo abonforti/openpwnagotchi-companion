@@ -4,7 +4,12 @@
 // `views/Dashboard.svelte` subscribes to stores and lays out what these
 // functions return; it does not itself decide how a value becomes text.
 
-import type { Gps, Mode } from './protocol'
+import type { Gps, HandshakeGps, Mode } from './protocol'
+// Type-only, and cycle-free: lib/wifi.ts does not import this file, so
+// importing its NearbySortOrder here is the same direction of dependency
+// every other formatter in this section already has on the module that
+// owns the value it is turning into a string.
+import type { NearbySortOrder } from './wifi'
 import type { ConnectionState, UnauthorizedReason } from './ws'
 
 /** The dash itself. Exported so no caller writes the character by hand. */
@@ -483,4 +488,145 @@ export function formatControlFailure(control: ControlId, code: string | null): s
     return PASV_UNAVAILABLE_MESSAGE
   }
   return COMMAND_REFUSED_MESSAGE
+}
+
+// ---------------------------------------------------------------------------
+// The Wi-Fi view (SPEC 4.5.2.3). Every string in that section's two copy
+// tables, verbatim, plus the byte-size formatter its own paragraph fixes the
+// wording of. `views/WiFi.svelte` subscribes to the accessPoints and
+// handshakes stores and lays out what these functions return; the sort order
+// and the empty-versus-never-fetched decision, which are logic rather than
+// wording, live in `lib/wifi.ts` instead.
+// ---------------------------------------------------------------------------
+
+export type WifiSegment = 'nearby' | 'captured'
+
+/**
+ * The sentence shown in place of an empty list (SPEC 4.5.2.3's copy table).
+ * `fetched` is `lib/wifi.ts`'s `hasWifiDataArrived`, read off the
+ * connection state -- not a property of the list itself, which is why it is
+ * passed in rather than derived here.
+ */
+export function formatWifiEmptyMessage(segment: WifiSegment, fetched: boolean): string {
+  if (!fetched) {
+    return 'Not connected, so this list has not been read.'
+  }
+  return segment === 'nearby' ? 'The unit reports no access points.' : 'The unit has no captures.'
+}
+
+/** Shown on the Captured segment only, while `truncated` is set (SPEC 4.5.2.3). */
+export function formatTruncationNotice(total: number): string {
+  return `Showing the newest 500 captures of ${total}.`
+}
+
+/** The badge's own text for the 500-entry cap (SPEC 4.5.2.3), never composed by hand. */
+export const TRUNCATED_BADGE = '500+'
+
+/**
+ * A segment badge's text (SPEC 4.5.2.3's DOM hooks: "its text is the count
+ * and nothing else"): the bare count, or `TRUNCATED_BADGE` while `truncated`
+ * is set. Deciding between the two is the one thing that can be wrong here
+ * -- a raw `500` where `500+` belongs -- so it lives here rather than in a
+ * view's own ternary, the same discipline every other rule on this screen
+ * already follows.
+ */
+export function formatSegmentBadge(count: number, truncated: boolean): string {
+  return truncated ? TRUNCATED_BADGE : `${count}`
+}
+
+export const WIFI_REFRESH_LABEL = 'Refresh'
+
+/**
+ * The sort control's label, from what tapping it will do rather than the
+ * order in force (SPEC 4.5.2.3) -- the same "name the outcome" rule
+ * `formatModeControlLabel` already follows for the Dashboard's mode switch,
+ * and for the same reason: a label that states the current order has to be
+ * read twice.
+ */
+export function formatWifiSortLabel(currentOrder: NearbySortOrder): string {
+  return currentOrder === 'rssi' ? 'Sort by channel' : 'Sort by signal'
+}
+
+/**
+ * `<n> B` below 1024 bytes, then `<n.n> kB` and `<n.n> MB`, each to one
+ * decimal place, powers of 1024 (SPEC 4.5.2.3). `DASH` for a value that is
+ * not a finite, non-negative number: `size` is a required integer by
+ * schema, but `lib/stores.ts` writes the payload with no runtime
+ * validation (issue #109), the same reasoning `formatGpsSource`'s
+ * docstring gives for its own unreachable arm.
+ *
+ * Every boundary is decided on the *rounded* value, never the raw one, and
+ * that holds one unit down as well as one unit up. `1023.6` bytes is below
+ * the 1024 threshold raw, but `Math.round`ed -- which the B arm already
+ * does, for the same non-integer-payload defence the top guard exists for
+ * -- it is `1024`, a reading of `1024 B` the table cannot contain any more
+ * than it can contain `1024.0 kB`. Comparing the raw value to a threshold
+ * and rounding the *output* separately lets the two disagree; rounding
+ * first and branching on that same rounded number, at both boundaries, is
+ * what keeps the number a reader sees and the unit beside it always
+ * consistent with each other. The B/kB case is unreachable from a
+ * schema-conformant integer, which is exactly why it is worth closing
+ * rather than waving through: the guard above and the rounding in this arm
+ * both exist only because nothing validates the payload (issue #109), and
+ * a function that defends against a non-integer size on one line and
+ * assumes an integer on the next is not defending against anything. The
+ * kB/MB boundary is unreachable in this product for a different reason --
+ * no capture is that large -- and is held to the same rule anyway, so one
+ * formatter has one way of deciding a unit rather than two.
+ */
+export function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return DASH
+  }
+  const roundedBytes = Math.round(bytes)
+  if (roundedBytes < 1024) {
+    return `${roundedBytes} B`
+  }
+  const kb = Math.round((bytes / 1024) * 10) / 10
+  if (kb < 1024) {
+    return `${kb.toFixed(1)} kB`
+  }
+  const mb = Math.round((bytes / 1024 / 1024) * 10) / 10
+  return `${mb.toFixed(1)} MB`
+}
+
+/**
+ * A capture's GPS pin, present or not. SPEC 4.5.2.3 asks the row to carry
+ * "a GPS pin when the sidecar carried one" and names no coordinate format;
+ * the Map view (SPEC 4.5.2) is already where a position is plotted, so this
+ * list states only whether one exists rather than inventing a second,
+ * unspecified rendering of the coordinates themselves.
+ */
+export const GPS_PIN_LABEL = 'Pinned'
+export function formatGpsPin(gps: HandshakeGps | null): string {
+  return gps === null ? DASH : GPS_PIN_LABEL
+}
+
+/**
+ * SPEC 4.5.2.3: "every remote string on a row follows SPEC 4.5.1.1" --
+ * decided from the value, not from the formatted string, the same
+ * discipline `formatGpsSource`'s own docstring argues for. Covers two
+ * shapes at once: `AccessPoint.hostname`/`vendor`/`encryption` are required
+ * strings by schema with no nullable slot of their own, where an empty
+ * string is not a reading; `HandshakeEntry.bssid` is the nullable case,
+ * where a missing value says the same thing. Neither is a dash by
+ * accident, so one function answers both rather than two call sites
+ * re-deriving the same claim, which is what let this rule live inside a
+ * view four times before it moved here.
+ *
+ * Exported beside `formatRemoteString`, the pair `formatGpsSource` and its
+ * own emptiness rule already model: a caller asks this, never compares the
+ * formatted string against `DASH`, because a dash is as legal an SSID, a
+ * hostname or a BSSID as any other string a stranger could choose.
+ */
+function hasRemoteStringValue(value: string | null): value is string {
+  return value !== null && value !== ''
+}
+
+export function isRemoteStringUnknown(value: string | null): boolean {
+  return !hasRemoteStringValue(value)
+}
+
+export function formatRemoteString(value: string | null): string {
+  return hasRemoteStringValue(value) ? value : DASH
 }

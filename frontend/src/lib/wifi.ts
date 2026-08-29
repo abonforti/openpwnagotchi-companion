@@ -1,27 +1,15 @@
-// SPEC 4.5.2.3. The Wi-Fi view's list rules that are not wording: Nearby's
-// own sort order, and the empty-versus-never-fetched decision. Every string
-// that section fixes lives in lib/format.ts, the same way Dashboard's and
-// Settings' copy does (SPEC 4.5.1.1); this file is the two rules that are
-// not strings.
+// SPEC 4.5.2.3. Nearby's own sort order, the one Wi-Fi list rule that is not
+// wording and not shared with another view. Every string that section fixes
+// lives in lib/format.ts, the same way Dashboard's and Settings' copy does
+// (SPEC 4.5.1.1). The empty-versus-never-fetched predicate used to live here
+// too; it moved to lib/lists.ts (SPEC 4.5.2.4) once Peers needed the same
+// rule and the Wi-Fi-specific name it had here stopped fitting either
+// caller.
 
+import { compareKnownFirst } from './lists'
 import type { AccessPoint } from './protocol'
-import type { ConnectionState } from './ws'
 
 export type NearbySortOrder = 'rssi' | 'channel'
-
-/**
- * SPEC 4.5.2.3: an empty list and a list nobody has fetched have to read
- * differently, and the two are told apart by the connection state rather
- * than a second "have we ever received one" flag in lib/stores.ts, which
- * would be a second source of truth for something the connection state
- * almost always already answers. There is a window where this is wrong --
- * connected, the burst's `stats` arrived, its `access_points` has not yet
- * -- and SPEC 4.5.2.3 accepts it rather than papering over it: both frames
- * leave the unit in the same burst, so the window is one frame wide.
- */
-export function hasWifiDataArrived(state: ConnectionState): boolean {
-  return state === 'connected' || state === 'degraded'
-}
 
 /**
  * Nearby's own order (SPEC 4.5.2.3): RSSI strongest first, or channel
@@ -33,6 +21,14 @@ export function hasWifiDataArrived(state: ConnectionState): boolean {
  * order nobody chose. The BSSID is attacker-chosen like everything else on
  * this screen, and using it to order rows is not using it as truth.
  *
+ * `rssi` and `channel` are required integers by schema, with no `null`
+ * case of their own, but `lib/lists.ts`'s `compareKnownFirst` is used for
+ * the primary comparison anyway rather than a bare subtraction: `lib/
+ * stores.ts` writes the wire payload with no runtime validation (issue
+ * #109), and a non-finite reading fed to `b - a` returns `NaN`, which
+ * hands `Array.prototype.sort` an unspecified order -- the opposite of the
+ * total order this paragraph promises.
+ *
  * Captured is deliberately not sorted anywhere in this codebase: the
  * plugin applies the 500-entry cap to its own ordering (SPEC 2.7/2.8), so
  * the list arrives as the 500 newest, and re-sorting it client-side would
@@ -42,7 +38,10 @@ export function hasWifiDataArrived(state: ConnectionState): boolean {
 export function sortAccessPoints(list: AccessPoint[], order: NearbySortOrder): AccessPoint[] {
   const sorted = [...list]
   sorted.sort((a, b) => {
-    const primary = order === 'rssi' ? b.rssi - a.rssi : a.channel - b.channel
+    const primary =
+      order === 'rssi'
+        ? compareKnownFirst(a.rssi, b.rssi, 'desc')
+        : compareKnownFirst(a.channel, b.channel, 'asc')
     if (primary !== 0) return primary
     if (a.bssid < b.bssid) return -1
     if (a.bssid > b.bssid) return 1

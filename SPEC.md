@@ -3745,6 +3745,110 @@ rule for the mode switch and holds for the same reason: a label that states the 
 to be read twice.
 
 
+#### 4.5.2.4 Peers, and the refresh rule stops being the Wi-Fi view's (issue #190)
+
+§4.5.2 says what this screen holds: pwngrid peers with signal, last-seen and pwnd counters. What
+follows is the rest, and most of it is §4.5.2.3's, which is the point.
+
+##### The refresh rule now has two callers, so it has one expression
+
+§4.5.2.3 settled when a list is asked for: the route becoming the view's own, a control on the
+view, and the active host changing under a view that is already current -- three occasions and no
+timer. Peers wants exactly that, and `initial_burst()` does not carry peers at all (§2.4), so
+without it the screen opens empty and stays empty until another unit walks past. That is
+§4.5.2.3's invisible failure with a longer fuse.
+
+**It is shared, not copied.** `lib/stores.ts` already holds two near-identical coalescing owners
+and a third by copy is how the first correction to any of them fails to reach the other two. The
+same goes for the view-side trigger, which is a rule about routes and client identity and not
+markup: two views deriving it separately is §4.5.1.1's objection in a new place. One expression,
+asked twice.
+
+This is the first time a rule in this specification has been written for one screen and then
+claimed by a second, so the direction is stated: **§4.5.2.3 keeps the reasoning and this section
+keeps only what differs.** A reader looking for why there is no timer, or why being connected is
+not a precondition, goes there and finds it argued once.
+
+##### The list is not keyed on anything a peer chooses
+
+`lib/stores.ts` upserts a peer by `fingerprint` and its own comment explains that `'???'` is
+`peer.identity()`'s documented default for a unit that has not advertised one -- so the store
+**deliberately** produces a list in which several rows share that value. Keying a Svelte `{#each}`
+on it throws `each_key_duplicate` in production and takes the screen down, which is the defect
+issue #187 hit on `AccessPoint.bssid`.
+
+The difference is worth naming rather than treating this as the same bug twice. There, the
+duplicate needed either a hostile unit or a bettercap entry with no mac. Here **the duplicate is
+the documented default**, produced by the unit's own library on any peer that has not advertised
+an identity, and the store's comment says as much. A key must be positional, and the identity
+fields are rendered rather than relied on.
+
+##### What a row holds
+
+Signal, last seen, and the two pwnd counters, which is what §4.5.2 asks for, beside the identity
+the peer advertises. Every one of `name`, `fullName`, `fingerprint`, `face` and `version` arrives
+over pwngrid from another person's unit, which §4.5.3 names specifically: this is the first screen
+on which **every** text field was chosen by a stranger, rather than by a network that happened to
+be in range.
+
+`rssi`, `channel`, `lastSeen`, `encounters`, `pwndRun` and `pwndTotal` are all nullable on the
+wire, so §4.5.1.1's dash applies to each, and `name` and `fingerprint` carry `'???'` rather than
+null when unadvertised. **`'???'` is rendered, not translated into a dash.** It is what the peer's
+own unit reports and it means something different from a value the plugin could not read: the dash
+says this app does not know, and `'???'` says the peer did not say. Collapsing them would make a
+peer that is deliberately anonymous indistinguishable from a field the app failed to fetch.
+
+**`face` and `version` dash when null, and that is not inconsistent with the paragraph above.**
+They carry the same meaning `'???'` carries for a name -- the peer did not advertise one -- and
+they carry it as `null`, because pwngrid's own library supplies a sentinel string for two fields
+and nothing at all for the others. So on those two the app genuinely cannot tell *the peer did not
+say* from *we could not read it*, the wire having given it one value for both, and §4.5.1.1's
+answer for a value the app does not know is the dash. The asymmetry is the library's rather than
+this screen's, and it is written down here so it does not read as an oversight.
+
+`lastSeen` is `formatUnitTime` (§4.5.1.1), which is not written a second time here. It is **not**
+paired with the name through `formatNamedEvent`: that function exists for the Dashboard's
+single-line summary of a last peer, where one row has to carry both facts, and this screen has a
+column for each. Named because the two are easy to confuse and the hook list below settles it.
+
+##### Order
+
+**Sorted by last seen, most recent first**, with the signal as the tie-break, strongest first, and
+the fingerprint after that, ascending, so the order is total in the sense §4.5.2.3 requires -- rows
+that do not swap between frames. The direction of that last one is stated for §4.5.2.3's reason:
+a test cannot assert an order nobody chose, and an earlier draft of this paragraph left it out. Last seen leads rather than signal because a peer list answers *who has been
+around*, and a peer met an hour ago at a strong signal is further from that question than one met a
+minute ago at a weak one. There is no sort control: §4.5.2.3 gave Nearby one because *what is near
+me* and *what is on which channel* are two questions about one list, and this screen has only one.
+
+A null `lastSeen` sorts last, and a null `rssi` sorts after a known one within its group. Neither
+is a judgement about the peer; it is what keeps the order total when the wire is missing a field.
+
+##### The DOM hooks
+
+Declared here, per §4.5.1.1, and closed.
+
+- `data-view="peers"` on the view root, as §4.5 requires of every view.
+- `data-row="peer"` on each row, with `data-row-key` carrying the fingerprint -- **rendered as a
+  hook, never used as the `{#each}` key**, for the reason above.
+- `data-field` on each value in a row, with §4.5.1.1's `data-empty="true"`: `name`, `fullName`,
+  `fingerprint`, `face`, `version`, `rssi`, `channel`, `lastSeen`, `encounters`, `pwndRun`,
+  `pwndTotal`.
+- `data-action="refresh"` on the refresh control.
+- `data-empty-message` on the element carrying the empty or not-yet-fetched sentence, with
+  `role="status"`, absent when the list has rows.
+
+##### The copy
+
+| condition | sentence |
+|---|---|
+| empty, connected | The unit has met no peers. |
+| empty, not connected | Not connected, so this list has not been read. |
+
+The second is §4.5.2.3's sentence, unchanged and shared: it says nothing about which list it is
+under, because the reason it appears has nothing to do with the list.
+
+
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
 
 Every string this app renders that did not come from the owner came from somebody else, and on
@@ -4919,6 +5023,26 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   (issue #109), and type-driven guards for states the caller cannot produce. They are described
   rather than counted, because a count in prose is wrong the first time a test covers one of them
   by accident -- which is what happened to an earlier draft of this entry.
+- `peers-view.spec.ts`: the Peers view against §4.5.2.4's declared hooks, on the harness
+  `wifi-view.spec.ts` established. What it pins that no other view's tests can: several peers
+  sharing `'???'` rendering as several rows, which is `each_key_duplicate` waiting for the
+  documented default of `peer.identity()` rather than for a hostile unit, and `'???'` itself
+  rendering verbatim with no `data-empty` beside a null `face` that dashes -- the two halves of
+  the distinction §4.5.2.4 draws between *the peer did not say* and *this app does not know*. The
+  order asserted as a direction on all three keys and, separately, as stability under a permuted
+  arrival, which are different claims. The three refresh occasions, coalescing per client, and the
+  refresh control tapped with no active host, which does nothing and says so. Every one of the five
+  identity strings carrying a hostile payload, asserted on the DOM: this is the first screen where
+  every text field was chosen by a stranger's unit rather than by a network in range. What it
+  leaves uncovered, named here rather than left to the general licence above: the comparator arm
+  where two peers tie on every sort key, including the fingerprint, which is a defence against a
+  payload the schema forbids and nothing validates (issue #109). The shared comparator itself is
+  fully covered, and getting it there is what found the case worth having: `Array.prototype.sort`
+  calls a comparator in whichever argument order it likes, so "an unknown value sorts last" is two
+  claims and the fixtures originally made only one of them. A comparator that answers one order
+  and not the other is not merely wrong, it is inconsistent, and an inconsistent comparator gives
+  an order that depends on the array's length and the engine's strategy -- right in a test with
+  three rows and wrong in the field with thirty.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

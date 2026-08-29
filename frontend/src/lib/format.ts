@@ -491,25 +491,50 @@ export function formatControlFailure(control: ControlId, code: string | null): s
 }
 
 // ---------------------------------------------------------------------------
+// Shared list-view copy (SPEC 4.5.2.3/4.5.2.4). Named for what it is, not
+// for which screen first needed it: both the Wi-Fi view's two segments and
+// Peers use these, and a name that claimed one screen is what let
+// lib/lists.ts's predicate get born as `lib/wifi.ts`'s in the first place.
+// ---------------------------------------------------------------------------
+
+/**
+ * SPEC 4.5.2.3/4.5.2.4: the "not connected" sentence for an empty list that
+ * has not been fetched, shared unchanged between the Wi-Fi view and the
+ * Peers view (§4.5.2.4: "The second is §4.5.2.3's sentence, unchanged and
+ * shared: it says nothing about which list it is under, because the reason
+ * it appears has nothing to do with the list."). One string, not two.
+ */
+const NOT_CONNECTED_LIST_MESSAGE = 'Not connected, so this list has not been read.'
+
+/**
+ * The label on the refresh control every list view carries (SPEC 4.5.2.3's
+ * copy table; SPEC 4.5.2.4 names no wording of its own for Peers' own
+ * refresh control, so this is the same word rather than a second, identical
+ * constant).
+ */
+export const REFRESH_LABEL = 'Refresh'
+
+// ---------------------------------------------------------------------------
 // The Wi-Fi view (SPEC 4.5.2.3). Every string in that section's two copy
 // tables, verbatim, plus the byte-size formatter its own paragraph fixes the
 // wording of. `views/WiFi.svelte` subscribes to the accessPoints and
-// handshakes stores and lays out what these functions return; the sort order
-// and the empty-versus-never-fetched decision, which are logic rather than
-// wording, live in `lib/wifi.ts` instead.
+// handshakes stores and lays out what these functions return; the sort order,
+// which is logic rather than wording, lives in `lib/wifi.ts` instead, and the
+// empty-versus-never-fetched decision lives in `lib/lists.ts`, shared with
+// Peers.
 // ---------------------------------------------------------------------------
 
 export type WifiSegment = 'nearby' | 'captured'
 
 /**
  * The sentence shown in place of an empty list (SPEC 4.5.2.3's copy table).
- * `fetched` is `lib/wifi.ts`'s `hasWifiDataArrived`, read off the
+ * `fetched` is `lib/lists.ts`'s `hasListDataArrived`, read off the
  * connection state -- not a property of the list itself, which is why it is
  * passed in rather than derived here.
  */
 export function formatWifiEmptyMessage(segment: WifiSegment, fetched: boolean): string {
   if (!fetched) {
-    return 'Not connected, so this list has not been read.'
+    return NOT_CONNECTED_LIST_MESSAGE
   }
   return segment === 'nearby' ? 'The unit reports no access points.' : 'The unit has no captures.'
 }
@@ -533,8 +558,6 @@ export const TRUNCATED_BADGE = '500+'
 export function formatSegmentBadge(count: number, truncated: boolean): string {
   return truncated ? TRUNCATED_BADGE : `${count}`
 }
-
-export const WIFI_REFRESH_LABEL = 'Refresh'
 
 /**
  * The sort control's label, from what tapping it will do rather than the
@@ -629,4 +652,39 @@ export function isRemoteStringUnknown(value: string | null): boolean {
 
 export function formatRemoteString(value: string | null): string {
   return hasRemoteStringValue(value) ? value : DASH
+}
+
+// ---------------------------------------------------------------------------
+// The Peers view (SPEC 4.5.2.4). Sort order is not wording and lives in
+// lib/peers.ts, the same split lib/wifi.ts already draws for the Wi-Fi view.
+// ---------------------------------------------------------------------------
+
+/**
+ * The sentence shown in place of an empty peer list (SPEC 4.5.2.4's copy
+ * table). `fetched` is `lib/lists.ts`'s `hasListDataArrived`, the same
+ * predicate `formatWifiEmptyMessage` above reads: SPEC 4.5.2.4 shares the
+ * rule rather than restating it.
+ */
+export function formatPeersEmptyMessage(fetched: boolean): string {
+  if (!fetched) {
+    return NOT_CONNECTED_LIST_MESSAGE
+  }
+  return 'The unit has met no peers.'
+}
+
+/**
+ * `rssi`, `channel`, `encounters`, `pwndRun` and `pwndTotal` are all
+ * nullable integers on the wire with nothing to round and no unit to add
+ * (SPEC 4.5.2.4). `DASH` for `null` or for a value that is not a finite
+ * number, the ordinary rule (SPEC 4.5.1.1) also applied above to `size`
+ * (`formatByteSize`) for the same reason: `lib/stores.ts` writes the
+ * payload with no runtime validation (issue #109), so the schema's
+ * non-nullable, integer-typed claim is compile-time, not a fact about a
+ * given payload.
+ */
+export function formatPeerNumber(value: number | null): string {
+  if (value === null || !isFiniteNumber(value)) {
+    return DASH
+  }
+  return `${value}`
 }

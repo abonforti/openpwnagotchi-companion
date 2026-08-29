@@ -1,9 +1,9 @@
 <script lang="ts">
   // SPEC 4.5.2.3. Every rule that turns a value into a string, or decides
   // Nearby's order, or tells an empty list apart from one never fetched,
-  // lives in lib/format.ts and lib/wifi.ts; this view subscribes to the
-  // accessPoints and handshakes stores (lib/stores.ts) and lays out what
-  // those functions return.
+  // lives in lib/format.ts, lib/wifi.ts and lib/lists.ts; this view
+  // subscribes to the accessPoints and handshakes stores (lib/stores.ts)
+  // and lays out what those functions return.
   import {
     DASH,
     EMPTY_LABEL,
@@ -16,14 +16,13 @@
     formatWifiEmptyMessage,
     formatWifiSortLabel,
     isRemoteStringUnknown,
-    WIFI_REFRESH_LABEL,
+    REFRESH_LABEL,
     type WifiSegment,
   } from '../lib/format'
-  import { currentRoute } from '../lib/router'
-  import { currentClient } from '../lib/session'
+  import { hasListDataArrived } from '../lib/lists'
   import { accessPoints, connection, handshakes, refreshWifiLists } from '../lib/stores'
-  import { hasWifiDataArrived, sortAccessPoints, type NearbySortOrder } from '../lib/wifi'
-  import type { WsClient } from '../lib/ws'
+  import { watchViewRefresh } from '../lib/viewRefresh'
+  import { sortAccessPoints, type NearbySortOrder } from '../lib/wifi'
   import Segmented, { type SegmentTab } from '../shell/Segmented.svelte'
 
   // `Segmented` is generic over its tab id (see its own file), so fixing
@@ -44,7 +43,7 @@
   let sortOrder = $state<NearbySortOrder>('rssi')
 
   const conn = $derived($connection)
-  const fetched = $derived(hasWifiDataArrived(conn.state))
+  const fetched = $derived(hasListDataArrived(conn.state))
 
   const nearbyList = $derived(sortAccessPoints($accessPoints, sortOrder))
   const capturedList = $derived($handshakes.entries)
@@ -71,86 +70,21 @@
     return id === 'nearby' ? nearbyBadge : capturedBadge
   }
 
+  // SPEC 4.5.2.3/4.5.2.4: the three occasions that ask for a refresh --
+  // this view becoming current, its own refresh control, and the active
+  // host changing under it while it stays current -- and the coalescing
+  // that keeps a host switch from wedging, are lib/viewRefresh.ts and
+  // lib/stores.ts's, shared with Peers rather than derived here a second
+  // time.
+  const wifiRefresh = watchViewRefresh('wifi', refreshWifiLists)
+
   function requestRefresh(): void {
-    const client = currentClient()
-    if (client === null) return
-    refreshWifiLists(client)
+    wifiRefresh.refreshNow()
   }
 
   function toggleSort(): void {
     sortOrder = sortOrder === 'rssi' ? 'channel' : 'rssi'
   }
-
-  // SPEC 4.5.2.3: "somebody has to ask, and today nobody does" -- the route
-  // becoming `/wifi` is one of the two occasions that asks, and by no
-  // timer. Becoming current, not mounting: SPEC 4.5 keeps every view
-  // mounted when it is navigated away from, so a mount-time fetch would
-  // fire once per app launch, and an owner who looks in at ten and again
-  // at eleven would read an hour-old list with nothing on screen saying so.
-  //
-  // The view asks whenever it becomes current, connected or not: there is
-  // no connection-state gate here, and there must not be one -- `request()`
-  // (lib/ws.ts) queues unconditionally and flushes on reconnect, unlike
-  // `command()`, which refuses outright while offline (SPEC 4.3.3). A gate
-  // on `conn.state` here would be a second, wrong copy of a rule
-  // `lib/ws.ts` already owns. The only real precondition is that a client
-  // exists at all -- `client === null` -- because there is nothing to call
-  // `request()` on yet.
-  //
-  // `askedForClient` holds the client the ask was made for, not a bare
-  // flag, for the reason `lib/stores.ts`'s own comment above
-  // `handshakesRefreshOwner` gives about the same shape one layer down: a
-  // host switch (SPEC 4.4.2) can leave the ask made for unit A still
-  // recorded while unit B is now attached. `lib/session.ts`'s `rebuild()`
-  // runs teardown, `resetStores()`, then `connectStores(B)` -- all while
-  // the route can still be `/wifi` the whole time, since a host switch is
-  // not a navigation -- and a bare boolean would read that as "already
-  // asked" and never ask B, leaving Captured empty (resetStores() just
-  // cleared it, and initial_burst() sends access_points but not
-  // handshakes_list) while the badge reads B as connected. That is exactly
-  // the invisible failure this section exists to remove, reintroduced one
-  // layer above the fetch this comparison protects.
-  //
-  // Comparing identity, not a flag, is what tells "the same client asking
-  // again" apart from "a different client now attached": `askedForClient`
-  // clears to `null` the moment the route stops being `/wifi`, so the next
-  // time it becomes current is a fresh ask regardless of which client is
-  // attached by then; while it stays current, a reconnect of the *same*
-  // client does not re-ask, because `currentClient()` still returns the
-  // client already recorded here. That is safe rather than merely
-  // convenient: `request()` arms SPEC 4.3.8's 15 s timeout at the call,
-  // before `flushQueue()`, so an outage longer than that already ends the
-  // queued ask in a rejection `refreshWifiLists` swallows, and a shorter
-  // one flushes and fills the list on its own -- a bonus, not something
-  // this effect needs to build on by re-asking.
-  //
-  // The cold-start race moves here with the trigger rather than
-  // disappearing: this view, like every other one, is mounted once at
-  // startup regardless of which route is current, and a child's own
-  // effects run before its parent's, so this can run before
-  // App.svelte's onMount has called startSession() -- including on a
-  // cold start straight into `/wifi`, where `currentRoute` already reads
-  // `wifi` on the very first run and `currentClient()` is still `null`.
-  // Reading `$connection` is what lets the ask wait that out -- waiting for
-  // a client to exist (or a different one to replace it), never for a
-  // particular state of one: the store notifies again once
-  // lib/stores.ts's connectStores seeds it from a freshly attached client,
-  // re-running this effect with the same route still current and a client
-  // that now exists, whatever state it is in.
-  let askedForClient: WsClient | null = null
-  $effect(() => {
-    const isCurrent = $currentRoute.id === 'wifi'
-    void $connection
-    if (!isCurrent) {
-      askedForClient = null
-      return
-    }
-    const client = currentClient()
-    if (client === null) return
-    if (askedForClient === client) return
-    askedForClient = client
-    refreshWifiLists(client)
-  })
 </script>
 
 {#snippet nearbyRow(ap: (typeof nearbyList)[number])}
@@ -204,7 +138,7 @@
     <!-- SPEC 4.5.2.3: both lists are fetched together, so one button covers
          both segments regardless of which panel is showing. -->
     <button type="button" data-action="refresh" onclick={requestRefresh}>
-      {WIFI_REFRESH_LABEL}
+      {REFRESH_LABEL}
     </button>
   </div>
 

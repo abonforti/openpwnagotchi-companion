@@ -118,6 +118,18 @@ against real hardware.
 
 ### Added
 
+- **Tagging now produces something to install.** `.github/workflows/release.yml` builds the
+  frontend on a pushed `v*` tag, packs `frontend/dist` into `dist.tgz`, and publishes a Release
+  carrying that archive and a `SHA256SUMS` beside it - which is what `tools/install-on-pi.sh` has
+  always downloaded and verified. The workflow was specified in five places and had never been
+  written, so a tag built nothing, attached nothing, and failed at nothing (issue #128). It
+  refuses a tag that is not an ancestor of `master`, which catches a tag on a commit that was
+  never merged - though not a tag carrying its own copy of the workflow, since GitHub runs the one
+  it finds on the tagged ref, and closing that needs a tag protection ruleset (issue #181). It
+  refuses a tag whose version disagrees with
+  `plugin/companion.py` or `frontend/package.json` - which is the check SPEC §2.1 already claimed
+  CI performed. A tag with a pre-release suffix publishes a pre-release, so an `-rc` does not
+  become the version an installer picks up by default.
 - **A configuration key the plugin does not know is named at `WARNING`, once, at load.** The
   message gives the key and the set of keys that are accepted, and the plugin comes up on its
   defaults as before. Nothing was said until now, so `bind_address` for `bind_addresses` - a

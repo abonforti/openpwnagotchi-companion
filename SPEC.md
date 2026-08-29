@@ -3088,8 +3088,8 @@ and lays out what those functions return.
   handshakes / peers), the last handshake and the last peer, each named as well as timed
   (§4.5.1.1), GPS source and fix indicator, connection banner. Controls: mode switch, PASV toggle (rendered only when
   `capabilities.pasv`), reboot, shutdown. **Mode switch, reboot and shutdown all use the
-  two-step confirm** (D9 + D12) and all show the `restarting` state afterwards. **A null `mode`
-  does not disable the mode switch**, which is the one place a dash means something other than
+  two-step confirm** (D9 + D12, shaped in §4.5.2.2) and all show the `restarting` state
+  afterwards. **A null `mode` does not disable the mode switch**, which is the one place a dash means something other than
   "nothing to do here": a null mode is a unit with no agent, which is a unit in manual mode
   (§2.6.0), and the switch is the control that takes it back to auto. Greying it out there would
   disable the rescue on exactly the unit that needs rescuing, which is the defect issue #147
@@ -3249,6 +3249,285 @@ arrives from the unit is the code and the reason is one of two values this codeb
 earlier draft of this section called both of them remote, and the test author who read it duly
 cast a script tag into `UnauthorizedReason` to defend a path the client cannot produce. A
 defence against something that cannot happen is not free: it reads as evidence that it can.
+
+#### 4.5.2.2 Controls: confirm, pending and where a refusal appears (issue #184)
+
+The four state commands (§2.6) have been implemented in the plugin, and sendable by `lib/ws.ts`,
+since before any of them had a button. This section is the shape of the buttons, written before
+they exist for the reason §4.5.2.1 gives about the screen that came before it.
+
+**The controls sit at the end of the Dashboard, under the readings.** The card answers "is my
+unit all right"; the controls are what an owner reaches for after reading the answer, and three
+of the four restart or stop the unit. A shutdown button above the battery row is the most
+destructive control on the screen placed where the thumb already rests.
+
+**Each control is one button, and the label names the outcome rather than the state.** *Switch to
+MANU*, not a toggle reading *AUTO*. A toggle that shows the current state has to be read twice --
+once for what it says and once for what tapping it will do -- and the second reading is the one
+made in a hurry.
+
+**Which mode the switch offers is a rule, so it is not in the view** (§4.5.1.1): `MANUAL` offers
+AUTO, `AUTO` and `PASV` both offer MANU, and **a null mode offers AUTO**. §4.5.2 already fixed
+that last one and gives the reason: a null mode is a unit with no agent, which is a unit in manual
+mode (§2.6.0), and this switch is what takes it back. The button is enabled there like anywhere
+else.
+
+**Two vocabularies meet on this button and a third is nearby.** `set_mode` carries lowercase
+`auto` / `manual`; `stats.mode` reports `AUTO | PASV | MANUAL` or null; the badge writes `MANUAL`
+as **MANU** (§4.5.1.1); and `pwnagotchi.restart()`'s own `"MANU"` (§2.6.1) never reaches the
+client at all. The request value and the displayed value are produced by different functions and
+neither is derived from the other.
+
+##### The PASV control
+
+**It is rendered only when `capabilities.pasv`**, per §4.5.2, and it is **disabled when the mode
+is not AUTO or PASV**, which is §4.3.5's "a missing plugin hides the control, the wrong mode greys
+it out" and §2.6.2's precedence read from the client side. A null mode is not auto, so the control
+is disabled there -- the opposite of the mode switch above, and for the opposite reason: entering
+PASV on a unit with no agent is not a rescue, it is a request the unit will refuse.
+
+**A disabled control says why, and it says it in the same words the unit would have used.** The
+sentence beside it is the one `pasv_requires_auto` gets in the table below, from one place, so the
+client-side rule and the server-side refusal cannot drift into two different explanations of one
+condition.
+
+**Both refusals are still handled, and neither is an unreachable branch.** `capabilities` and `mode`
+both arrive inside `stats`, so they are as old as the last broadcast -- up to `keepalive_interval`
+(§2.4) -- and the mode can change under the app: the unit's own display switches it, and so does a
+second client. Tapping a control the app believed was available, on a unit that has since left
+AUTO, is a race rather than an impossibility, and §4.5.2.1's warning applies in reverse here: this
+defence is against something that can happen, and a test reaches it by answering a tap with the
+error rather than by contriving the state. `pasv_unavailable` is the same race one step further
+out -- the last broadcast said the plugin was loaded and it has since been unloaded -- and is
+rarer rather than different in kind, which is why the control shows it too instead of treating a
+capability it was told about as a capability that cannot change.
+
+##### The two-step confirm is inline, not a dialog
+
+D9 and D12 require the confirm; neither says what it looks like, and issue #37's criteria were
+written against "the pattern already used by the other confirmations" at a time when there were
+none. The pattern is settled here, and #37 is amended rather than contradicted.
+
+**Tapping a control replaces it with its own confirmation**: a confirm button and a cancel button
+in the space the control occupied, with the consequence written beside them. A modal was
+considered and rejected on three counts. The question belongs next to the thing that asked it,
+and a dialog moves it. A dialog has to trap focus, restore it, close on Escape, close on a
+backdrop tap and close on the state change that makes the question moot -- five things to get
+right where the inline form has one, and a focus trap that is subtly wrong is worse than no
+dialog. And §4.2.1's smallest supported viewport is 320x568, which is the layout with the least
+room to put a box over.
+
+**One control is armed at a time.** Arming a second disarms the first, the same exclusivity rule
+§4.5.2.1 applies to a revealed token and for a related reason: two live questions on one screen
+invite an answer to the wrong one.
+
+**Arming does not expire.** A timer was considered and rejected: an armed control is not a hair
+trigger, it is a visible question with the word *Confirm* on it, and it is already cleared
+whenever the control stops being available. Recorded so it is not re-litigated.
+
+**Focus moves to Cancel, not to Confirm.** The button that was tapped no longer exists, so focus
+has to go somewhere, and a repeat tap or a held Enter landing on Confirm would defeat the two-step
+in exactly the case the two-step is for. A keyboard user tabs once to reach Confirm; that friction
+is the feature.
+
+##### Nothing is applied optimistically, and nothing waits on a clock
+
+§4.3.4 forbids flipping the badge on tap and requires the control to show the request as pending
+until `stats` confirms it. **Every rule below is expressed in observations that already flow
+through the stores, not in milliseconds.** `lib/controls.ts` owns no timer. A bound in
+milliseconds would be a second opinion about how long a unit takes to come back, beside the
+patience `lib/ws.ts` already spends on the same restart (§4.3.1), and the two would disagree the
+first time either was tuned: a control that gives up while the socket is still waiting tells the
+owner it failed about a unit that is on its way back.
+
+| request | pending ends when |
+|---|---|
+| `set_mode`, either value | the connection state becomes `restarting` |
+| `set_pasv` `on` | `stats.mode` is `PASV` |
+| `set_pasv` `off` | `stats.mode` is `AUTO` |
+| `reboot` | the connection state becomes `restarting` |
+| `shutdown` | the connection state becomes `restarting` |
+
+**Every row that waits on `restarting` waits on the state and not on its reason**, and the app has
+no choice about that: `restarting` carries a `reason` (§2.6.1) and `ConnectionView` does not expose
+it, which is issue #131. So a restart the app did not ask for -- started from the unit's own
+display, or by a second client -- resolves whichever request was pending as though it had been the
+cause. Recorded rather than left to be discovered, because the day #131 lands this rule can be
+tightened and nothing else here changes.
+
+**The `set_mode` row claims only that the restart began, in both directions, and that is the
+strongest honest claim available.** A unit in manual mode never hands the plugin an agent, so
+`on_ready` never fires and `stats.mode` is **null**, not `MANUAL` (§2.5, §2.6.0, F31): nothing
+the unit sends says "the switch to manual succeeded".
+
+The other direction looks confirmable and is not. An earlier draft of this table had the `auto`
+row wait for `stats.mode` to become `AUTO` or `PASV`, on the reasoning that PASV *is* auto with a
+plugin on top (§2.5) and so a unit answering either had switched. That reasoning is sound and the
+row was still wrong, because of what comes **before** that answer: after the restart the socket
+returns and the mode is null for the whole of §2.6.0's startup window, which that section is at
+pains to say is **not** a fixed few seconds -- "it lasts until bettercap is answering and monitor
+mode has come up, and on a unit where either is struggling it lasts as long as that does". The
+abandonment rule below would have fired inside that window and reported *The unit did not confirm
+the change* over a rescue that had in fact worked, on a unit that was still booting. That is
+issue #147's defect in the client: the null-mode rule three paragraphs above exists so the app
+can rescue a unit with no agent, and this would have told the owner the rescue failed.
+
+So null is ambiguous in both directions and stays ambiguous for an unbounded time, which means
+**no pending rule for a mode change can be built on `stats.mode` at all**. What is observable is
+that the restart began. The badge says the rest, in its own time and with §4.5.1.1's dash while
+it does not know -- which is the division of labour that section already describes, and the
+reason the badge is rendered from `stats` rather than from the tap.
+
+**Two more things end a pending request**, and between them nothing can leave a control pending
+for ever:
+
+- **The command fails.** `command()` rejects -- refused before it was sent, timed out, or answered
+  with an `error` -- and the sentence for that failure appears beside the control.
+- **Two `stats` frames arrive without the confirmation.** Two, not one: the first may have been
+  assembled before the command was handled, since the ticker (§4.3.7) shares nothing with the
+  command path. The second was not. For the three rows that wait on `restarting`, this is the
+  backstop for a restart that never began; for the two `set_pasv` rows it is the unit having
+  ignored the request. It is bounded in every case because it counts frames on a connection that
+  is still up: a request whose restart *did* begin has already resolved by the time the socket
+  drops.
+
+**At most one request is pending at a time**, and the other controls are disabled while one is.
+Three of the four restart the unit, and there is no honest way to render two pending requests that
+contradict each other -- PASV being entered while the unit is on its way to MANU. The rule is
+cheaper than the interface that would be needed to permit it.
+
+##### Before the first `stats` frame
+
+The rules above already decide this and it is written down because it was asked. `capabilities`
+arrives inside `stats` (§4.4.1), so before the first frame there are none, and **the PASV control
+is not rendered**: the rule is `capabilities.pasv`, and absent is not true. The mode switch is
+rendered and offers AUTO, because a null mode does. Reboot and shutdown are rendered.
+
+All four are disabled, not by a rule of their own but by the one they already follow: nothing has
+been received, so the connection is `connecting`, and `canSendCommand` is false there. **The PASV
+control appearing when the first frame lands is correct and is not a flicker to design around.**
+Rendering it hidden-then-shown is the honest sequence: the app did not know whether the unit had
+the plugin, and now it does.
+
+##### A refusal appears next to the control that caused it
+
+§4.3.5 settles the principle and this is where it lands. `lib/ws.ts` today rejects an in-flight
+command with `new Error(message.data.message)`, which keeps the human sentence and drops the
+`code`, so no caller can tell `pasv_requires_auto` from `internal_error`. **The rejection carries
+the code**, as a distinct error type, for reads as well as commands: it is one code path and
+splitting it would be two rules to keep in step for no gain.
+
+**One sentence, two ways to reach it.** The first row above is a disjunction and not a
+conjunction: the client-side rule and the unit's refusal are two paths to one string, and the
+refusal arrives precisely when the app believed the control was enabled, which is the race two
+paragraphs above. Written as "disabled *and* refused" it would describe a state that never occurs.
+
+**Both PASV sentences are scoped to the PASV control**, and the scoping is the point rather than
+tidiness. The code is chosen by whatever answered, so a `reboot` answered with `pasv_unavailable`
+would otherwise put *The unit does not have the PASV plugin* beside the Reboot button -- a
+sentence that is true of nothing the owner just did, offered as the explanation of why their
+reboot failed. A sentence only explains the control it is about.
+
+**The code is remote-chosen and is never rendered.** It selects one of the sentences below, and
+anything unrecognised selects the last of them (§4.5.3): `error.json`'s `code` is not validated at
+the boundary (issue #109), so a unit -- or something in front of one -- can put any string there.
+
+§4.3.5's table sends an unrecognised code to the Settings diagnostics line, and that line does not
+exist (issue #176). Until it does, an unrecognised code shows beside the control as well, which is
+strictly better than nowhere and does not contradict the rule the table states. **It does not
+discharge #176**, and the reason is not that this sentence is short-lived -- an earlier draft said
+so and was wrong about its own design: the message survives every re-render and is cleared only by
+arming that control again or by the unit changing. The reason is that it is in the wrong place. An
+error worth diagnosing is one somebody goes looking for **after** the screen it happened on, and
+this one can only be read by whoever is still standing in front of the control that produced it.
+
+**A message outlives the control being disabled.** Going offline does not erase what the unit
+already said, so a failure or an abandonment stays on screen through a drop and a reconnect. What
+does take precedence over it, while it applies, is the static disabled reason -- and there is
+exactly one of those.
+
+**That reason is shown only while the app could send the command.** PASV's sentence is a claim
+about the unit's current mode, and while the socket is down the mode is whatever the last
+broadcast said, which is not the same fact. A control disabled for connectivity says nothing of
+its own (above); it must not say something of the unit's either, on a reading it can no longer
+refresh.
+
+**A control disabled because the app is not connected says nothing of its own.** The banner
+(§4.5.1.1) is already saying it, in a sentence with more to offer than a repeat under each of four
+buttons.
+
+**Whether a command may be sent at all is `lib/ws.ts`'s rule and is asked, not restated.**
+`command()` refuses outside `connected` and `degraded` (§4.3.3), and a button that decided its own
+enabled state from a copy of that list would be §4.5.2.1's duplicated address grammar in a third
+place -- with the refusal that should have caught the drift reachable only as a rejection the user
+sees. The predicate is exported from `lib/ws.ts` and used by both.
+
+##### The copy
+
+Tabled here for §4.5.1.1's reason: a test cannot assert equality against wording that lives
+nowhere, and one that reads the string out of the module under test pins nothing. The strings
+live in `lib/format.ts`.
+
+| control | label |
+|---|---|
+| mode, offering auto | Switch to AUTO |
+| mode, offering manual | Switch to MANU |
+| PASV, off | Enter PASV |
+| PASV, on | Leave PASV |
+| reboot | Reboot |
+| shutdown | Shut down |
+
+| request | confirm button | consequence |
+|---|---|---|
+| `set_mode` `auto` | Confirm switch to AUTO | Restarts the unit's services. It comes back in 20 to 60 seconds. |
+| `set_mode` `manual` | Confirm switch to MANU | Restarts the unit's services. It comes back in 20 to 60 seconds. |
+| `set_pasv` `on` | Confirm entering PASV | The unit stops attacking and only listens. |
+| `set_pasv` `off` | Confirm leaving PASV | The unit returns to AUTO and resumes attacking. |
+| `reboot` | Confirm reboot | The unit reboots. It comes back in a minute or two. |
+| `shutdown` | Confirm shutdown | The unit powers off. It cannot be turned back on from here. |
+
+The cancel button is **Cancel** in every case.
+
+| request | pending |
+|---|---|
+| `set_mode`, either value | Restarting. |
+| `set_pasv`, either value | Waiting for the unit to confirm. |
+| `reboot` | Rebooting. |
+| `shutdown` | Shutting down. |
+
+| condition | sentence |
+|---|---|
+| the PASV control disabled for the mode, **or** code `pasv_requires_auto` on it | PASV is reachable only from AUTO. |
+| code `pasv_unavailable`, on the PASV control | The unit does not have the PASV plugin. |
+| any other code, or a failure carrying none | The unit did not accept the command. |
+| two `stats` without the confirmation | The unit did not confirm the change. |
+
+The shutdown consequence says *It cannot be turned back on from here* rather than naming the
+button on the unit: which button that is depends on what the unit is built from, and the reference
+hardware's PiSugar 3 is not the only answer. What is true of every unit is that this app is not
+the way back.
+
+##### The DOM hooks
+
+Declared here, per §4.5.1.1, because this block will be rearranged and a test that finds a button
+by walking the markup will break when it is.
+
+- `data-control` on each control's root, over `mode`, `pasv`, `reboot`, `shutdown`.
+- `data-control-state` on the same root, over `idle`, `armed`, `pending`.
+- `data-action` on each button, over `request`, `confirm`, `cancel`.
+- `data-control-message` on the one element per control that carries a sentence -- the disabled
+  reason, the failure, the abandonment, the pending sentence, and the consequence shown while the
+  control is armed -- with `role="alert"` on it, as §4.5.2.1 does for its validation message.
+  **One element, not five.** Which kind of sentence it is carrying is what `data-control-state`
+  already says, and a second hook would only exist so that a test could ask the question the
+  state attribute answers. An earlier draft of this list named the other four and forgot the
+  consequence, and both the implementation and the tests independently read the list as closed
+  and left that sentence with no hook at all -- so the test that had to assert it went back to
+  reading the control's whole `textContent`, which is §4.5.1.1's walking-the-markup by another
+  name. The list is closed; this is the list.
+- **No data hook for disabled.** The `disabled` attribute is what the browser acts on, and a test
+  should assert the thing that has the effect rather than a second attribute that agrees with it.
+
 
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
 
@@ -4381,6 +4660,24 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   through the exported predicate, through the mutator and through the form, which is what
   replaces the coverage a deliberately unreachable backstop can never have; and §4.5.3 on the
   plugin version and the reason, asserted on the DOM rather than assumed from Svelte's default.
+- `dashboard-controls.spec.ts`: the four state commands against §4.5.2.2's declared hooks, mounted
+  through `startSession` with a fake client, which is how the view, `lib/controls.ts` and
+  `lib/ws.ts` are exercised as the one thing an owner actually taps. The mode switch offering the
+  right mode for each `stats.mode`, null included, and enabled there; PASV absent without
+  `capabilities.pasv` and disabled with its sentence outside AUTO; the confirm required in both
+  directions, arming a second control disarming the first, and nothing on the wire until the
+  second tap, which is issue #37 closed; the exact frame checked against the schema JSON, so the
+  lowercase `auto`/`manual` of `set_mode` cannot drift into the uppercase `Mode` enum; each of the
+  six pending rows resolved by the observation §4.5.2.2 names **and** held pending through an
+  observation it does not, which is what keeps the asymmetric `manual` row honest -- a test that
+  confirmed it with `stats.mode === 'MANUAL'` would be asserting something the unit cannot say;
+  one `stats` frame not being enough to abandon a request and the second one being enough; a
+  rejection carrying each of the two named codes reaching the PASV control and nowhere else; an
+  attacker-chosen code asserted absent from the DOM (§4.5.3); the enabled state compared against
+  the **imported** `canSendCommand` for every connection state rather than a restated list; and
+  the state before the first frame, which every launch passes through. It owns no fake timers,
+  because §4.5.2.2 owns no timer: a control resolving only after a clock is advanced would be
+  evidence of the thing the section forbids.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

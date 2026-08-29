@@ -369,3 +369,118 @@ export function formatUnauthorizedCallToAction(reason: UnauthorizedReason): stri
       return 'Add it in Settings.'
   }
 }
+
+// ---------------------------------------------------------------------------
+// The Dashboard controls (SPEC 4.5.2.2). Every string in that section's four
+// copy tables, verbatim, so `lib/controls.ts` and `views/Dashboard.svelte`
+// never type a control's wording themselves. `ControlId` lives here, not in
+// `lib/controls.ts`, so this file has no import back onto the module that
+// consumes it.
+// ---------------------------------------------------------------------------
+
+export type ControlId = 'mode' | 'pasv' | 'reboot' | 'shutdown'
+
+type ModeTarget = 'auto' | 'manual'
+type PasvTarget = 'on' | 'off'
+
+/**
+ * The mode switch's label, from what it offers rather than the current
+ * state (SPEC 4.5.2.2): a toggle that names the current state has to be
+ * read twice, once for what it says and once for what tapping it will do.
+ * Which mode is offered for a given `stats.mode` is a rule `lib/controls.ts`
+ * decides, not this function -- this only turns an already-decided target
+ * into the sentence the table names.
+ */
+export function formatModeControlLabel(target: ModeTarget): string {
+  return target === 'auto' ? 'Switch to AUTO' : 'Switch to MANU'
+}
+
+export function formatModeConfirmLabel(target: ModeTarget): string {
+  return target === 'auto' ? 'Confirm switch to AUTO' : 'Confirm switch to MANU'
+}
+
+/** Both `set_mode` rows share one consequence sentence (SPEC 4.5.2.2's table). */
+export const MODE_CONSEQUENCE = "Restarts the unit's services. It comes back in 20 to 60 seconds."
+
+/** Both `set_mode` rows share one pending sentence (SPEC 4.5.2.2's table). */
+export const MODE_PENDING = 'Restarting.'
+
+/**
+ * The PASV control's label, from whether the unit is currently in PASV, not
+ * from the value the tap would request -- the same "name the outcome"
+ * reasoning as `formatModeControlLabel` above.
+ */
+export function formatPasvControlLabel(currentlyOn: boolean): string {
+  return currentlyOn ? 'Leave PASV' : 'Enter PASV'
+}
+
+export function formatPasvConfirmLabel(target: PasvTarget): string {
+  return target === 'on' ? 'Confirm entering PASV' : 'Confirm leaving PASV'
+}
+
+export function formatPasvConsequence(target: PasvTarget): string {
+  return target === 'on'
+    ? 'The unit stops attacking and only listens.'
+    : 'The unit returns to AUTO and resumes attacking.'
+}
+
+export const PASV_PENDING = 'Waiting for the unit to confirm.'
+
+/**
+ * Shown both as the disabled PASV control's static reason (mode is not AUTO
+ * or PASV) and as the failure sentence for a `pasv_requires_auto` rejection
+ * (SPEC 4.5.2.2): one sentence from one place, so the client-side rule and
+ * the server-side refusal cannot drift into two different explanations of
+ * one condition.
+ */
+export const PASV_DISABLED_REASON = 'PASV is reachable only from AUTO.'
+
+export const REBOOT_LABEL = 'Reboot'
+export const REBOOT_CONFIRM_LABEL = 'Confirm reboot'
+export const REBOOT_CONSEQUENCE = 'The unit reboots. It comes back in a minute or two.'
+export const REBOOT_PENDING = 'Rebooting.'
+
+export const SHUTDOWN_LABEL = 'Shut down'
+export const SHUTDOWN_CONFIRM_LABEL = 'Confirm shutdown'
+// SPEC 4.5.2.2: names no specific button, because which one that is depends
+// on what the unit is built from, and the reference hardware's PiSugar 3 is
+// not the only answer. What is true of every unit is that this app is not
+// the way back.
+export const SHUTDOWN_CONSEQUENCE = 'The unit powers off. It cannot be turned back on from here.'
+export const SHUTDOWN_PENDING = 'Shutting down.'
+
+/** The cancel button's label, the same word for every control (SPEC 4.5.2.2). */
+export const CANCEL_LABEL = 'Cancel'
+
+const PASV_UNAVAILABLE_MESSAGE = 'The unit does not have the PASV plugin.'
+const COMMAND_REFUSED_MESSAGE = 'The unit did not accept the command.'
+
+/** Two `stats` frames arrived with no confirmation of the change (SPEC 4.5.2.2). */
+export const COMMAND_NOT_CONFIRMED_MESSAGE = 'The unit did not confirm the change.'
+
+/**
+ * The sentence for a command that failed, from SPEC 4.5.2.2's condition
+ * table. `code` is the rejection's `RemoteError.code` (`lib/ws.ts`) when the
+ * command was refused by an `error` frame, and `null` for a rejection that
+ * never named one -- refused before it was sent, or timed out. The code is
+ * remote-chosen and never rendered itself (SPEC 4.5.3): it only selects one
+ * of the sentences below, and anything unrecognised selects the last of
+ * them.
+ *
+ * Both PASV sentences are scoped to `control === 'pasv'`, and the scoping
+ * is the point rather than tidiness: the code is chosen by whatever
+ * answered, so an unscoped `pasv_unavailable` would put "The unit does not
+ * have the PASV plugin" beside a `reboot` that failed for an unrelated
+ * reason -- a sentence true of nothing the owner just did, offered as the
+ * explanation of why their reboot failed. A sentence only explains the
+ * control it is about.
+ */
+export function formatControlFailure(control: ControlId, code: string | null): string {
+  if (control === 'pasv' && code === 'pasv_requires_auto') {
+    return PASV_DISABLED_REASON
+  }
+  if (control === 'pasv' && code === 'pasv_unavailable') {
+    return PASV_UNAVAILABLE_MESSAGE
+  }
+  return COMMAND_REFUSED_MESSAGE
+}

@@ -58,6 +58,34 @@ export interface WsClientOptions {
 // of its own.
 export type UnauthorizedReason = 'rejected' | 'required'
 
+/**
+ * SPEC 4.5.2.2: what an `error` frame rejects a read or a command with,
+ * carrying `code` alongside the human `message` `new Error(message)` used to
+ * keep alone. One class for both paths -- correlate() below constructs
+ * exactly one of these, whichever kind of pending entry the frame settles --
+ * because a read and a command disagreeing about what a rejection carries
+ * would be two rules to keep in step for no gain.
+ *
+ * `code` is a plain `string`, not `ErrorCode`: `error.json`'s `code` is not
+ * validated at the boundary (issue #109), so a unit -- or something in front
+ * of one -- can put any string there, and typing it as the closed enum would
+ * claim a guarantee the wire does not give. It is also never rendered
+ * itself (SPEC 4.5.3): a caller matches it against the sentences it knows
+ * and falls back to a generic one for anything else.
+ *
+ * Extends `Error` rather than replacing it, so `.message` keeps meaning what
+ * it always did to a caller that only ever looked at that.
+ */
+export class RemoteError extends Error {
+  readonly code: string
+
+  constructor(message: string, code: string) {
+    super(message)
+    this.name = 'RemoteError'
+    this.code = code
+  }
+}
+
 // the read subset of IncomingMessage, every
 // type request()/command() is allowed to send that is not auth (sent only
 // from beginConnect's onopen), gps_data (its own method, sendGps) or ping
@@ -118,6 +146,14 @@ const PATIENCE_REBOOT_MS = 180_000
 // Full jitter backoff (SPEC 4.3.2): cap sequence in seconds, holding at the
 // last value once exhausted rather than growing without bound.
 const BACKOFF_CAPS_S = [1, 2, 4, 8, 16, 30, 30]
+
+// SPEC 4.3.3/4.5.2.2: whether a state command may be sent at all is this
+// file's rule, asked rather than restated. Exported so a control can ask it
+// to decide its own enabled state instead of carrying a copy of the list --
+// command()'s own guard below calls it too, so the two can never drift.
+export function canSendCommand(state: ConnectionState): boolean {
+  return state === 'connected' || state === 'degraded'
+}
 
 const TOKEN_STORAGE_KEY = 'companion.token'
 
@@ -516,7 +552,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
     if (!id) return
 
     if (message.type === 'error') {
-      const err = new Error(message.data.message)
+      // SPEC 4.5.2.2: the rejection carries the code, for reads as well as
+      // commands -- one code path, not two.
+      const err = new RemoteError(message.data.message, message.data.code)
       const read = pendingReads.get(id)
       if (read) {
         if (read.timeoutHandle !== null) clearTimeout(read.timeoutHandle)
@@ -853,7 +891,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     // 'degraded' synchronously, so `current` is never one of those two
     // states with a null socket. Folded into one guard rather than left as
     // a second branch with a message that would have read wrong.
-    if ((current !== 'connected' && current !== 'degraded') || !currentSocket) {
+    if (!canSendCommand(current) || !currentSocket) {
       return Promise.reject(new Error(`'${type}' is not allowed while ${current}`))
     }
     const socket = currentSocket

@@ -3694,9 +3694,164 @@ listener rather than something this sentence can claim.
 
 ### 5.2 `release.yml` (on tag `v*`)
 
-Build the frontend, pack `frontend/dist` → `dist.tgz`, create a GitHub Release for the tag and
-attach the archive. Include a `SHA256SUMS` asset. `tools/install-on-pi.sh` downloads the latest
-release asset into `web_root`.
+Build the frontend, pack `frontend/dist` into `dist.tgz`, create a GitHub Release for the tag and
+attach the archive and a `SHA256SUMS` asset. `tools/install-on-pi.sh` downloads the latest
+release's assets into `web_root` (§5.3).
+
+This is the half of the delivery path that was specified, referenced from four other sections and
+installed against, and then never written (issue #128). The installer has always been finished:
+it downloads `dist.tgz`, downloads `SHA256SUMS`, and refuses an archive whose digest does not
+match. Tagging produced nothing for it to download, and nothing failed, because no gate asked
+whether the workflows this document names exist.
+
+**The trigger is a pushed tag matching `v*` and nothing else.** No `workflow_dispatch`: a release
+is a tag, and a second way to produce one is a second way to produce an asset nobody can point at
+a commit.
+
+**The tag must be an ancestor of `master`.** A tag can be pushed to any commit, including one on a
+branch that never opened a pull request, and the ruleset that guards `master` says nothing about
+tags. The job fails, loudly, naming the commit.
+
+**What that check is, and what it is not.** It catches mistagging - a tag on the wrong commit, a
+tag on a branch that was never merged - which is the case that actually happens. It is **not** a
+guarantee that everything published passed review, and the sentence that said so was wrong: GitHub
+loads the workflow from the tagged ref, so a tag pushed to a commit whose `release.yml` has no
+ancestry step runs no ancestry step. A workflow cannot bind a tag that carries its own copy of it.
+The guarantee needs a tag protection ruleset, which lives in repository settings where nothing here
+can assert it, and that is issue #181.
+
+**The check fails closed, and says which failure it was.** `git merge-base --is-ancestor` exits 1
+for "not an ancestor" and 128 for a question it could not answer - an unresolvable `origin/master`,
+a missing object. Both must refuse the release, per §13, and they must not be reported as the same
+thing: the moment an operator most needs to know the check could not run is the moment a plain
+`if !` tells them their tag is bad instead.
+
+**The three version strings must agree with the tag**, and this is where §2.1's claim that "CI
+asserts it equals the release tag" becomes true. `plugin/companion.py`'s `__version__`,
+`frontend/package.json`'s `version`, and the tag with its leading `v` removed are compared, and
+any disagreement fails the job before anything is built or published. A release whose plugin
+reports a version other than its own tag is a support question nobody can answer: the unit says
+one number, the Release page says another, and `capabilities.pluginVersion` puts the first one on
+the wire.
+
+**What the coverage gate does not see.** `.github/check_release_version.py` sits outside
+`--cov=plugin`, as `check_pinned_facts.py` and `check_coverage.py` do, so the 85% floor says
+nothing about it. The argument for extracting it was that the part which computes goes where a test
+can reach it, and that is what happened - the gate that watches it is `tests/tools/test_check_release_version.py`,
+written by hand, and not the coverage floor. Worth stating so that "extracted so the gate can see
+it" is not read as a claim about the floor.
+
+**The tag is read by a script, not by the workflow.** The three-way version comparison and the
+pre-release decision are the only logic this workflow contains, and logic inside a `run:` block is
+logic no test can reach: a test can assert that a `case` statement mentioning the tag sits near
+the word `prerelease`, and that assertion passes just as happily when the condition is **inverted**
+and every stable release is published as a candidate. That mutant was found and survived, which is
+the whole argument. The rule is the one §4.5.1.1 states for views and §10.7 states for coverage,
+in a third place: the part that computes goes where the gate can see it. The workflow calls the
+script, fails when it fails, and reads its answer.
+
+**A tag carrying a pre-release suffix marks the Release as a pre-release.** §12 allows `-rcN`; a
+release candidate that appears as the latest stable release is one an installer picks up by
+default, and `install-on-pi.sh` asks for the latest release rather than for a version.
+
+**The order of the refusals is part of the rule.** The grammar is checked first, then the
+versions, then the ancestry, then the existing Release. A step that interpolates the tag into a
+URL before anything has decided the tag is a version is a step trusting a value nobody has looked
+at, and the script's own claim to validate "before anything else" is only true if the workflow
+calls it first.
+
+**The tag is validated against §12's grammar before anything else.** `vMAJOR.MINOR.PATCH`, with an
+optional pre-release suffix introduced by a hyphen, and nothing else. The trigger is `v*`, which
+matches `v0.1.0.4` and `vwip` as happily as a version, and a tag outside the grammar would publish
+a Release whose name means nothing under §12's own rules. Any hyphenated suffix counts as a
+pre-release, not only `-rcN`: erring towards pre-release is the safe direction, since the cost is a
+release nobody auto-installs rather than a candidate everybody does.
+
+**The archive layout is `tar -czf dist.tgz -C frontend/dist .`**, so `index.html` sits at the
+archive root and not under a `dist/` prefix. The installer unpacks into `web_root` directly and a
+prefix would bury the app one directory below where the static server looks (§2.15).
+
+**`SHA256SUMS` names the archive without a path.** The installer matches on the file name and
+refuses an entry that is path-qualified, because `other/dist.tgz` describes a different file and
+letting it satisfy a bare `dist.tgz` is how a sums file for one build blesses another. Generate it
+in the directory holding the archive.
+
+**An existing Release for the tag is a failure, not something to overwrite.** Re-running a
+workflow that replaces an asset in place means a `SHA256SUMS` someone already downloaded now
+describes a file that no longer exists, and the failure it produces looks like corruption or an
+attack rather than like a rebuild. If a release has to be redone, the tag is the thing to move,
+deliberately, by hand.
+
+**Absent is not the same as unanswerable here either.** The check asks whether a Release exists,
+and a query that fails on a 401, a 5xx or a rate limit has not answered no. Reading any failure as
+"no release exists" is the §13 mistake in the one step whose entire purpose is to refuse.
+
+**Permissions are `contents: write` and nothing else**, declared on the job, with the workflow
+itself declaring `permissions: {}` so that a job added later inherits nothing rather than the
+repository default. The grant has to be written down to exist.
+
+**The build and the publish are two jobs, and only one of them holds the token.** `npm ci` runs
+lifecycle scripts from the whole transitive dependency tree. A job that does that and later calls
+`gh release create` hands those scripts a way to reach the token even when the token is only in a
+later step's `env:`: every step can write `$GITHUB_PATH` and `$GITHUB_ENV`, so a lifecycle script
+can plant a `gh` earlier on the path and read the token when the publish step runs it. Splitting
+is what removes the reachability rather than narrowing it: the build job runs third-party code
+with no write anywhere in its token and uploads the archive as an artefact, and the publish job
+holds `contents: write`, downloads that artefact, and runs nothing it did not write.
+
+The build job's grant is `contents: read` rather than `permissions: {}`, and the difference is
+worth a sentence because the second reads stronger. It is not, here: this repository is public, so
+`contents: read` is what an anonymous clone already has, and the property being bought - that a
+lifecycle script cannot reach a token able to write - is bought identically by both. What `{}`
+would additionally cost is certainty: whether `actions/checkout` succeeds with a zero-permission
+token is not something this repository can find out before a tag is pushed, and the one place a
+guess must not be made is the workflow whose first execution is a release.
+
+**The build job caches nothing.** A dependency cache is restored from a key any branch of this
+repository can populate, which is a write-influenced input to the one job the split exists to
+isolate. `npm ci` verifies every package against the committed lockfile, so the exposure is small
+and the saving is a minute once per tag - the wrong side of that trade for the job that produces
+what people install.
+
+The checks that decide whether a release may happen at all - the tag grammar, the version
+agreement, the ancestry, the absence of an existing Release - belong before the build, because a
+release that must not happen should cost nothing and because a failure there is about the tag
+rather than about the code.
+
+**Neither checkout leaves a token in the working tree.** `actions/checkout` persists the
+`GITHUB_TOKEN` into `.git/config` by default, and a persisted credential is reachable by anything
+running in that directory afterwards. The split already means no job both runs third-party code and
+holds a write scope, so this is the second layer rather than the first: `persist-credentials: false`
+on both checkouts, so that neither the job that reads the tag nor the job that runs `npm ci` leaves
+a credential on disk for the next thing to find. It costs nothing - the git operations either job
+performs are reads of a public repository.
+
+**The publish job has no checkout, so it must be told which repository it is publishing to.** `gh`
+resolves the repository from the git remote, and a job with no working tree has none; it reads
+`GH_REPO` and not `GITHUB_REPOSITORY`, so the value has to be passed deliberately. This is the kind
+of thing that only fails on a real tag, which is where the whole of §5.2's caution comes from.
+
+**Nothing reaches a `run:` block by expression interpolation.** `${{ }}` inside a shell body is
+substituted before the shell sees it, so a value containing shell syntax becomes shell. Values
+arrive through `env:` and are read as variables. That is true even of values this repository
+generates itself: the pre-release flag is a literal `true` or `false` written by
+`check_release_version.py`, which makes the interpolation harmless today and makes it a
+constraint nobody records at the call site, which is how it stops being true.
+
+**The toolchain versions are CI's, and something checks that they are.** `release.yml` declares
+its own `PYTHON_VERSION` and `NODE_VERSION` because a workflow cannot read another's `env`, so the
+numbers exist in two files and a test compares them. Two spellings of one version with nothing
+comparing them is the defect issue #151 was about, arriving in a fourth place.
+
+**The build is `npm ci` and `npm run build`, and not a second run of CI's Frontend job.** The lint,
+the typecheck, the unit tests and the coverage gate ran on the way to `master`, and the ancestry
+rule above is what makes that sentence true rather than hopeful: a tag that is not on `master` is
+refused, so a tag that is accepted names a commit those gates have already passed. Re-running them
+here would buy a second opinion on the same commit and would put the release's success at the mercy
+of a flake in a check that has already answered.
+
+The cost of that reasoning is that it is only as good as the ancestry rule, which is why the
+ancestry rule is checked and not assumed, and why it fails loudly.
 
 ### 5.3 `tools/install-on-pi.sh`
 
@@ -4618,7 +4773,11 @@ carry the same number; there is no separate plugin version. The fork lineage fro
 is credited in the plugin header and the README, which is where provenance belongs — encoding
 it in a version number would mean maintaining two numbering schemes for one artifact.
 
-**Scheme: SemVer**, tags `vMAJOR.MINOR.PATCH`, with `-rcN` for pre-releases.
+**Scheme: SemVer**, tags `vMAJOR.MINOR.PATCH`, with a hyphenated suffix for pre-releases and
+`-rcN` as the convention. The grammar accepts any hyphenated suffix and §5.2 enforces it there,
+because the release workflow treats a hyphen as the pre-release marker: a spelling this section
+allowed but that workflow did not would publish as a stable release, which is the direction that
+costs something. `-rcN` remains what to write; the wider grammar is what is refused against.
 
 **The project starts at `v0.0.1` and stays in `0.x` until the protocol has been exercised
 against a real device.** SemVer treats major version zero as explicitly unstable, which is an

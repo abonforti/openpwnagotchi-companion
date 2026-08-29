@@ -1,0 +1,303 @@
+name: Release
+
+# The other half of the delivery path (SPEC.md 5.2, issue #128): tools/install-on-pi.sh
+# has always downloaded dist.tgz and SHA256SUMS from the latest GitHub Release, and
+# this workflow has never existed to produce them. Tagging built nothing and nothing
+# failed, because no gate asked whether the workflow this document names is there.
+#
+# The trigger is a pushed tag matching v* and nothing else. No workflow_dispatch: a
+# release is a tag, and a second way to produce one is a second way to produce an
+# asset nobody can point at a commit.
+#
+# Three jobs, not one, and the split is a security boundary rather than
+# organisation: `npm ci` runs lifecycle scripts from the whole transitive
+# dependency tree, and a job that does that and later calls `gh release
+# create` hands those scripts a way to reach the token even when the token
+# only appears in a later step's `env:` - every step can write $GITHUB_PATH
+# and $GITHUB_ENV, so a lifecycle script can plant its own `gh` earlier on the
+# path and read the token when the publish step runs it. Narrowing where the
+# token is used does not remove that reachability; only running the
+# third-party code in a job that never holds the token does (SPEC.md 5.2).
+#
+#   checks  - decides whether a release may happen at all: the tag grammar,
+#             the three-way version agreement, the ancestry, the absence of an
+#             existing Release. Runs nothing from outside this repository, so
+#             it is safe to let it hold a read-only token. A release that must
+#             not happen should cost nothing, so this runs first and the
+#             other two jobs need it.
+#   build   - runs `npm ci` and the rest of the third-party build. Holds a
+#             read-only token, the same access an anonymous clone of this
+#             public repository already has, so nothing here could leak a
+#             token able to write. Produces dist.tgz and SHA256SUMS as an
+#             artefact.
+#   publish - the only job holding contents: write, and it runs nothing it did
+#             not write itself: no checkout, no npm, only the artefact `build`
+#             produced and `gh`.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Nothing at the workflow level: every job below declares its own grant, and a
+# job added later must do the same rather than inherit the repository default
+# by omission (SPEC.md 5.2).
+permissions: {}
+
+env:
+  # Same discipline as ci.yml: the versions pinned there, not rediscovered here.
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  checks:
+    name: Refuse a release that must not happen
+    runs-on: ubuntu-latest
+    # Read-only, and the only permission this job needs: it queries the
+    # GitHub API for an existing Release (releases live under the `contents`
+    # scope) and otherwise only reads this checkout and runs git. It never
+    # runs anything from outside this repository, so there is no lifecycle
+    # script here that a read-only token could be worth stealing for
+    # (SPEC.md 5.2).
+    permissions:
+      contents: read
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history for every branch and tag, not just the tag that triggered
+          # this run. The ancestry check below needs the tagged commit and master's
+          # history in the same graph; actions/checkout's default shallow fetch only
+          # brings in the tag itself, and `git merge-base --is-ancestor` against a
+          # history that thin is not a clean answer, it is a wrong one or an error.
+          # A check that cannot run has not passed (SPEC.md 13, issue #126), so the
+          # fetch has to cover what the check needs rather than the runner's default.
+          # This is also what makes a separate `git fetch origin master` step
+          # unnecessary: fetch-depth: 0 fetches every branch, not only the
+          # triggering ref, so `origin/master` already exists locally by the
+          # time the ancestry step below runs.
+          fetch-depth: 0
+          # Nothing here runs untrusted code, but the checkout still need not
+          # leave a credential behind it does not use again.
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # The order of the refusals is part of the rule (SPEC.md 5.2): the
+      # grammar and the versions first, then the ancestry, then the existing
+      # Release. The step below interpolates $GITHUB_REF_NAME into a `gh api`
+      # URL, and a step that does that before anything has decided the tag is
+      # a version would be trusting a value nobody has looked at yet - so this
+      # runs first, ahead of the ancestry and existing-release steps that
+      # follow it, not merely somewhere before the build.
+      #
+      # The tag's grammar (SPEC.md 12), the three-way version comparison and
+      # the pre-release decision all live in check_release_version.py, not in
+      # this `run:` block: logic here is logic no test can drive directly, and
+      # a mutation of the pre-release condition to its exact opposite passed
+      # every test a workflow-as-data check could write (SPEC.md 5.2).
+      # check_release_version.py is exercised the same way check_pinned_facts.py
+      # is, by importing it and calling its functions. This step only calls
+      # it and reads its answer. The script exits 1 for a bad tag or a version
+      # mismatch and 2 when it cannot even read the files it needs; this step
+      # does not act on the difference, and is not meant to - both fail it,
+      # by design, and the distinction is for whoever reads the log.
+      - name: Plugin, frontend and tag versions agree
+        id: version
+        run: python .github/check_release_version.py "$GITHUB_REF_NAME"
+
+      # git merge-base --is-ancestor exits 1 for "not an ancestor" and 128 for
+      # a question it could not answer at all - an unresolvable origin/master,
+      # a missing object. A plain `if ! ...` reads both as the same thing, and
+      # the moment an operator most needs to know the check could not run is
+      # the moment that would tell them their tag is bad instead. Both fail
+      # closed, and this says which one happened (SPEC.md 5.2, 13).
+      - name: Tag is on master
+        run: |
+          set -euo pipefail
+          sha="$GITHUB_SHA"
+          git merge-base --is-ancestor "$sha" origin/master && rc=0 || rc=$?
+          case "$rc" in
+            0)
+              echo "$sha is an ancestor of master."
+              ;;
+            1)
+              echo "::error::$sha ($GITHUB_REF_NAME) is not an ancestor of master. A tag can be pushed to any commit, including one that never went through review; refusing to release it (SPEC.md 5.2)."
+              exit 1
+              ;;
+            *)
+              echo "::error::could not determine whether $sha ($GITHUB_REF_NAME) is an ancestor of master: git merge-base --is-ancestor exited $rc, which means the question itself could not be answered (an unresolvable ref or a missing object), not that the answer is no. Refusing to guess (SPEC.md 5.2, 13)."
+              exit 1
+              ;;
+          esac
+
+      # gh's own exit code does not distinguish "no release" from "could not
+      # ask": a 401, a 5xx and a rate limit all exit non-zero just as a 404
+      # does, so reading any failure as "absent" is the SPEC.md 13 mistake in
+      # the one step whose entire purpose is to refuse. The HTTP status line
+      # is what actually answers the question, so that is what this branches
+      # on: 404 is absent, 200 is a collision, anything else fails closed with
+      # its own reason named (SPEC.md 5.2).
+      #
+      # Parsed without a pipe: `printf ... | head -1` can fail the step to
+      # SIGPIPE under `pipefail` if head closes the pipe before printf is
+      # done writing, for a reason that has nothing to do with the question
+      # being asked. Parameter expansion has no such failure mode. stdout and
+      # stderr are also kept apart rather than merged with `2>&1`: on a genuine
+      # error the two streams are written independently, and merging them does
+      # not guarantee the status line lands first.
+      - name: No existing release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          err_file=$(mktemp)
+          stdout=$(gh api -i "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>"$err_file") && rc=0 || rc=$?
+          stderr=$(cat "$err_file")
+          rm -f "$err_file"
+          status_line="${stdout%%$'\n'*}"
+          # gh's -i output is HTTP, so this line ends in \r before the \n that
+          # %% already stripped. read normally absorbs a trailing \r into the
+          # last field it splits, which only works because that field exists
+          # (the reason phrase); a status line with no third field would leave
+          # it on status_code instead ("404\r"), matching no case arm. Strip
+          # it explicitly so the parse does not depend on a field it does not
+          # use (SPEC.md 5.2).
+          status_line="${status_line%$'\r'}"
+          read -r _ status_code _ <<<"$status_line"
+          case "$status_code" in
+            404)
+              echo "No existing release for $tag ($status_line)."
+              ;;
+            200)
+              echo "::error::A release already exists for $tag. Re-running this workflow would replace its assets in place, and a SHA256SUMS someone already downloaded would then describe a file that no longer exists. Move the tag by hand if the release has to be redone (SPEC.md 5.2)."
+              exit 1
+              ;;
+            *)
+              echo "::error::could not determine whether a release exists for $tag (gh exit $rc): ${status_line:-<no response>}${stderr:+; $stderr}. Absent is not the same as unanswerable; refusing to guess (SPEC.md 5.2, 13)."
+              exit 1
+              ;;
+          esac
+
+  build:
+    name: Build the frontend
+    needs: checks
+    runs-on: ubuntu-latest
+    # contents: read, not {}: this is the job that runs `npm ci`, which runs
+    # lifecycle scripts from the whole transitive dependency tree - see the
+    # top of this file - and a token this job holds is exactly what those
+    # scripts would be reaching for. A weaker-looking grant would not buy
+    # anything here, though: the repository is public, so `contents: read` is
+    # what an anonymous clone already has, and the property this job actually
+    # needs - that a lifecycle script cannot reach a token able to write - is
+    # bought identically by `read` and by `{}`. `read` is the one that does
+    # not leave `actions/checkout` untested until the first real release, when
+    # the tag is already pushed and the versions already merged (SPEC.md 5.2).
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No cache: npm here. See "The build job caches nothing" in SPEC.md 5.2.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Whatever ci.yml's Frontend job does to produce frontend/dist, not a
+      # reinvented build: npm ci against the committed lock, then the same build
+      # command. The checks that job also runs (svelte-check, tsc, vitest, the
+      # coverage floor, the inline-script scan) already gated this commit on its
+      # way to master; the `checks` job's ancestry step is what stands in for
+      # re-running them here.
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm run build
+
+      # -C frontend/dist . so index.html sits at the archive root, not under a
+      # dist/ prefix: the installer unpacks straight into web_root and a prefix
+      # would bury the app one directory below where the static server looks
+      # (SPEC.md 2.15, 5.2).
+      - name: Pack dist.tgz
+        run: tar -czf dist.tgz -C frontend/dist .
+
+      # Generated in the directory holding the archive, so the entry names it
+      # without a path component. The installer matches on the bare file name
+      # and refuses a path-qualified entry, because other/dist.tgz describes a
+      # different file (SPEC.md 5.2, 5.3.1).
+      - name: Generate SHA256SUMS
+        run: sha256sum dist.tgz > SHA256SUMS
+
+      # Handed to `publish` as an artefact rather than left in the workspace:
+      # `publish` is a separate job with a separate, fresh workspace, and this
+      # is the only channel between the two that does not involve giving this
+      # job the token instead (SPEC.md 5.2).
+      - name: Upload the archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dist
+          path: |
+            dist.tgz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Create the GitHub Release
+    needs: [checks, build]
+    runs-on: ubuntu-latest
+    # The only grant in this file, and the only job that needs it - the
+    # workflow itself declares permissions: {} above (SPEC.md 5.2). It runs
+    # nothing it did not write itself: no checkout, no npm, only the artefact
+    # `build` produced and `gh`.
+    permissions:
+      contents: write
+    steps:
+      - name: Download the archive
+        uses: actions/download-artifact@v7
+        with:
+          name: release-dist
+
+      # Whether this is a pre-release came out of check_release_version.py in
+      # the `checks` job, not out of a second look at the tag here: one place
+      # decides, this step only reads the answer (SPEC.md 5.2). -rcN
+      # (SPEC.md 12) marks the Release as a pre-release; a pre-release that
+      # appeared as the latest stable release is one install-on-pi.sh would
+      # pick up by default, since it asks for the latest release rather than
+      # for a version.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # This job has no checkout, so there is no git remote for `gh` to
+          # read a repository from. `gh` reads GH_REPO, not GITHUB_REPOSITORY,
+          # so without this it dies with "failed to run git: fatal: not a
+          # git repository" - verified against the gh version the tests use
+          # (SPEC.md 5.2). Do not remove this as redundant with GH_TOKEN.
+          GH_REPO: ${{ github.repository }}
+          # Read as a variable, not interpolated into the script: `${{ }}` is
+          # substituted before the shell parses the line, so a value with
+          # shell syntax in it would run rather than compare. It is only
+          # `true` or `false` today because check_release_version.py writes
+          # it that way, and that is a constraint on another file, not on
+          # this one - the safety here comes from `env:`, not from a promise
+          # kept elsewhere (SPEC.md 5.2).
+          PRERELEASE: ${{ needs.checks.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          args=(--title "$tag" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$tag" dist.tgz SHA256SUMS "${args[@]}"

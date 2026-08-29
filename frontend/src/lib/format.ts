@@ -688,3 +688,67 @@ export function formatPeerNumber(value: number | null): string {
   }
   return `${value}`
 }
+
+// ---------------------------------------------------------------------------
+// The Log view (SPEC 4.5.2.5). Every string in that section's two copy
+// tables, verbatim. The filter itself is logic, not wording, and lives in
+// lib/log.ts; the follow timer's mechanism lives in lib/viewRefresh.ts
+// beside the refresh trigger it reuses.
+// ---------------------------------------------------------------------------
+
+const LOG_UNAVAILABLE_MESSAGE =
+  'The unit could not read its log. With no agent it has no configuration to find the path in.'
+
+/**
+ * SPEC 4.5.2.5's copy table, the "no lines at all" half of it, and this is
+ * only ever asked with no lines to show: the DOM hooks say the
+ * empty-message element is absent whenever a line is rendered, so a
+ * `log_unavailable` held from an earlier ask never overrides a buffer the
+ * client is still showing.
+ *
+ * **`!fetched` outranks `unavailable`.** `log_unavailable` is an answer from
+ * a session that may since have ended, and nothing clears it on an ordinary
+ * drop: `resetStores()` runs on an explicit disconnect and on
+ * `unauthorized`, not on the socket simply going away (SPEC 4.4.2). Ranked
+ * the other way, a unit that answered once and then went out of range would
+ * leave the screen asserting it has no agent, indefinitely, about a
+ * connection that no longer exists -- the mirror SPEC 4.3.1 already argues
+ * against for the connection banner, applied here to a flag instead of a
+ * state.
+ */
+export function formatLogEmptyMessage(fetched: boolean, unavailable: boolean): string {
+  if (!fetched) {
+    return NOT_CONNECTED_LIST_MESSAGE
+  }
+  if (unavailable) {
+    return LOG_UNAVAILABLE_MESSAGE
+  }
+  return "The unit's log is empty."
+}
+
+/** Lines are held but none match the filter (SPEC 4.5.2.5's copy table). */
+export const LOG_NO_FILTER_MATCH_MESSAGE = 'No lines match the filter.'
+
+const LOG_FOLLOW_LABEL = 'Follow'
+const LOG_FOLLOWING_LABEL = 'Following'
+
+/**
+ * The follow control names its own state, not an outcome: it is a toggle
+ * carrying `aria-pressed` (SPEC 4.5.2.5's DOM hooks), not a command like the
+ * Dashboard's mode switch (SPEC 4.5.2.2), so "read it twice" does not apply
+ * here the way it does there.
+ */
+export function formatFollowLabel(following: boolean): string {
+  return following ? LOG_FOLLOWING_LABEL : LOG_FOLLOW_LABEL
+}
+
+/** The font-size control's label (SPEC 4.5.2.5's copy table), fixed rather than naming a size: the table gives it one word, not one per state. */
+export const LOG_FONT_SIZE_LABEL = 'Text size'
+
+/**
+ * The filter input's accessible name (SPEC 4.5.2.5's copy table and DOM
+ * hooks): a `<label for>`, not a `placeholder`, the same rule every other
+ * input in this app already follows -- a placeholder is not a name, and
+ * VoiceOver announces a field with none as a bare "text field".
+ */
+export const LOG_FILTER_LABEL = 'Filter'

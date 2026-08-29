@@ -110,6 +110,17 @@ button {
   max-width: none;
 }
 
+/* SPEC 4.5.2.5's Geometry paragraph carries the reasoning for this rule in
+   full: a percentage height, not an inset, starting here at the view slot
+   because a scoped stylesheet cannot reach it (SPEC 4.5.2.5's DOM hooks
+   name `data-view-slot` for that reason). The flex column itself lives in
+   Log.svelte, not here: this selector's job is only the height the slot
+   has to hand down. */
+[data-view-slot='log']:not([hidden]) {
+  height: 100%;
+  min-height: 0;
+}
+
 .placeholder {
   color: var(--text-dim);
 }

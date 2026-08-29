@@ -5,7 +5,7 @@
 
 import { derived, type Readable, writable } from 'svelte/store'
 
-import type { ConnectionState, UnauthorizedReason, WsClient } from './ws'
+import { RemoteError, type ConnectionState, type UnauthorizedReason, type WsClient } from './ws'
 import type {
   AccessPoint,
   Capabilities,
@@ -39,6 +39,13 @@ const accessPointsWritable = writable<AccessPoint[]>([])
 const handshakesWritable = writable<HandshakesList>(EMPTY_HANDSHAKES)
 const peersWritable = writable<Peer[]>([])
 const logWritable = writable<string[]>([])
+// SPEC 4.5.2.5: "an unreadable log is not an empty one" -- whether the last
+// get_log answered log_unavailable, read by the Log view alongside the log
+// store itself rather than folded into it, since the two questions ("what
+// are the lines" and "could the unit read the file at all") are answered by
+// two different frame types (log_lines, error) and collapsing them would
+// lose which one last happened.
+const logUnavailableWritable = writable<boolean>(false)
 const gpsWritable = writable<Gps | null>(null)
 const faceWritable = writable<FaceStatus | null>(null)
 // SPEC 4.4.1: `channel` is the later of its two sources, `stats` and
@@ -52,6 +59,7 @@ export const accessPoints: Readable<AccessPoint[]> = { subscribe: accessPointsWr
 export const handshakes: Readable<HandshakesList> = { subscribe: handshakesWritable.subscribe }
 export const peers: Readable<Peer[]> = { subscribe: peersWritable.subscribe }
 export const log: Readable<string[]> = { subscribe: logWritable.subscribe }
+export const logUnavailable: Readable<boolean> = { subscribe: logUnavailableWritable.subscribe }
 export const gps: Readable<Gps | null> = { subscribe: gpsWritable.subscribe }
 export const face: Readable<FaceStatus | null> = { subscribe: faceWritable.subscribe }
 export const channel: Readable<number | null> = { subscribe: channelWritable.subscribe }
@@ -84,11 +92,15 @@ function upsertPeer(peer: Peer): void {
 }
 
 /**
- * SPEC 4.4.1/4.5.2.3/4.5.2.4: a per-client coalescing owner for a read that
- * must have at most one request in flight, shared by refreshHandshakes,
- * refreshAccessPoints and refreshPeers below rather than pasted a third
- * time -- the first correction to any one of them is how it would fail to
- * reach the other two.
+ * SPEC 4.4.1/4.5.2.3/4.5.2.4/4.5.2.5: a per-client coalescing owner for a
+ * read that must have at most one request in flight, shared by
+ * refreshHandshakes, refreshAccessPoints, refreshPeers and refreshLog below
+ * rather than pasted a fourth time -- the first correction to any one of
+ * them is how it would fail to reach the others. `refreshLog` used to be a
+ * hand-written copy of exactly this owner protocol, kept apart on the
+ * reasoning that this helper swallows `send`'s rejection outright and that
+ * one call site must not; `onSettled` below is what let the copy be
+ * deleted instead of kept in step with this one by hand.
  *
  * Owner, not a bare flag, because a host switch (SPEC 4.4.2) can leave A's
  * refresh pending after B attaches; comparing the owner to the requesting
@@ -101,20 +113,56 @@ function upsertPeer(peer: Peer): void {
  * pending reads, so the owner cannot wedge and a reset would only break
  * coalescing across a remount on the same client.
  *
- * `send`'s rejection is always swallowed here: none of the three callers
- * treats a failed or timed-out refresh as fatal, each for its own reason
- * given beside its own call below, and every read settles regardless.
+ * Comparing `client` identity, rather than a per-request token like
+ * lib/controls.ts's nextConfirmToken (issue #186), is enough on its own for
+ * every caller of this function, and that was checked rather than assumed
+ * for `refreshLog`, the one caller a stale settle would have been visible
+ * from (SPEC 4.5.2.5's `log_unavailable` flag): a single client can never
+ * have two requests through this helper outstanding at once, because the
+ * `if (owner === client) return` guard coalesces a second call from the
+ * same client into the first before it is ever sent -- there is no second
+ * request for a stale settle to collide with. And switching back to a
+ * previously active unit does not hand back the same client to collide
+ * with in the first place: lib/session.ts's rebuild() calls createClient()
+ * unconditionally on every switch, so a unit reached again after a trip
+ * through another one is a new object, and `owner === client` is false for
+ * a stale settle from the earlier one in exactly the case that matters. An
+ * earlier version of refreshLog carried a token guarding the sequence "A
+ * asks, switch to B, switch back to A, A's first settles and releases what
+ * A's second request holds" -- that sequence has no step where one client
+ * object holds two requests through this helper, so it cannot happen, and
+ * the token was a branch nothing could reach, which SPEC 4.5.2.1 already
+ * argues is worse than absent: it reads as a case somebody handled and
+ * invites the next reader to go looking for the sequence it is for.
+ *
+ * `send`'s rejection is always swallowed past `onSettled`: none of this
+ * function's callers may see it escape past this helper, each for its own
+ * reason given beside its own call below (or, for `refreshLog`, inside
+ * `onSettled` itself), and every read settles regardless.
  */
 function createCoalescedRefresh(
   send: (client: WsClient) => Promise<unknown>,
+  // SPEC 4.5.2.5: the seam refreshLog needed and the other three callers
+  // do not. Called only while `client` is still this call's owner -- the
+  // same guard the release below reads -- so an outcome from a client this
+  // helper has already stopped coalescing for (a stale settle) never
+  // reaches it. None of the other three callers pass one: a dropped
+  // outcome there costs only coalescing, not a store write, so they stay
+  // on the plain swallow-and-release behaviour this parameter defaults to.
+  onSettled?: (client: WsClient, outcome: { ok: true } | { ok: false; error: unknown }) => void,
 ): (client: WsClient) => void {
   let owner: WsClient | null = null
   return (client: WsClient) => {
     if (owner === client) return
     owner = client
     send(client)
-      .catch(() => {
-        // See the comment beside each call site for why this is not fatal.
+      .then(() => {
+        if (owner === client) onSettled?.(client, { ok: true })
+      })
+      .catch((error: unknown) => {
+        if (owner === client) onSettled?.(client, { ok: false, error })
+        // See the comment beside each call site (or, for refreshLog,
+        // inside its own onSettled) for why this is not fatal.
       })
       .finally(() => {
         if (owner === client) {
@@ -163,6 +211,52 @@ export function refreshWifiLists(client: WsClient): void {
   refreshAccessPoints(client)
   refreshHandshakes(client)
 }
+
+/**
+ * SPEC 4.5.2.5: called from the Log view's three-occasion refresh
+ * (lib/viewRefresh.ts's watchViewRefresh) and from its follow timer
+ * (watchViewFollow) alike -- one function, so a correction to what "asking
+ * for the log" means reaches both callers.
+ *
+ * Each ask carries no `lines`, so the plugin's own default and clamp decide
+ * the window (SPEC 2.9): naming a number here would be a second opinion
+ * about how much log is worth sending, kept in a second place from the one
+ * the plugin already owns.
+ *
+ * Coalesced through createCoalescedRefresh above like the other three
+ * reads, but with an `onSettled` the others do not pass: `log_unavailable`
+ * is a state of the Log screen, not a discarded promise, so the outcome is
+ * written to logUnavailableWritable for the view to read rather than being
+ * swallowed. createCoalescedRefresh's own comment covers why comparing
+ * client identity is enough to keep a stale settle from reaching this
+ * callback at all, so there is nothing further to guard here.
+ *
+ * A successful reply needs no write of its own beyond clearing the flag:
+ * the `log_lines` case in handleMessage below already wrote the buffer by
+ * the time this settles, since router.handle's messageHandlers run before
+ * correlate() resolves the request's own promise (lib/ws.ts), and that
+ * write is safe on its own terms -- `client.onMessage` is unsubscribed the
+ * moment a client is torn down (connectStores' own teardown), so a message
+ * actually arriving late on a detached client's socket cannot reach
+ * `logWritable` at all. The flag is set on a `log_unavailable` failure
+ * specifically; any other failure -- a timeout, a different code -- is left
+ * alone, the same as the three refreshes above: the screen keeps showing
+ * what it already had, and the next occasion asks again. SPEC 4.5.2.5
+ * gives its own sentence to `log_unavailable` alone, not to every possible
+ * failure.
+ */
+export const refreshLog = createCoalescedRefresh(
+  (client) => client.request('get_log'),
+  (_client, outcome) => {
+    if (outcome.ok) {
+      logUnavailableWritable.set(false)
+      return
+    }
+    if (outcome.error instanceof RemoteError && outcome.error.code === 'log_unavailable') {
+      logUnavailableWritable.set(true)
+    }
+  },
+)
 
 function handleMessage(message: OutgoingMessage, client: WsClient): void {
   switch (message.type) {
@@ -247,6 +341,7 @@ export function resetStores(): void {
   handshakesWritable.set(EMPTY_HANDSHAKES)
   peersWritable.set([])
   logWritable.set([])
+  logUnavailableWritable.set(false)
   gpsWritable.set(null)
   faceWritable.set(null)
   channelWritable.set(null)

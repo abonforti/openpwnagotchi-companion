@@ -327,3 +327,61 @@ test.describe('the map leaves somewhere to drag the app', () => {
     expect(navRect.width).toBeGreaterThan(0)
   })
 })
+
+test.describe('the log fills what is left and stops where the views area does (issue #38)', () => {
+  // SPEC 4.5.2.5's own "Geometry" paragraph closes issue #38 -- the mockup's
+  // log box overflowing its own container at 874x402, the landscape project
+  // this suite already runs (SPEC 4.5: landscape exists for the Log and the
+  // Map) -- and its own DOM-hooks paragraph says why this is measured in
+  // both orientations here rather than left to the generic per-view check
+  // above: the log lines container is a scrolling box of its own inside the
+  // view, not the view root, so a container that escapes its own parent
+  // while the view root stays put is a defect the generic check cannot see.
+  // Issue #38's own acceptance criteria name the log box bottom against the
+  // views area specifically, with the log both empty and full; this suite
+  // has no unit to attach (see the second test below), so only the empty
+  // half is measured here.
+  test('the log lines container never exceeds the views area, empty buffer', async ({ page }) => {
+    await gotoView(page, 'log')
+
+    // SPEC 4.5.2.5: "the container is always present, empty buffer or not" --
+    // named there specifically because a container that appears only once
+    // lines arrive would leave this, the state a fresh launch spends the
+    // most time in, unmeasured. Required, not optional, so its absence is a
+    // failure here rather than a skip: unlike the Map's Leaflet surface
+    // (still a placeholder view, genuinely absent today), the Log view and
+    // this container both exist, and a guard that skipped on a zero count
+    // would hide exactly the defect this test exists to catch.
+    const linesLocator = page.locator('[data-log-lines]')
+    await expect(linesLocator, 'SPEC 4.5.2.5 requires this container to always be present').toHaveCount(1)
+
+    const areaRect = await viewsContentBox(page)
+    const linesRect = await rectOf(linesLocator)
+
+    expect(
+      linesRect.bottom,
+      `the log lines container bottom is ${linesRect.bottom}px, the views area ends at ${areaRect.bottom}px`,
+    ).toBeLessThanOrEqual(areaRect.bottom + EPSILON)
+    expect(linesRect.top).toBeGreaterThanOrEqual(areaRect.top - EPSILON)
+    expect(linesRect.left).toBeGreaterThanOrEqual(areaRect.left - EPSILON)
+    expect(linesRect.right).toBeLessThanOrEqual(areaRect.right + EPSILON)
+  })
+
+  // The other half of issue #38's own criteria: the same containment with the
+  // log full rather than empty, which is the state the mockup's defect was
+  // actually found in (a log box that only overflows once it has content to
+  // overflow with). Recorded as a skip rather than left absent: this e2e
+  // layer runs against the built app with nothing behind the WebSocket (this
+  // config's own webServer note), so the log store never holds a line and
+  // there is no way to reach a full buffer to measure against an overflowing
+  // container. Reaching it honestly needs the fake-unit seam issue #185 is
+  // about, the same gap touch-targets.spec.ts already names for the armed
+  // two-step controls.
+  test('the log lines container never exceeds the views area, full buffer', async () => {
+    test.skip(
+      true,
+      'unreachable from this e2e layer: no unit is attached, so the log store never holds a ' +
+        'line to measure a full buffer against -- needs the fake-unit seam issue #185 is about',
+    )
+  })
+})

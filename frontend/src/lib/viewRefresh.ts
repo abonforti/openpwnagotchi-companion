@@ -112,3 +112,102 @@ export function watchViewRefresh(
     },
   }
 }
+
+export interface ViewFollowHandle {
+  /** Arms or disarms the timer. Called from the Log view's own follow control. */
+  setFollowing(following: boolean): void
+}
+
+/**
+ * SPEC 4.5.2.5: the one timer this client is allowed, and the mechanism for
+ * it, not the interval or which view carries it -- both of those are the
+ * Log's own and are passed in rather than hardcoded here, so this file goes
+ * on knowing nothing about any one screen.
+ *
+ * The exception is argued in SPEC 4.5.2.5, not repeated here: `log_lines`
+ * only ever answers `get_log` (SPEC 2.9), so nothing arrives on its own, and
+ * a tail that follows means asking again on a schedule -- the one case
+ * where §4.5.2.3's "and no timer" does not hold.
+ *
+ * `following` is opt-in and starts disarmed; only a call to `setFollowing`
+ * arms it, and it is not reset by navigation -- SPEC 4.5 keeps the view
+ * mounted, so the toggle still reads "on" on return and the timer resumes
+ * with it, rather than the app quietly turning a control back off that the
+ * owner left on. Armed or not, the timer runs **only** while `routeId` is
+ * the current route, checked the same way `watchViewRefresh` checks it
+ * above: navigating away stops the asking, and only the asking -- the
+ * toggle itself is untouched, so returning is what starts it again, not a
+ * second tap. Torn down through this file's own `onDestroy`, not a
+ * `destroy()` the caller has to remember: that function's docstring already
+ * explains why a caller-owned teardown is the leak this file exists to
+ * prevent, and a leaked interval is the same mistake in a worse shape,
+ * because it goes on firing `tick` against whatever `currentClient()`
+ * returns long after the view that armed it stopped being on screen.
+ *
+ * **Starting asks immediately, then every `intervalMs`.** SPEC 4.5.2.5:
+ * waiting out the first interval before anything happens is a control that
+ * appears not to work, and somebody arming this -- by the toggle, or by
+ * navigating back to a view where it was already on -- wants to see what is
+ * happening now, not in ten seconds.
+ *
+ * Unlike `watchViewRefresh`, this does not also fire on the route becoming
+ * current or on a host switch on its own: SPEC 4.5.2.5 adopts §4.5.2.3's
+ * three occasions for the Log through `watchViewRefresh`, called alongside
+ * this with the same `tick`/`refresh` function, and follow is an addition
+ * on top of that -- a fourth occasion, on a clock, while the toggle is on --
+ * not a replacement for the other three. This is also the whole of SPEC
+ * 4.5.2.5's exception to "no view holds a timer": nothing else in this
+ * client may reach for a second one, which is why this function takes a
+ * `routeId` rather than being armed from any view that imports it, and
+ * `intervalMs` rather than a constant baked in here, so the one call site
+ * that exists today is also the only one a reviewer needs to check.
+ */
+export function watchViewFollow(
+  routeId: ViewId,
+  intervalMs: number,
+  tick: (client: WsClient) => void,
+): ViewFollowHandle {
+  let following = false
+  let timer: ReturnType<typeof setInterval> | null = null
+
+  function ask(): void {
+    const client = currentClient()
+    if (client === null) return
+    tick(client)
+  }
+
+  function stop(): void {
+    if (timer === null) return
+    clearInterval(timer)
+    timer = null
+  }
+
+  function start(): void {
+    if (timer !== null) return
+    ask()
+    timer = setInterval(ask, intervalMs)
+  }
+
+  function sync(): void {
+    const isCurrent = get(currentRoute).id === routeId
+    if (isCurrent && following) {
+      start()
+    } else {
+      stop()
+    }
+  }
+
+  const unsubscribeRoute = currentRoute.subscribe(sync)
+
+  onDestroy(() => {
+    unsubscribeRoute()
+    stop()
+  })
+
+  return {
+    setFollowing(next: boolean): void {
+      following = next
+      sync()
+    },
+  }
+}

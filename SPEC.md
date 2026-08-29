@@ -2538,6 +2538,7 @@ before this section existed.
 | `log` | the `log_lines` reply | **replaces, never appends.** The plugin owns the tail and the clamp (§2.9); appending would grow a second, divergent buffer in the app |
 | `gps` | `gps_update`, and the `gps` field of `stats` | whichever arrived later. Both are the same resolved shape (§2.12), so there is nothing to reconcile |
 | `face` | `face_status`, and the status half of `status_change` | §2.13. `status_change` also carries a `mood`, which is deliberately dropped: `FaceStatus` has no field for it and no view in §4.5 renders one |
+| `screen` | the `screen_image` reply | on demand only, never pushed (§2.10). Held like everything else rather than read off the request's promise, so §4.5.1.1's rule that a view subscribes to stores has no exception carved for the one message that happens to be heavy. Cleared by `resetStores()` with the rest: one unit's display left on another's Mirror is the same defect as one unit's log lines on another's Log, and the harder one to notice, because a picture of a face carries no address to give it away |
 | `channel` | `channel_hop`, and the `channel` field of `stats` | the later of the two sources, see below. Exported because the hop is worth showing before the next broadcast, which on this link is up to 20 s away |
 
 **`stats` is never patched, and that is the decision this table exists for.** `channel_hop`
@@ -4055,6 +4056,131 @@ nothing about which list it sits under, because the reason it appears has nothin
 list.
 
 
+#### 4.5.2.6 The Mirror, the second timer, and a string that becomes a URL (issue #196)
+
+§4.5.2 asks for the full e-ink PNG via `get_screen`, a manual refresh and an auto toggle at about
+five seconds. §2.10 fixes the other half: on demand only, the client drives the refresh by
+polling, and the plugin must **never** push the frame, being far too heavy for the BT link.
+
+##### The frame is held, because everything this app holds is held in one place
+
+`screen_image` is today the one reply the client can receive and has nowhere to put: `lib/stores.ts`
+drops it in its default arm, and §4.4.1's table has no row for it. It gets a store and a row, and
+`resetStores()` clears it with everything else -- a host switch leaving unit A's display on B's
+Mirror is the same defect as A's log lines on B's Log, and the more convincing one, because a
+picture of a face carries no address to give it away.
+
+##### This is the second timer, and it is granted rather than assumed
+
+§4.5.2.5 allowed the Log a follow timer, argued the exception, and said plainly that a second one
+is a specification question rather than a local decision. This is that question, answered here.
+
+**It is granted, on identical terms**: opt-in, off on arrival, asking immediately when switched on
+and then on the interval, stopping the moment the view is not current, surviving the trip away and
+back. The Log's argument carries over unchanged, and §2.10 makes it stronger rather than weaker:
+there is not merely no push today, there must never be one.
+
+**What is different is the cost, and the honest position is that it has not been measured.** A
+frame is the heaviest reply in the protocol, and §4.5.2 and §2.10 both say about five seconds
+without anybody having watched one arrive over BT PAN. The reference display is small and its PNG
+should be small with it, but "should be" is not a measurement, and this specification does not
+record numbers nobody took (§11). So the interval is five seconds as already written, and **the
+first hardware run is expected to revisit it** -- if a frame takes longer than the interval to
+arrive, the toggle is asking for a second frame before the first has landed, and the coalescing
+guard turning that into a no-op is a symptom rather than a design.
+
+**The count is now two and the next one is harder to justify, not easier.** Both exceptions exist
+because a specific message type has no push and cannot have one. A third view wanting a timer for
+any other reason -- freshness, convenience, a value that changes often -- is not covered by either
+argument and remains a specification question.
+
+##### A base64 string from the wire becomes a URL, which is the one thing §4.5.3 names
+
+The frame arrives as base64 with no prefix (`screen_image.json`) and has to become
+`data:image/png;base64,...` in an `img` `src`. §4.5.3 forbids a remote string reaching "a URL, an
+attribute or a style without the escaping that context needs", and nothing validates the wire
+(issue #109).
+
+**The shape is checked before the string becomes a URL**, in `lib/`: the base64 alphabet, padding
+only at the end, and a length that is a multiple of four. This is a guard against a malformed or
+hostile payload producing a URL that is not the one intended, not an attempt to decode a PNG in
+the client or to prove the bytes are an image. **An empty payload is not a frame** and fails the
+check with everything else, and it needs no clause of its own: a base64 string's last group holds
+between two and four characters, so a rule that admits only complete groups already refuses the
+empty string. An earlier draft of this paragraph reasoned that zero is a multiple of four and
+therefore demanded a separate guard; that was wrong about the rule it was amending, and the guard
+written for it turned out to change nothing. Recorded because the mistake is easy to repeat and
+because a redundant guard reads as a case somebody handled (§4.5.2.1).
+
+The alphabet is the half that matters for §4.5.3: a quote or a space in a `src` is a string
+leaving the URL it was supposed to be inside. **The length is checked for a different reason**,
+and it is worth separating so the check is not read as validation it is not doing: a payload of
+the wrong length is not dangerous, it is merely unrenderable, and without the check the screen
+shows a broken image with nothing saying why. Cheap to test, and it turns a silent failure into
+the sentence below. What is **not** checked is whether the bytes are a PNG at all, and no amount
+of shape-checking would establish that. A string that fails renders a sentence instead of an image, and the sentence says the frame
+could not be read rather than blaming the unit, because a frame that arrives corrupt and a frame
+this app mishandles look identical from the screen.
+
+`data:` only. §2.15.1's `img-src` carries `data:` and deliberately not `blob:`, and building a blob
+URL would fail on the device and nowhere else.
+
+**No inline `style` attribute anywhere in this view.** §2.15.1 says `style-src 'self'` forbids the
+attribute and not only the block, and names this view as the place somebody will reach for one
+when sizing an image. Sizing belongs in the component's stylesheet.
+
+##### What the screen says beside the picture
+
+**The frame's own `mtime`**, through `formatUnitTime` (§4.5.1.1). A mirror of a display that
+updates rarely is indistinguishable from a mirror that has stopped updating, and the timestamp is
+the only thing that tells them apart. It is the frame's time, not the time it arrived: those differ
+by the whole round trip and by however long the file sat there.
+
+**An accessible name that says what the image is, not what it shows.** The frame is a picture of
+text this app cannot read -- the face and status are on the wire separately, in `face_status`, and
+reading them out of the picture is not something the client does. So the name names the object,
+and anybody who wants the words has them on the Dashboard.
+
+##### The DOM hooks
+
+Declared here, per §4.5.1.1, and closed.
+
+- `data-view="mirror"` on the view root, as §4.5 requires of every view.
+- `data-screen-frame` on the `img` when a frame is rendered, absent otherwise.
+- `data-field="frameTime"` on the frame's timestamp, with §4.5.1.1's `data-empty="true"`. **The
+  field is present whether or not a frame is held**, dashed when it is not: §4.5.1.1's rule is
+  that the row stays and the value becomes a dash, and a timestamp that appears only once there is
+  something to timestamp makes the screen change shape rather than change value.
+- `data-action` on the controls, over `refresh` and `auto`, with the auto control carrying
+  `aria-pressed` because it is a toggle rather than a command.
+- `data-empty-message` on the element carrying the no-frame, unreadable or not-connected sentence,
+  with `role="status"`, absent when a frame is rendered.
+
+##### The copy
+
+| condition | sentence |
+|---|---|
+| no frame held, connected | The unit has not drawn a frame yet. |
+| no frame held, not connected | Not connected, so this list has not been read. |
+| the unit answered `no_frame` | The unit has not drawn a frame yet. |
+| a frame arrived that is not readable | The frame could not be read. |
+
+| control | label |
+|---|---|
+| auto, off | Refresh automatically |
+| auto, on | Refreshing automatically |
+| refresh | Refresh |
+| the image's accessible name | The unit's display |
+
+The not-connected sentence is §4.5.2.3's, shared unchanged, and it says "list" about a picture on
+purpose: it is one sentence about the connection rather than four about four screens, and the
+alternative is a sentence per view that differs only in a noun.
+
+`no_frame` and a frame that has never arrived say the same thing because they **are** the same
+thing from the owner's side: the unit has not drawn. One is the unit saying so and the other is the
+app not having asked yet, and a distinction the owner cannot act on is not worth a second sentence.
+
+
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
 
 Every string this app renders that did not come from the owner came from somebody else, and on
@@ -5266,6 +5392,22 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   while the views area is its **content** box. The change would otherwise have shipped closing an
   issue whose defect it still had. The full-buffer half of that criterion is a stated skip naming
   issue #185, because an e2e with no unit attached cannot fill a log.
+- `mirror-view.spec.ts`: the Mirror against §4.5.2.6's declared hooks. What it pins that no other
+  view's tests can: a frame arriving at all, since `screen_image` was until this change dropped in
+  `lib/stores.ts`'s default arm; that unit A's frame is gone from the screen the moment the active
+  host changes, which §4.5.2.6 calls the harder defect to notice because a picture of a face
+  carries no address to give it away; and the base64 guard, from four hostile payloads, a
+  wrong-length one and an empty one, each asserted to render **no** `img` at all rather than a
+  broken one. The `src` is asserted to begin `data:image/png;base64,` and never `blob:`, and no
+  element in the mounted tree carries a `style` attribute -- both are §2.15.1 rules that would fail on
+  the device and nowhere else, which is the only place they can be caught cheaply. The second
+  timer, on the Log's terms and at five seconds.
+  Two of its results came from mutation rather than from a red test. Replacing the whole shape
+  check with `return true` fails seven of these tests, so the §4.5.3 half is well pinned. Removing
+  the separate empty-string guard failed none of them, which is how that guard was found to be
+  redundant against the pattern beside it and removed -- with `screen.ts` reporting full coverage
+  throughout, since the line was executed either way. A line whose removal changes nothing is not
+  covered in any sense the number can express.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

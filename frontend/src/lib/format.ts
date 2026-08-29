@@ -752,3 +752,59 @@ export const LOG_FONT_SIZE_LABEL = 'Text size'
  * VoiceOver announces a field with none as a bare "text field".
  */
 export const LOG_FILTER_LABEL = 'Filter'
+
+// ---------------------------------------------------------------------------
+// The Mirror view (SPEC 4.5.2.6). Every string in that section's two copy
+// tables, verbatim. The base64 shape check is logic, not wording, and lives
+// in lib/screen.ts; the auto-refresh timer's mechanism is lib/viewRefresh.ts's
+// watchViewFollow, the Log's own, granted a second call site by that section.
+// ---------------------------------------------------------------------------
+
+const MIRROR_NO_FRAME_MESSAGE = 'The unit has not drawn a frame yet.'
+
+/**
+ * SPEC 4.5.2.6's copy table. Both the "no frame held, connected" row and the
+ * "the unit answered `no_frame`" row read the same sentence: a store that was
+ * never written by a `screen_image` reply and a store the unit has just
+ * confirmed holds nothing are, per that section's own words, "the same thing
+ * from the owner's side", so this function is asked only from whether a
+ * frame is held (`lib/stores.ts`'s `screen` store being `null`), the same way
+ * `formatLogEmptyMessage` is asked from whether `log` holds any lines rather
+ * than from which particular request last failed.
+ */
+export function formatMirrorEmptyMessage(fetched: boolean): string {
+  if (!fetched) {
+    return NOT_CONNECTED_LIST_MESSAGE
+  }
+  return MIRROR_NO_FRAME_MESSAGE
+}
+
+/**
+ * A frame is held but `lib/screen.ts`'s `screenFrameSrc` rejected its `png`
+ * (SPEC 4.5.2.6's copy table, "a frame arrived that is not readable"). The
+ * sentence says the frame could not be read rather than naming the unit,
+ * because a frame that arrived corrupt and a frame this app mishandles look
+ * identical from the screen.
+ */
+export const MIRROR_UNREADABLE_MESSAGE = 'The frame could not be read.'
+
+const MIRROR_AUTO_LABEL = 'Refresh automatically'
+const MIRROR_AUTO_ON_LABEL = 'Refreshing automatically'
+
+/**
+ * The auto-refresh control names its own state, not an outcome (SPEC
+ * 4.5.2.6's DOM hooks: it carries `aria-pressed` because it is a toggle
+ * rather than a command), the same reasoning `formatFollowLabel` already
+ * follows for the Log's own toggle.
+ */
+export function formatMirrorAutoLabel(auto: boolean): string {
+  return auto ? MIRROR_AUTO_ON_LABEL : MIRROR_AUTO_LABEL
+}
+
+/**
+ * The frame `img`'s accessible name (SPEC 4.5.2.6's copy table): names the
+ * object rather than what it shows. The face and status arrive separately,
+ * in `face_status`, and reading them out of the picture is not something
+ * this client does.
+ */
+export const MIRROR_FRAME_LABEL = "The unit's display"

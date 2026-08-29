@@ -3529,6 +3529,222 @@ by walking the markup will break when it is.
   should assert the thing that has the effect rather than a second attribute that agrees with it.
 
 
+#### 4.5.2.3 Wi-Fi: two segments, and the data behind them (issue #187)
+
+§4.5 settles what the segmented control is and §4.5.2 settles what the two lists hold. This
+section is the rest: where the data comes from, what an empty list means, and the hooks.
+
+##### The segment lives in `src/shell/`, not in the view
+
+`Segmented.svelte` is shell furniture, beside `Nav.svelte`. The reason is not reuse -- one view
+has segments today -- it is §10.7: `src/views/` is excused from the coverage gate on the grounds
+that a view is markup, and roving tabindex, Arrow/Home/End and automatic activation are not
+markup. §10.7 already made this argument once, for the shell's own navigation, and the segment is
+the same kind of thing in a smaller box. A tablist implemented inside `WiFi.svelte` would be
+keyboard logic sitting outside every gate the project has.
+
+**Arrow movement wraps.** §4.5 does not say, and with two tabs the question is reachable on the
+first keypress: ArrowRight on the last tab selects the first. Wrapping is what the pattern's
+usual implementations do, and on a two-tab list the alternative is an arrow key that does nothing
+half the time, which reads as a broken control rather than as a boundary.
+
+Its behaviour is otherwise §4.5's, restated nowhere: a real `tablist`, roving tabindex, Arrow/Home/End,
+**automatic activation** so selection follows focus, each tab owning a `role="tabpanel"` labelled
+back by `aria-labelledby`, both panels mounted so an expanded row survives a switch, and the
+inactive panel carrying `hidden`. `Nearby` is selected on first launch, the choice is kept while
+the app is open, and it is not persisted across launches or written to the URL (§4.5).
+
+##### Somebody has to ask, and today nobody does
+
+`access_points` is pushed once, in `initial_burst()`, and never again unless requested.
+`get_handshakes` is sent only by `refreshHandshakes()` (§4.4.1), which fires on a `handshake`
+push, so between connecting and the unit's next capture the Captured list is empty. Both lists
+would therefore open stale or empty, and **that failure is invisible**: an empty list looks
+exactly like an empty list.
+
+**The refresh is asked for by `lib/`, on three occasions, and by no timer.** The view **becoming
+the current view** asks, a control on the view asks, and **the active host changing under a view
+that is already current** asks.
+
+The third was found by implementing the first, and it is a different fact rather than a special
+case of it: switching unit is done from Settings (§4.6) and the owner then navigates to Wi-Fi, so
+the route does change -- but they may equally switch and come back to a Wi-Fi view that never
+stopped being current, and §4.5 keeps it mounted throughout. What is being asked is not "has the
+route changed" but "is this list the current unit's", and the honest expression of that is the
+identity of the client the last ask was made for. A boolean saying an ask has happened is the
+shape `lib/stores.ts` already rejects for its own refresh owner, in a comment that gives the same
+reason: a host switch can leave A's work standing where B's belongs.
+
+**Becoming current, not mounting**, and the difference is not pedantry. §4.5 keeps every view
+mounted when it is navigated away from, deliberately, so that the Map keeps its viewport and the
+Log its buffer. A refresh on mount therefore fires once per app launch: an owner who looks at
+Wi-Fi at ten and again at eleven reads an hour-old list, and nothing on the screen says so. The
+trigger is the route becoming `/wifi`, which is a fact `lib/router.ts` already holds.
+
+**Being connected is not a precondition, and there is still no third occasion.** An earlier
+draft of this paragraph said a request sent while the socket is down is refused at the point of
+sending. That is what happens to a **state command** (§4.3.3, §4.5.2.2); a **read** is queued and
+flushed on reconnect, which is the distinction §4.3.3 draws and which this section had collapsed.
+The correction matters because the two lead to different code: a gate on the connection state here
+would be a third expression of a rule `lib/ws.ts` already owns, and the wrong one.
+
+So the view asks whenever it becomes current, connected or not, and the queue decides what that
+means. What it does **not** amount to is a reconnect trigger: a queued read carries §4.3.8's
+15 second timeout from the moment it was asked for, not from the moment it is sent, so an outage
+longer than that ends in a rejection the refresh swallows rather than in a list that fills when the
+tether returns. The answer to a longer outage is the refresh control the screen already has.
+
+A trigger on reconnect is still refused, for the reason it always was: it would put a fetch on
+every reconnect nobody asked for, including the one that follows a mode change, when the unit has
+more urgent things to answer. §4.3.7 already rejected client polling for `stats`, and the
+argument is stronger here: an access-point list re-fetched on a schedule spends round trips on a
+link whose round trips are the expensive part, for a phone that is usually in a pocket. A list
+that ages is a list with a visible refresh, not a list that refreshes itself.
+
+**Both lists are fetched together, not the visible one.** Both panels stay mounted and both
+badges carry a count, so a segment nobody is looking at is still on screen.
+
+**The request is coalesced per client**, exactly as `refreshHandshakes()` already is and for the
+reason its comment gives: a host switch (§4.4.2) can leave unit A's request in flight when B
+attaches, and the owner is compared against the requesting client so B sends its own rather than
+coalescing into a reply that will never reach B's stores.
+
+**A view calling a `lib/` function when it mounts is not a view that computes** (§4.5.1.1). The
+rule is about turning values into strings and deciding which string; asking the layer that owns
+the socket to go and ask is neither. It is named here because it is the first time a view
+initiates anything.
+
+##### An empty list and a list nobody has fetched are different, and must read differently
+
+`accessPoints` initialises to `[]` and `handshakes` to an empty payload, which is also what a unit
+that sees nothing reports. §4.5.1.1 says to say plainly what is not known, and a screen that says
+*No access points* about a unit it has never spoken to is saying something it does not know.
+
+The two are told apart **by the connection state**, not by a third store field: while the app is
+not `connected` or `degraded`, an empty list has not been fetched.
+
+**There are two windows where this is wrong, and both are accepted rather than papered over.**
+The first is at connect: `stats` has arrived and `access_points` has not. Both leave the unit in
+the same burst, so it is one frame wide. The second is a host switch, and it is wider: `rebuild()`
+empties the stores and attaches the new client, the burst carries `access_points` but **not**
+`handshakes_list` (§2.4), so Captured reads *The unit has no captures.* for one round trip about a
+unit that has been asked and has not yet answered.
+
+Closing either honestly would mean a per-list "have we ever received one" flag in `lib/stores.ts`,
+which is a second source of truth for something the connection state answers the rest of the time,
+and a fourth sentence for a state that lasts a round trip. The cost of being wrong here is a
+sentence that corrects itself when the reply lands; the cost of the flag is a second thing that can
+disagree with the first. This is recorded because it has now been noticed twice from opposite
+directions, and a known window that nobody wrote down gets rediscovered as a bug.
+
+##### Order
+
+**Nearby is sorted by the client, Captured is not.**
+
+Nearby sorts by RSSI, strongest first, because *what is near me* is the question the segment
+answers, with a control to sort by channel, lowest first, instead. Both orders are **total**: the
+tie-break is the BSSID, ascending, so two access points reporting the same RSSI hold their places
+between frames instead of swapping every twenty seconds. The directions are written down because
+neither is derivable and a test cannot assert an order nobody chose. The BSSID is attacker-chosen like everything else here, and
+using it to order rows is not using it as truth.
+
+Captured arrives newest first and is rendered in the order it arrived. The client must **not**
+re-sort it, and the reason is the cap: the plugin applies the 500-entry limit to its own ordering
+(§2.8), so the list is the 500 newest. Re-sorting client-side would present exactly that set in
+an order that hides what it is a set of -- an alphabetical list of 500 captures that silently
+omits the older ones.
+
+##### What a row holds
+
+Every string below is chosen by somebody else and is rendered as text with no element created
+(§4.5.3): the SSID, the hostname, the vendor and the encryption all come from the air.
+
+- **Nearby**: hostname, BSSID, channel, RSSI, encryption, vendor, client count (§4.5.2).
+  `access_points.json` says `hostname` falls back to the MAC when empty, so an empty one is the
+  plugin failing to keep a guarantee rather than a normal reading. It still renders as §4.5.1.1
+  requires of any unknown remote string, a dash with its accessible label, because a presentation
+  rule for a broken guarantee is not the same thing as a second implementation of the guarantee.
+- **Captured**: SSID, BSSID, time, size, and a GPS pin when the sidecar carried one. `bssid` is
+  null when the filename did not parse (§2.7) and is never guessed, so it dashes. The time is
+  `formatUnitTime`, which already exists and already decides how much of a date to show.
+
+**Every remote string on a row follows §4.5.1.1**, which means `vendor` and `encryption` dash
+with their accessible label when they arrive empty, exactly as `hostname` does. The numbers do
+not: `channel`, `rssi` and `clients` are non-nullable by schema, so a dash rule for them would be
+a branch nothing can reach, which §4.5.2.1 already refused for being worse than absent.
+
+**The GPS pin says whether there is one, and not where.** The row renders `Pinned` or a dash, and
+never the coordinates. The Map view owns plotting a position (§4.5.2), a latitude and a longitude
+in a list row on a 320px screen are unreadable, and printing two numbers beside a capture invites
+the reader to compare them against numbers they cannot see. What this list answers is which
+captures will appear on the map.
+
+**A size needs a formatter and the wording is fixed here**, because a test cannot assert equality
+against wording that lives nowhere (§4.5.1.1): bytes below 1024 render as `<n> B`, then `<n.n> kB`
+and `<n.n> MB`, each to one decimal place, powers of 1024, with the unit spelled as shown.
+
+**The unit is chosen after rounding, not before**, and the boundary is named because the two
+orders disagree there. 1 048 575 bytes is 1023.999 kB, which rounds to `1024.0 kB` -- a reading
+the table above does not contain, since 1024 kB is what the next unit is for. Choosing the unit
+from the unrounded value produces exactly that, so the rounding happens first and the answer is
+`1.0 MB`. Both orders round; only one of them prints a number the thresholds say cannot occur. A
+capture is a file on a disk and its size is read by somebody deciding whether it is worth pulling
+over Bluetooth, so the unit is always shown and never implied.
+
+##### The badges, the notice, and the number that disagrees
+
+§4.5.2 already settles all three and they are not restated: each badge shows the length of the
+list it names and renders `500+` when `truncated`; the Captured segment shows the truncation
+notice when the cap was hit; and the badge is **not required to agree with the Dashboard's
+counters**, for the reasons §4.5.2 gives at length. The wording of the notice is tabled below
+with the rest of the copy, for §4.5.1.1's reason.
+
+##### The DOM hooks
+
+Declared here, per §4.5.1.1, and closed: this is the list.
+
+- `data-view="wifi"` on the view root, as §4.5 requires of every view.
+- `data-segment` on each tab, over `nearby` and `captured`, and `data-segment-panel` on each
+  panel, over the same two values.
+- `data-segment-badge` on the badge inside each tab. Its text is the count and nothing else: the
+  bare number, or `500+`. What the badge counts is said by the tab it sits in.
+- `data-row` on each row of either list, carrying `nearby` or `captured`, and `data-row-key`
+  carrying the BSSID for a Nearby row and the filename for a Captured one. The filename is the
+  one field §2.7 guarantees unique; the SSID is not, and two captures of one network are two
+  rows.
+- `data-field` on each value inside a row, reusing §4.5.1.1's convention and its
+  `data-empty="true"`: `hostname`, `bssid`, `channel`, `rssi`, `encryption`, `vendor`, `clients`
+  on a Nearby row; `ssid`, `bssid`, `time`, `size`, `gps` on a Captured one.
+- `data-action` on the two controls, over `refresh` and `sort`. **Refresh sits above the tablist**,
+  because it fetches both lists whichever segment is showing, and a control that acts on something
+  off-screen must not sit inside the panel that is on it. **Sort sits inside the Nearby panel**,
+  because it orders that list and there is nothing to order in the other one.
+- `data-empty-message` on the element that carries the empty or not-yet-fetched sentence, one per
+  panel, with `role="status"` on it. It is absent when the list has rows.
+- `data-truncation-notice` on the Captured notice, absent when `truncated` is false.
+
+##### The copy
+
+| condition | sentence |
+|---|---|
+| Nearby empty, connected | The unit reports no access points. |
+| Nearby empty, not connected | Not connected, so this list has not been read. |
+| Captured empty, connected | The unit has no captures. |
+| Captured empty, not connected | Not connected, so this list has not been read. |
+| Captured truncated | Showing the newest 500 captures of <total>. |
+| a capture with a sidecar position | Pinned |
+
+| control | label |
+|---|---|
+| refresh | Refresh |
+| sort, currently by RSSI | Sort by channel |
+| sort, currently by channel | Sort by signal |
+
+The sort control names what tapping it will do rather than the order in force, which is §4.5.2.2's
+rule for the mode switch and holds for the same reason: a label that states the current state has
+to be read twice.
+
+
 ### 4.5.3 Remote strings are attacker-chosen (issue #32)
 
 Every string this app renders that did not come from the owner came from somebody else, and on
@@ -4678,6 +4894,31 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   the state before the first frame, which every launch passes through. It owns no fake timers,
   because §4.5.2.2 owns no timer: a control resolving only after a clock is advanced would be
   evidence of the thing the section forbids.
+- `wifi-view.spec.ts`: the Wi-Fi view against §4.5.2.3's declared hooks, mounted through
+  `startSession` with a fake client, so the view, `src/shell/Segmented.svelte`, `lib/wifi.ts` and
+  the refresh in `lib/stores.ts` are exercised as the one screen an owner actually opens. The
+  tablist in full -- roles, roving tabindex, both arrow directions with the wrap §4.5.2.3 settles,
+  Home/End, automatic activation, click activation, the `hidden` on the inactive panel, the same
+  panel node surviving a switch, and an unhandled key leaving selection, focus and
+  `defaultPrevented` alone, which is the keyboard-trap guard; the trigger being the route becoming
+  `/wifi` rather than the component mounting, with a return visit on the still-mounted view asking
+  again, which is the defect that made this section be rewritten; both lists fetched together and
+  coalesced per client, from four angles including the one that only appears mid-switch, where A's
+  request settles after B has taken over and must not release an owner that is now B's; the offline
+  ask being made rather than gated, because a read is queued where a state command is refused
+  (§4.3.3); the four empty-versus-never-fetched sentences by equality; Nearby's order asserted both
+  as a direction and as stability under a permuted arrival and a later frame, which are different
+  claims and only the second keeps rows from swapping; Captured asserted to render in the order it
+  arrived, from a payload in no client-computable order; the badges, the `500+` and the truncation
+  notice, with a frame where the badge and `stats.handshakesTotal` disagree and both are shown; and
+  §4.5.3 on all four hostile fields, asserted on the DOM; and two rows keyed on a duplicate and on
+  an empty BSSID, which is where §4.5.3 stops being about escaping: the plugin writes `""` when
+  bettercap reports no mac, Svelte throws on a duplicate `{#each}` key in production, and the two
+  together take the screen down with no attacker needed. It owns no fake timers. What it leaves
+  uncovered is defensive arms only, of two kinds: values the schema forbids and nothing validates
+  (issue #109), and type-driven guards for states the caller cannot produce. They are described
+  rather than counted, because a count in prose is wrong the first time a test covers one of them
+  by accident -- which is what happened to an earlier draft of this entry.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

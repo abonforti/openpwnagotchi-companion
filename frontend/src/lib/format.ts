@@ -4,6 +4,9 @@
 // `views/Dashboard.svelte` subscribes to stores and lays out what these
 // functions return; it does not itself decide how a value becomes text.
 
+// Type-only, same direction as every other formatter's own import of what
+// it renders: lib/geo.ts does not import this file.
+import type { GeoState } from './geo'
 import type { Gps, HandshakeGps, Mode } from './protocol'
 // Type-only, and cycle-free: lib/wifi.ts does not import this file, so
 // importing its NearbySortOrder here is the same direction of dependency
@@ -808,3 +811,54 @@ export function formatMirrorAutoLabel(auto: boolean): string {
  * this client does.
  */
 export const MIRROR_FRAME_LABEL = "The unit's display"
+
+// ---------------------------------------------------------------------------
+// The Settings geolocation control (SPEC 4.6.2). The mechanism -- the tap,
+// the watch, the push timer, the backgrounding rule -- is lib/geo.ts's own;
+// this file only carries the five sentences its copy table names, verbatim.
+// ---------------------------------------------------------------------------
+
+const GEO_OFF_MESSAGE = "Not sharing this phone's position."
+const GEO_WAITING_MESSAGE = 'Waiting for a position.'
+const GEO_SHARING_MESSAGE = "Sharing this phone's position."
+const GEO_DENIED_MESSAGE =
+  "This browser refused location access. Allow it in the browser's settings, then try again."
+const GEO_UNSUPPORTED_MESSAGE = 'This browser cannot supply a position.'
+
+/**
+ * SPEC 4.6.2's copy table for `lib/geo.ts`'s `GeoState`. None of these five
+ * sentences says anything about what the unit has -- that is §4.6.1's table
+ * and `lib/stores.ts`'s `gps` store, and a section that mixed the two would
+ * be telling the owner their captures are located because their phone is
+ * willing, which is the mistake §4.6.1 spends its second half on.
+ */
+export function formatGeoStateMessage(state: GeoState): string {
+  switch (state) {
+    case 'off':
+      return GEO_OFF_MESSAGE
+    case 'waiting':
+      return GEO_WAITING_MESSAGE
+    case 'sharing':
+      return GEO_SHARING_MESSAGE
+    case 'denied':
+      return GEO_DENIED_MESSAGE
+    case 'unsupported':
+      return GEO_UNSUPPORTED_MESSAGE
+  }
+}
+
+const GEO_TOGGLE_LABEL = "Share this phone's position"
+const GEO_TOGGLE_TRY_AGAIN_LABEL = 'Try again'
+
+/**
+ * The toggle names its own state (SPEC 4.6.2's DOM hooks: `aria-pressed`
+ * carries it), the same rule `formatFollowLabel` and `formatMirrorAutoLabel`
+ * already follow for their own toggles -- except for `denied`, which is not
+ * a state this control can be pressed back out of by tapping "on" again: the
+ * only honest thing left to offer is another attempt, so the label says
+ * that instead of repeating a state the section's own copy table already
+ * gives the section a sentence for.
+ */
+export function formatGeoToggleLabel(state: GeoState): string {
+  return state === 'denied' ? GEO_TOGGLE_TRY_AGAIN_LABEL : GEO_TOGGLE_LABEL
+}

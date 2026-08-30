@@ -52,6 +52,7 @@ elsewhere in this suite.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -717,6 +718,133 @@ def test_build_job_caches_nothing():
         f"expected no actions/cache step in job {build_job_key!r}, found "
         f"{[s.get('name') for s in cache_action_steps]!r} (SPEC 5.2: 'The "
         f"build job caches nothing')"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Node floor: SPEC 5.1.1, issue #132 - frontend/package.json declares
+# engines.node, and ci.yml and release.yml each declare their own
+# NODE_VERSION because a workflow cannot read another's env. Three
+# spellings of one constraint. The test above already pins that ci.yml's
+# and release.yml's NODE_VERSION agree with each other; the tests below pin
+# the third spelling, engines.node, and that its major agrees with both
+# pins, plus frontend/.npmrc's engine-strict switch that turns EBADENGINE
+# from a warning into a refusal.
+#
+# What is deliberately not asserted here: SPEC 5.1.1 is explicit that
+# NODE_VERSION is a major alone - "the latest of that major the runner can
+# get" - while engines.node is a lower bound with three components. Nothing
+# here or anywhere else in this checkout can establish that the runner's
+# resolved version is at or above the floor's minor without knowing what
+# actions/setup-node resolved at the moment the job ran. Asserting that from
+# a static checkout would be checking something the spec itself says the
+# check cannot check.
+#
+# SPEC 5.1.1 also says the floor's digits belong in engines.node "and
+# nowhere else, including here": no comment or assertion message below
+# repeats them. Where a message needs to show a value, it interpolates the
+# one the test just read, never a literal typed here.
+# ---------------------------------------------------------------------------
+
+
+def _node_engine_range():
+    with open(PACKAGE_JSON_PATH, encoding="utf-8") as handle:
+        package = json.load(handle)
+    return (package.get("engines") or {}).get("node")
+
+
+def _node_floor_major(node_range):
+    """Reads the floor out of a `>=X.Y.Z`-shaped engines.node range. SPEC
+    5.1.1 calls engines.node "a lower bound with three components,
+    >=X.Y.Z", so this is deliberately narrow rather than a general
+    semver-range parser: a range that is not a single '>=' floor is itself
+    a spec violation this function surfaces by returning None rather than
+    by guessing.
+    """
+    if not node_range:
+        return None
+    match = re.match(r"^>=(\d+)\.(\d+)\.(\d+)$", node_range.strip())
+    if not match:
+        return None
+    return match.group(1)
+
+
+def test_node_floor_is_a_range_with_a_floor():
+    """SPEC 5.1.1 calls engines.node "a lower bound with three components,
+    >=X.Y.Z" - not a bare major and not an exact pin, which would forbid
+    every newer patch the floor is meant to permit. A missing or empty
+    engines.node fails here too, rather than needing a separate "declares a
+    floor at all" test: _node_floor_major(None) and
+    _node_floor_major("") both return None the same way an unparseable
+    range does.
+    """
+    node_range = _node_engine_range()
+    major = _node_floor_major(node_range)
+    assert major is not None, (
+        f"expected frontend/package.json's engines.node to be a '>=X.Y.Z' floor "
+        f"(SPEC 5.1.1: a lower bound with three components), got {node_range!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "workflow_path", [CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH], ids=["ci.yml", "release.yml"]
+)
+def test_node_version_pin_matches_package_json_floor_major(workflow_path):
+    """SPEC 5.1.1: "the check is that each workflow's pinned major is the
+    floor's major, asserted against package.json separately for each of
+    the two rather than only between them -- two pins that drift to the
+    same wrong major still agree with each other, which is the one case
+    comparing them to each other cannot see." Checked against each
+    workflow independently, for exactly that reason, rather than only
+    against the other workflow the way the toolchain-version comparison
+    above already does.
+    """
+    if workflow_path is RELEASE_WORKFLOW_PATH:
+        _require_release_workflow()
+    with open(workflow_path, encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
+    node_version = (workflow.get("env") or {}).get("NODE_VERSION")
+    assert node_version is not None, f"{workflow_path} has no env.NODE_VERSION"
+
+    floor_major = _node_floor_major(_node_engine_range())
+    assert floor_major is not None, (
+        "frontend/package.json's engines.node is not a '>=X.Y.Z' floor; "
+        "test_node_floor_is_a_range_with_a_floor already reports this"
+    )
+    assert str(node_version) == floor_major, (
+        f"{workflow_path}'s env.NODE_VERSION ({node_version!r}) is not the same major as "
+        f"frontend/package.json's engines.node floor ({floor_major!r}); SPEC 5.1.1 requires "
+        f"each workflow's pinned major to equal the floor's major"
+    )
+
+
+def test_npmrc_sets_engine_strict():
+    """SPEC 5.1.1: 'frontend/.npmrc sets engine-strict=true, so npm install
+    refuses rather than warning.' Parsed as .npmrc's own key=value lines
+    (ignoring comments and blank lines) rather than a raw substring search,
+    so a value of engine-strict=false, or the key inside a comment, is not
+    mistaken for the switch actually being on - which is the whole
+    acceptance criterion issue #132 asks for ('learns that from the
+    documentation or from the install, not from a jsdom internal').
+    """
+    npmrc_path = REPO_ROOT / "frontend" / ".npmrc"
+    assert npmrc_path.is_file(), f"expected {npmrc_path} to exist (SPEC 5.1.1)"
+    settings = {}
+    with open(npmrc_path, encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith(";"):
+                continue
+            if "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            settings[key.strip()] = value.strip()
+    # The message names this one key and never the parsed file: a failure here
+    # is echoed into a public CI log, and an .npmrc is where npm writes a
+    # registry credential if anybody ever runs `npm config set` against it.
+    assert settings.get("engine-strict") == "true", (
+        f"expected frontend/.npmrc's engine-strict setting to be 'true', "
+        f"got {settings.get('engine-strict')!r} (SPEC 5.1.1)"
     )
 
 

@@ -115,8 +115,14 @@ button {
    because a scoped stylesheet cannot reach it (SPEC 4.5.2.5's DOM hooks
    name `data-view-slot` for that reason). The flex column itself lives in
    Log.svelte, not here: this selector's job is only the height the slot
-   has to hand down. */
-[data-view-slot='log']:not([hidden]) {
+   has to hand down. SPEC 4.5.1's map geometry rule needs the same thing
+   for the same reason -- a map surface sized in viewport units cannot know
+   how much of the viewport the header and the navigation have already
+   taken, so Map.svelte's own flex column (mirroring Log's) is handed a
+   height to fill rather than guessing one -- so the Map view's slot gets
+   it too, not a duplicate rule of its own. */
+[data-view-slot='log']:not([hidden]),
+[data-view-slot='map']:not([hidden]) {
   height: 100%;
   min-height: 0;
 }

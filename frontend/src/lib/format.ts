@@ -813,6 +813,51 @@ export function formatMirrorAutoLabel(auto: boolean): string {
 export const MIRROR_FRAME_LABEL = "The unit's display"
 
 // ---------------------------------------------------------------------------
+// The Map view (SPEC 4.5.2.7). Which captures are trusted enough to plot and
+// where the unit's own marker comes from are lib/map.ts's; this file only
+// carries the wording for the three states an owner can find the captures
+// layer in, and the caption naming how many of them have a position.
+// ---------------------------------------------------------------------------
+
+const MAP_NO_CAPTURES_MESSAGE = 'The unit has no captures.'
+const MAP_NO_POSITIONED_CAPTURES_MESSAGE = "None of the unit's captures has a position."
+
+/**
+ * SPEC 4.5.2.7's copy table: three states, and only the third is new wording.
+ * The first is `NOT_CONNECTED_LIST_MESSAGE`, "the shared one SPEC 4.5.2.4
+ * already refused to duplicate", unchanged. The second is the Wi-Fi view's
+ * own Captured-segment sentence, "the same fact about the same list", so a
+ * second wording for it would be a second answer to one question -- deliberate
+ * duplication of that literal rather than an import, since `lib/wifi.ts`'s
+ * sibling never extracted it into a constant of its own either.
+ *
+ * `fetched` is `lib/lists.ts`'s `hasListDataArrived`: "the Map uses it rather
+ * than a 'have we ever received one' flag of its own." `hasCaptures` is
+ * whether the last `handshakes_list` reply held any entry at all, regardless
+ * of whether any of them carry a usable position -- `lib/map.ts`'s
+ * `capturesWithGps` decides that separately, so a caller with a non-empty pin
+ * list has nothing to show here and never calls this function to find out.
+ */
+export function formatMapEmptyMessage(fetched: boolean, hasCaptures: boolean): string {
+  if (!fetched) {
+    return NOT_CONNECTED_LIST_MESSAGE
+  }
+  return hasCaptures ? MAP_NO_POSITIONED_CAPTURES_MESSAGE : MAP_NO_CAPTURES_MESSAGE
+}
+
+/**
+ * SPEC 4.5.2.7's caption: `12 captures, 3 with a position.` State three of
+ * the table above is a spectrum rather than a switch, and this is what makes
+ * the finite-coordinate rule (`lib/map.ts`'s `capturesWithGps`) observable
+ * without a test counting Leaflet's own markers. Always plural, the same
+ * convention `formatTruncationNotice` already follows for a count that is
+ * routinely 0 or 1.
+ */
+export function formatMapCaption(total: number, withPosition: number): string {
+  return `${total} captures, ${withPosition} with a position.`
+}
+
+// ---------------------------------------------------------------------------
 // The Settings geolocation control (SPEC 4.6.2). The mechanism -- the tap,
 // the watch, the push timer, the backgrounding rule -- is lib/geo.ts's own;
 // this file only carries the five sentences its copy table names, verbatim.

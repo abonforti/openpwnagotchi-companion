@@ -37,6 +37,32 @@ import {
 
 const VIEWS = Object.keys(ROUTES) as ViewName[]
 
+// SPEC 2.15.1/4.5.2.7: `https://*.tile.openstreetmap.org` is the one external
+// origin this app's CSP admits, "a real weakening of the policy rather than a
+// formality". Once the Map view carries a real `[data-map-surface]` element
+// (SPEC 4.5.2.7's own hook), the per-view loop below - which visits every
+// route, `/map` included - and the map-specific describes further down both
+// bring a live map onto the page, and Leaflet requests tiles from that origin
+// on every one of the four Playwright projects, on every run. A suite that
+// only measures a rectangle must not depend on a third-party service's
+// availability or usage policy for that measurement to run at all, so every
+// tile request in this file is answered locally rather than reaching the
+// network. Registered once, at the top of the file, rather than only inside
+// the map-specific describes: the per-view loop's own `map` iteration would
+// otherwise still call out.
+//
+// The body is empty rather than a real decoded image: nothing this file
+// measures depends on a tile actually painting (the surface's own box is
+// CSS-driven, not image-driven), and an empty body needs no binary encoding
+// here - this project deliberately carries no @types/node (playwright.config.ts's
+// own comment on `declare const process`), so a Buffer literal would be the
+// one place that pulled it in for a single test file.
+test.beforeEach(async ({ page }) => {
+  await page.route('https://*.tile.openstreetmap.org/**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'image/png', body: '' })
+  })
+})
+
 /**
  * Hit-test the whole viewport on a grid, plus every edge and corner. Box
  * arithmetic cannot see a strip that no element covers, because the missing
@@ -267,14 +293,19 @@ test.describe('the map leaves somewhere to drag the app', () => {
     // SPEC 4.5.1 requires a region where a drag scrolls the app rather than
     // panning the map, always reachable without scrolling first: the map is
     // never as wide or as tall as the views area, and the strip that leaves
-    // over is what the gesture needs.
-    const surface = page.locator('[data-view="map"] .leaflet-container')
+    // over is what the gesture needs. SPEC 4.5.2.7's own "hooks and the copy"
+    // paragraph is explicit that this is measured against data-map-surface,
+    // deliberately not against Leaflet's own .leaflet-container class name:
+    // that class is "a library's private vocabulary", and a test against it
+    // would break on a Leaflet upgrade that changed nothing this app cares
+    // about.
+    const surface = page.locator('[data-view="map"] [data-map-surface]')
     const count = await surface.count()
 
     test.skip(
       count === 0,
-      'the Map view carries no Leaflet surface in this branch; the invariant ' +
-        'cannot be measured until the real Map lands',
+      'the Map view carries no data-map-surface element in this branch; the ' +
+        'invariant cannot be measured until the real Map lands',
     )
 
     const surfaceRect = await rectOf(surface.first())

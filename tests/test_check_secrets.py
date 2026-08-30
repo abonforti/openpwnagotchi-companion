@@ -89,7 +89,9 @@ def _synthetic_npm_token_body(length=36):
     return "".join(alphabet[i % len(alphabet)] for i in range(length))
 
 
-def _npm_registry_credential_probe(prefix="", keyword="_authToken", value="synthetic-example-value"):
+def _npm_registry_credential_probe(
+    prefix="", keyword="_authToken", value="synthetic-example-value"
+):
     """Assembles an `npm registry credential` line - optional prefix, one
     of the three setting names, `=`, a value - from separate pieces joined
     at runtime, so the shape never sits as one contiguous literal in this
@@ -483,7 +485,9 @@ def test_credential_in_a_non_utf8_file_is_found_not_warned_about(tmp_path, monke
         f"the file must not be reported as undecodable when a credential inside it was "
         f"found: {err!r}"
     )
-    assert "unreadable" not in err.lower(), f"a decodable-as-latin-1 file is not unreadable: {err!r}"
+    assert "unreadable" not in err.lower(), (
+        f"a decodable-as-latin-1 file is not unreadable: {err!r}"
+    )
 
 
 # --- 3. three outcomes: 0 clean, 1 a finding, 2 the scan did not run. ------
@@ -542,7 +546,9 @@ def test_exit_code_is_2_for_a_file_that_cannot_be_read(tmp_path, monkeypatch, ca
     finally:
         target.chmod(0o600)
 
-    assert rc == 2, f"expected exit 2 for an unreadable file, got {rc}\nstdout:\n{out}\nstderr:\n{err}"
+    assert rc == 2, (
+        f"expected exit 2 for an unreadable file, got {rc}\nstdout:\n{out}\nstderr:\n{err}"
+    )
     assert str(target) in err, f"expected the unreadable path to be named in stderr, got: {err!r}"
 
 
@@ -551,7 +557,9 @@ def test_exit_code_is_2_for_a_file_that_cannot_be_read(tmp_path, monkeypatch, ca
     reason="root ignores a file's own permission bits, so chmod(0o000) does not deny "
     "the read and this test would fail for a reason unrelated to what it checks",
 )
-def test_exit_code_is_2_when_a_finding_and_an_unreadable_file_both_occur(tmp_path, monkeypatch, capsys):
+def test_exit_code_is_2_when_a_finding_and_an_unreadable_file_both_occur(
+    tmp_path, monkeypatch, capsys
+):
     """SPEC.md 5.1.2: when a run turns up both a real finding and a file
     that could not be read, the status is 2 - the broken gate outranks the
     finding, since a caller cannot trust that the unreadable file was not
@@ -592,7 +600,9 @@ def test_a_run_over_only_exempt_paths_exits_0_not_2(monkeypatch, capsys):
     """
     rc, out, err = _run_main(monkeypatch, capsys, str(SCRIPT))
 
-    assert rc == 0, f"a run over only exempt paths must not fail the gate\nstdout:\n{out}\nstderr:\n{err}"
+    assert rc == 0, (
+        f"a run over only exempt paths must not fail the gate\nstdout:\n{out}\nstderr:\n{err}"
+    )
     assert "nothing was examined" not in out and "nothing was examined" not in err, (
         f"a run that considered an exempt path is not the same outcome as a run that "
         f"considered nothing: stdout:\n{out}\nstderr:\n{err}"
@@ -607,7 +617,9 @@ def test_a_run_over_only_exempt_paths_exits_0_not_2(monkeypatch, capsys):
     )
 
 
-def test_a_path_that_cannot_be_stat_produces_an_error_line_and_exit_2(tmp_path, monkeypatch, capsys):
+def test_a_path_that_cannot_be_stat_produces_an_error_line_and_exit_2(
+    tmp_path, monkeypatch, capsys
+):
     """A dangling symlink cannot be opened for a reason distinct from a
     permission bit - there is nothing at the far end to stat - and SPEC.md
     5.1.2 requires this to surface the same way any other unreadable path

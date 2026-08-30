@@ -53,6 +53,47 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    # A gate of this kind may be a superset of the real shape and may not be a
+    # subset, so both bounds here are the loose one where a reading is in doubt.
+    #
+    # The alphabet is wider than the published Gitleaks pattern's
+    # `[a-z0-9]{36}`, because npm's own announcement puts a base62 CRC32
+    # checksum in the last six characters and base62 has capitals in it. The
+    # length is `{36,}` and not `{36}` for the same reason and not for a known
+    # one: 36 is npm's shape today, a fixed count closed by `\b` matches
+    # nothing at all for a body one character longer, and a token format that
+    # grows is a gate that silently stops finding anything. It costs nothing:
+    # `_` is a word character, so `npm_config_registry` and its kind never
+    # reach 36 consecutive alphanumerics.
+    ("npm access token", re.compile(r"\bnpm_[A-Za-z0-9]{36,}\b")),
+    # An .npmrc is a registry credential's own file format, and this repository
+    # tracks one from issue #132 onward (SPEC 5.1.1). The credential assignment
+    # pattern below cannot see it: npm writes `_authToken=<value>` with no
+    # quotes, and the `_` in front of `authToken` is a word character, so the
+    # word boundary that pattern opens with never matches there. Matched by the
+    # key rather than by the value's shape, because a registry that is not npm's
+    # own issues whatever it likes.
+    #
+    # The registry prefix is optional, and that is the half a first version of
+    # this got wrong. `npm config set _authToken <v> --location=project` writes
+    # the key at column 0 with no `//registry/:` in front of it, and a pattern
+    # requiring the prefix missed the exact line the file's own header promises
+    # will fail the build. Verified against npm 9.2.0 rather than read off the
+    # documentation, which describes the scoped form and not what the CLI does.
+    #
+    # The line anchor is a concession and is named as one. It spares prose that
+    # writes `_authToken=<your token>` mid-sentence, and only mid-sentence: the
+    # same words at column 0 still fire. What it costs is that a credential
+    # pasted after a `#` in any tracked file escapes this pattern. That is a
+    # limit, not a policy, and nothing may assert that a `#` defeats the
+    # scanner. A quoted credential in prose is still the next pattern's
+    # business.
+    (
+        "npm registry credential",
+        re.compile(
+            r"(?i)^\s*(?:(?://|@)[^\s=]*:)?_(?:authToken|auth|password)\s*=\s*\S", re.M
+        ),
+    ),
     ("private key in a URL", re.compile(r"://[^/\s:@]+:[^/\s:@]{6,}@")),
     (
         "credential assignment",

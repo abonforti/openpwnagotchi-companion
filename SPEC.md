@@ -4623,6 +4623,74 @@ listener rather than something this sentence can claim.
 - **mutation** (scheduled, not a PR gate): `mutmut` over `plugin/`, reported not enforced.
   Mutation testing is too slow to block a pull request and too valuable to skip entirely.
 
+#### 5.1.1 The Node floor is one number in three files, and two of them are pins (issue #132)
+
+`frontend/package.json` declares `engines.node`. `ci.yml` and `release.yml` each declare a
+`NODE_VERSION`, because a workflow cannot read another's `env` (§5.2). Three spellings of one
+constraint, and the same argument §5.2 already makes about the Python pair applies here with one
+extra file in it.
+
+**The floor and the pins are not the same kind of number, and the check between them cannot
+pretend they are.** `engines.node` is a lower bound with three components, `>=X.Y.Z`;
+`NODE_VERSION` is what `actions/setup-node` resolves, and it is a **major alone**, meaning "the
+latest of that major the runner can get". So the check is that each workflow's pinned major is
+the floor's major, asserted against `package.json` separately for each of the two rather than
+only between them -- two pins that drift to the same wrong major still agree with each other,
+which is the one case comparing them to each other cannot see. It **cannot** establish that the
+runner's resolved version is at or above the floor's minor, because that depends on what
+`setup-node` returns at the moment the job runs, and a test claiming otherwise would be
+asserting something it did not check.
+
+**That gap is closed by the install rather than by the check, and it is worth saying where.**
+`engine-strict=true` below applies to the CI job's own `npm ci` exactly as it applies to a
+contributor's, so a runner resolving a version under the floor fails at install with
+`EBADENGINE` instead of proceeding to a suite that would die inside `undici`. The static check
+answers "do the three files agree"; the install answers "is what actually turned up good
+enough". Two different questions, and neither is a substitute for the other: the install cannot
+notice that a workflow's pin has drifted to another major, because whatever it resolves will
+satisfy a floor from that other major just as well.
+
+**This section names shapes and not values, deliberately.** The floor's digits are **authored**
+in `engines.node` and nowhere else, including here: a specification that quotes today's number is
+a fourth spelling of it, and one that no test compares, which is the defect this section exists to
+close arriving in the place that forbade it.
+
+Authored is the load-bearing word. `frontend/package-lock.json` carries the same digits, because
+npm writes the `engines` field into it, and that is not a second spelling: nothing edits the lock
+file by hand, `npm ci` regenerates the relationship, and a lock file disagreeing with its
+`package.json` is a state npm itself refuses. The test is that a human wrote the number once.
+
+**Why there is a floor at all, recorded once so nobody measures it twice.** `jsdom` brings
+`undici`, which calls `webidl.util.markAsUncloneable`. The Node 20 line does not have it, and on
+20 the vitest workers do not start: the whole frontend suite dies before a single assertion, with
+an error naming `undici` and naming neither Node nor a version. Observed on Node 20.19.2 with npm
+9.2.0 on 2026-08-30, and by issue #132 on the same line before that. Those are dated
+observations, which §11 permits because they age into history rather than into being wrong; what
+must hold today is the range in `engines.node`.
+
+**`frontend/.npmrc` sets `engine-strict=true`**, so `npm install` refuses rather than warning.
+`engines` is advisory by default and `EBADENGINE` scrolls past with the rest of the install
+output. The judgement issue #132 asked for is that this is safe **because the file is in
+`frontend/`**: it governs an install of the frontend's own dependencies, which is by definition
+frontend work, and it cannot block a contributor who only touches the plugin, the tools or the
+tests. A repository-root `.npmrc` would have been the wrong call for exactly that reason.
+
+**It reaches one thing that is not a contributor and not CI, and that is written down here
+because the failure would be invisible.** Dependabot's npm updater reads a repository's committed
+`.npmrc` and honours `engine-strict`; an updater running below the floor fails the update with
+`EBADENGINE` and no pull request appears. There is no configuration option to make it ignore the
+file, and the upstream issue asking for one was closed as not planned. The updater's own Node
+version is pinned in `dependabot-core` and is not a version this repository can set or read: it
+was Node 24 when this was written, comfortably above the floor, and it has been on the Node 20
+line within the last year, which is below it.
+
+So the hazard is not present today and is not hypothetical either, and its symptom is the
+dangerous part: **an update that does not happen looks exactly like a week with no updates.**
+There is nothing red to notice. It is kept rather than traded away because what it buys -- an
+install that refuses instead of warning -- is the whole of what issue #132 asked for, and the
+alternative on offer is to relax the floor to whatever the updater happens to run, which is the
+floor being set by the least relevant consumer of it. Issue #202 carries the watch.
+
 ### 5.2 `release.yml` (on tag `v*`)
 
 Build the frontend, pack `frontend/dist` into `dist.tgz`, create a GitHub Release for the tag and

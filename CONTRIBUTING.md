@@ -88,6 +88,32 @@ The suite needs no pwnagotchi installation: `tests/fakes/pwnagotchi_stub/` stand
 exposes exactly the symbols §11 pins - so a test that needs an unpinned symbol fails to import,
 which is the point.
 
+The frontend has its own suite, and it needs a newer Node than the one your distribution
+probably ships:
+
+```sh
+cd frontend
+npm ci
+npm run test        # vitest
+```
+
+**The Node floor is `engines.node` in `frontend/package.json`, and that is the only place anybody
+writes it as a number.** CI pins the same major, and a test compares each workflow against
+`package.json` so they cannot drift (SPEC §5.1.1). `package-lock.json` carries a copy that npm
+generates and nobody edits. Do not write the number anywhere else, including this file.
+
+Below the floor, `npm ci` refuses: `frontend/.npmrc` sets `engine-strict=true`, so an
+`EBADENGINE` that would otherwise scroll past becomes a failed install. If you get past it some
+other way, the suite dies before its first assertion with
+
+```
+webidl.util.markAsUncloneable is not a function
+```
+
+which comes from `undici`, by way of `jsdom`, reaching for something the Node 20 line does not
+have. It names neither Node nor a version, which is why that string is written here: so that
+searching this repository for it finds this paragraph.
+
 Two conventions that are load-bearing:
 
 **Tests are written against the specification, not against the implementation.** Where practical

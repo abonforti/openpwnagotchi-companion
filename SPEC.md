@@ -5658,6 +5658,101 @@ file only. Tested by `tests/tools/test_check_coverage.py`.
   entry, or one that is `null`, means no figure has been recorded yet: the script warns and
   passes. An entry that is present but is not a pair of numbers is an error, because the one thing
   a drop detector must not do is fail open.
+- **The recorded figure ratchets upward, and lowering it takes a second flag and a reason
+  (issue #191).** `--update` writes a figure at or above the recorded one and refuses one below
+  it. Lowering is `--update --allow-drop`, and the flag requires a reason, which is written into
+  the baseline file beside the number it lowered.
+
+  This is a change of kind rather than of degree, so the argument for it belongs here. The figure
+  was being rewritten to whatever the branch happened to measure: frontend branches sat at 89.55
+  for a fortnight, one change took them to 95.14, and the three merges after it moved them down
+  each time, 0.53 off the peak, with nothing anywhere recording that they had. Each drop was
+  individually small and individually defensible. What the three together showed is that a
+  baseline which moves down to meet every change cannot fail one, and a number that cannot fail
+  anything is a record rather than a gate, whatever the file is called.
+
+  The reason is not a comment for a human to skim past. It is the thing a reviewer reads in the
+  diff, and it is the reason the flag exists rather than the refusal simply being removable: a
+  lowering that costs one word is one nobody notices, and a lowering that has to be justified in
+  the file is one somebody has to defend. What may not happen is a drop landing with neither.
+
+  **The floor is the one comparison still made on the raw measurement, and its message has to
+  say so.** The floor is not a ratchet: nothing is written when it fails, and a build measuring
+  84.999 is below eighty-five however the number is displayed. But printing that as `line coverage
+  is 85.00%, below the 85% floor` is a sentence contradicting itself, so the message shows enough
+  digits to be true rather than the two the file stores.
+
+  **A `"reason"` read back off disk is checked the way one arriving on the command line is.** The
+  same string cannot be refused as an argument and accepted as a file value: a `reason` that is
+  not a string, or is blank, makes the entry malformed like any other unreadable field.
+
+  **What is compared is what would be written, not what was measured.** The file holds figures
+  rounded to two decimals, so comparing a full-precision measurement against a rounded record
+  refuses a re-run that measured exactly the same coverage: a true 90.03999 is recorded as 90.04
+  and then read back as higher than itself. The bullet says `--update` writes a figure at or above
+  the recorded one, and an equal one is at it. Round first, then compare, so the question asked is
+  the one the file can answer.
+
+  **An equal figure keeps its reason; only a rise removes it.** The reason explains the number on
+  file, and re-recording the same number leaves that number, and therefore its justification,
+  standing. This is the one place the removal rule has to be stated as *raises* rather than
+  *updates*, and it is worth a sentence because the two read the same until the rounding above
+  makes an equal update possible at all.
+
+  **A malformed entry is not repaired by `--update`.** Recovering it would mean this tool
+  overwriting a figure it could not read, which is the defect the bullet exists to close arriving
+  from the other direction: a file that changed when nothing established what it should change
+  from. The repair is a hand edit, which lands in a diff a reviewer sees, and the refusal is the
+  same one the read-only path already gives.
+
+  **`--allow-drop` without `--update`, and `--reason` without `--allow-drop`, are usage errors
+  refused during argument parsing.** They are named here so the refusal is a stated rule rather
+  than an implementation detail of how the parser happens to be wired, and so a test may assert
+  them.
+
+  **The reason describes the change, not where it came from.** It is written verbatim into
+  `.github/coverage-baseline.json`, a public committed file, and the natural sentence to reach
+  for when a figure drops names a branch, an internal ticket, or a machine. Name what stopped
+  being covered and why that was acceptable. The branch it happened on is in the log, and the
+  log is not public in the way a file in the tree is. This has to be said where the person
+  typing the command will see it -- the `--reason` help text and the module docstring -- and not
+  only here, because nobody consults a specification while composing a command line.
+
+  **The reason does not outlive the number it explains.** It describes why *that* figure was
+  accepted, so the next update that raises the figure removes it along with the number it was
+  about. A file accumulating the reasons for lowerings that have since been undone would be a
+  history, and the history is in the log; what this file holds is a claim about now. The
+  comparison is exact rather than tolerant, unlike the drop warning next to it: the warning
+  forgives a tenth of a point because a single line is worth about that much, and a gate that
+  forgives is not what this bullet is for.
+
+  **Refusing is refusing.** A lowering without the flag, or with the flag and no reason, exits
+  non-zero and writes nothing. A reason of whitespace alone counts as none: the flag exists to
+  make a lowering cost a sentence somebody has to defend, and a space satisfies a presence check
+  while defending nothing. A well-typed empty value is the one input that makes a check pass by
+  asking nothing, and it is indistinguishable in the output from a check that asked everything
+  and was satisfied. The distinction matters because the defect being closed is a file
+  that changed when it should not have, so a version of this that warned and wrote anyway would
+  close nothing at all.
+
+  **A drop in either figure is a drop, and the two are never averaged.** An update where lines
+  fall and branches rise is a lowering and needs the flag, even though the pair read together
+  looks like an improvement. The two numbers answer different questions and a fall in one is not
+  paid for by a rise in the other; a rule that netted them would let any drop through behind a
+  large enough rise somewhere else, which is the accumulate-unseen failure this bullet exists to
+  stop, arriving one column over.
+
+  **The reason is `"reason"`, a key in the component's own object beside the two figures.** The
+  name is written here rather than left to the implementation because the test that asserts the
+  reason does not outlive its number has to look somewhere, and a structural search for the string
+  anywhere in the file passes for an implementation that writes it in the wrong place.
+
+  **The flag and the reason on an update that lowers nothing are a usage error.** Not ignored,
+  and not recorded: recording would put a justification beside a figure it does not justify, and
+  ignoring would let somebody believe a lowering had been explained when nothing was lowered and
+  nothing was written. This is the same shape as `--ref` with `--latest` in §11.2 -- two flags
+  that together ask no coherent question, answered by refusing rather than by picking one.
+
 - **`--update` refuses to record a figure below the floor.** The build fails on it regardless, so
   writing it would only leave a committed number that misleads the next reader about where the
   project stands.

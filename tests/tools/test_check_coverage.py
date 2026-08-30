@@ -13,6 +13,12 @@ inputs that could stop it complaining - a baseline entry that is a bare number,
 or one missing a metric, has to be an error rather than a comparison that
 quietly evaluates to "no change".
 
+The ratchet (SPEC 10.7.1, issue #191) adds a second silent-pass shape to guard
+against: a re-run measuring exactly the coverage already on file, where the
+full-precision figure needed rounding *up* to match the two decimals the file
+stores, must not read as a drop against its own rounded record and must not be
+refused as a lowering that never happened.
+
 Driven as a subprocess, not by importing `main`. The script resolves everything
 from its own location, so a copy dropped into `tmp_path/.github/` reads a report
 and a baseline that belong to the test; that keeps the exit status, the printed
@@ -217,6 +223,37 @@ def test_a_run_exactly_on_the_floor_passes(checkout):
     code, output = checkout.run("plugin")
 
     assert code == 0, output
+
+
+def test_the_floor_message_at_the_boundary_does_not_contradict_itself(checkout):
+    """SPEC 10.7.1 (refreshed): "The floor is the one comparison still made
+    on the raw measurement, and its message has to say so. The floor is not
+    a ratchet: nothing is written when it fails, and a build measuring
+    84.999 is below eighty-five however the number is displayed. But
+    printing that as `line coverage is 85.00%, below the 85% floor` is a
+    sentence contradicting itself, so the message shows enough digits to be
+    true rather than the two the file stores."
+
+    84.999 rounds to 85.00 at the two decimals the baseline file stores,
+    which is exactly the self-contradicting sentence quoted above. The
+    build must still fail - the floor compares the raw measurement, not the
+    rounded one the ratchet uses - and the printed figure must not read as
+    "85.00%" while saying it is below 85%.
+    """
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(84.999, 90.05)
+
+    code, output = checkout.run("plugin")
+
+    assert code == 1, (
+        f"84.999% lines, below the 85% floor on the raw measurement, passed: {output}"
+    )
+    assert "85.00%, below the 85% floor" not in output, (
+        f"the floor message still prints the self-contradicting 85.00%: {output}"
+    )
+    assert "84.999" in output, (
+        f"the floor message does not show enough digits to be true: {output}"
+    )
 
 
 def test_the_frontend_component_is_gated_by_the_same_floor(checkout):
@@ -639,17 +676,30 @@ def test_update_writes_a_file_that_reads_back(checkout):
     assert text.endswith("\n"), "a file without a trailing newline churns every diff"
 
 
-def test_update_records_the_figure_it_measured_not_the_one_it_replaced(checkout):
-    """A recorded fall is legitimate - `--update` is how a drop is accepted -
-    and the point of the flag is that the new number is what later runs compare
-    against."""
+def test_update_with_allow_drop_records_the_figure_it_measured_not_the_one_it_replaced(
+    checkout,
+):
+    """A recorded fall is legitimate once justified - `--update --allow-drop` is
+    how a drop is accepted (SPEC 10.7.1, issue #191) - and the point of the flag
+    is that the new number is what later runs compare against, not some blend of
+    the old and new.
+
+    Was `test_update_records_the_figure_it_measured_not_the_one_it_replaced`,
+    which exercised a bare `--update` lowering the figure. SPEC 10.7.1 now
+    requires `--allow-drop` and a reason for exactly that case; the refusal of
+    the bare form is asserted separately below.
+    """
     checkout.baseline({"plugin": {"lines": 99.0, "branches": 99.0}})
     checkout.measure(90.0, 90.0)
 
-    code, output = checkout.run("plugin", "--update")
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "synthetic reason for the test"
+    )
 
     assert code == 0, output
-    assert checkout.recorded()["plugin"] == {"lines": 90.0, "branches": 90.0}
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 90.0
+    assert recorded["branches"] == 90.0
 
 
 def test_update_will_not_quietly_record_a_figure_below_the_floor(checkout):
@@ -671,20 +721,519 @@ def test_update_will_not_quietly_record_a_figure_below_the_floor(checkout):
     )
 
 
+# ---------------------------------------------------------------------------
+# The ratchet: --update refuses to lower without --allow-drop and a reason
+# (SPEC 10.7.1, issue #191)
+# ---------------------------------------------------------------------------
+
+
+def test_update_refuses_to_lower_without_allow_drop(checkout):
+    """SPEC 10.7.1: "`--update` writes a figure at or above the recorded one
+    and refuses one below it." No `--allow-drop` in sight, so the refusal is
+    the only outcome; a warning printed while the file is rewritten anyway is
+    not a refusal."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert_no_traceback(output)
+    assert code != 0, f"a lowering --update without --allow-drop was accepted: {output}"
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}, (
+        "the recorded figure changed even though the update was refused"
+    )
+
+
+def test_update_refuses_a_drop_larger_than_the_tolerance(checkout):
+    """The case issue #191 was actually opened about: frontend branches moved
+    95.14 -> 94.61 across three merges, 0.53 off the peak, and nothing failed.
+    A bare `--update` recording that move today must be refused, not warned
+    about and accepted."""
+    checkout.baseline({"frontend": {"lines": 98.87, "branches": 95.14}})
+    checkout.measure(98.87, 94.61, component="frontend")
+
+    code, output = checkout.run("frontend", "--update")
+
+    assert code != 0, f"a drop of 0.53, well past the tolerance, was recorded: {output}"
+    assert checkout.recorded()["frontend"] == {"lines": 98.87, "branches": 95.14}
+
+
+def test_update_refuses_a_drop_smaller_than_the_warning_tolerance(checkout):
+    """SPEC 10.7.1: "The comparison is exact rather than tolerant, unlike the
+    drop warning next to it: the warning forgives a tenth of a point ... and a
+    gate that forgives is not what this bullet is for."
+
+    A drop of 0.01 is well inside `cc.DROP_TOLERANCE` (0.1) - the read-only
+    comparison would not even mention it - so an implementation that reused
+    the warning's tolerance for the ratchet, rather than comparing exactly,
+    would let this one through. That distinction is the whole point of the
+    "exact rather than tolerant" sentence, so it is the one this test has to
+    catch, not a drop large enough that either reading of the rule would
+    refuse it.
+    """
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(91.65, 90.05)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code != 0, (
+        f"a drop of 0.01, inside the warning's own tolerance, was accepted by "
+        f"a bare --update: {output}"
+    )
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}
+
+
+def test_update_of_a_figure_that_rounds_up_to_the_recorded_one_is_not_a_refused_drop(
+    checkout,
+):
+    """SPEC 10.7.1: "Round first, then compare, so the question asked is the
+    one the file can answer." The defect this closes was in the ratchet
+    itself: `--update` measuring the exact coverage already on file, where
+    the true figure needed rounding up to match the record, was refused as a
+    lowering - `branch coverage would drop from 90.04% to 90.04%` - because
+    the comparison used the unrounded measurement. A round-number fixture
+    cannot expose this; the figure has to be one where `round(x, 2) > x`.
+    """
+    true_branches = 90.03999999999999
+    assert round(true_branches, 2) > true_branches, "the fixture no longer needs rounding up"
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.04}})
+    checkout.measure(91.66, true_branches)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code == 0, (
+        f"a bare --update measuring the same coverage already on record "
+        f"({true_branches} rounds to 90.04) was refused as a drop: {output}"
+    )
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.04}
+
+
+def test_update_allow_drop_lowers_the_figure(checkout):
+    """SPEC 10.7.1: "Lowering is `--update --allow-drop`". With a reason
+    supplied, the lowering is accepted and the measured figure is recorded
+    exactly, not merged with the old one."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "removed a well-tested module"
+    )
+
+    assert code == 0, output
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 89.0
+    assert recorded["branches"] == 89.0
+
+
+def test_update_allow_drop_without_a_reason_is_refused(checkout):
+    """SPEC 10.7.1: "the flag requires a reason." `--allow-drop` given with no
+    reason at all must refuse exactly like the bare form - it is not enough to
+    ask for a lowering, the lowering has to be justified."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+
+    code, output = checkout.run("plugin", "--update", "--allow-drop")
+
+    assert code != 0, f"--allow-drop with no reason at all was accepted: {output}"
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}
+
+
+def test_the_lowering_reason_is_recorded_beside_the_number(checkout):
+    """SPEC 10.7.1: "the flag requires a reason, which is written into the
+    baseline file beside the number it lowered." Read back and asserted, as
+    the brief for this suite asks, rather than trusted because the run exited
+    zero."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+    reason = "synthetic-drop-reason-c3f1a9"
+
+    code, output = checkout.run("plugin", "--update", "--allow-drop", "--reason", reason)
+
+    assert code == 0, output
+    recorded = checkout.recorded()
+    assert recorded["plugin"]["lines"] == 89.0
+    assert recorded["plugin"]["branches"] == 89.0
+    assert recorded["plugin"]["reason"] == reason, (
+        f"the reason is not recorded under the 'reason' key beside the plugin "
+        f"entry's figures (SPEC 10.7.1): {recorded}"
+    )
+    assert set(recorded["plugin"]) == {"lines", "branches", "reason"}, (
+        f"the plugin entry has a key other than the two figures and the "
+        f"reason: {recorded['plugin']}"
+    )
+    assert "reason" not in recorded.get("frontend", {}), (
+        "the reason for a plugin drop leaked into an unrelated component"
+    )
+
+
+def test_a_later_upward_update_removes_the_stale_reason(checkout):
+    """SPEC 10.7.1: "The reason does not outlive the number it explains. It
+    describes why *that* figure was accepted, so the next update that raises
+    the figure removes it along with the number it was about." A reason left
+    behind after coverage has recovered would excuse a drop that is no longer
+    on record - a stale excuse for a number nobody can see any more."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+    reason = "synthetic-drop-reason-for-removal-9f2b"
+
+    code, output = checkout.run("plugin", "--update", "--allow-drop", "--reason", reason)
+    assert code == 0, output
+    dropped = checkout.recorded()["plugin"]
+    assert dropped.get("reason") == reason, (
+        f"sanity check failed: the drop reason was never recorded: {dropped}"
+    )
+
+    checkout.measure(95.0, 95.0)
+    code, output = checkout.run("plugin", "--update")
+
+    assert code == 0, output
+    risen = checkout.recorded()["plugin"]
+    assert risen["lines"] == 95.0
+    assert risen["branches"] == 95.0
+    assert "reason" not in risen, (
+        f"a stale drop reason survived the upward update that should have "
+        f"dropped it: {risen}"
+    )
+
+
+def test_an_update_that_repeats_the_same_figure_keeps_its_reason(checkout):
+    """SPEC 10.7.1: "An equal figure keeps its reason; only a rise removes
+    it. ... re-recording the same number leaves that number, and therefore
+    its justification, standing."
+
+    `test_a_later_upward_update_removes_the_stale_reason` raises the figure
+    and so cannot tell "removed on a rise" apart from "removed on any
+    update"; this one re-records the identical figure with a bare
+    `--update` and the reason must survive.
+    """
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+    reason = "synthetic-drop-reason-repeat-4b7e"
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", reason
+    )
+    assert code == 0, output
+    assert checkout.recorded()["plugin"].get("reason") == reason, (
+        "sanity check failed: the drop reason was never recorded"
+    )
+
+    checkout.measure(89.0, 89.0)
+    code, output = checkout.run("plugin", "--update")
+
+    assert code == 0, (
+        f"a bare --update re-recording the same figure already on file was "
+        f"refused as a lowering: {output}"
+    )
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 89.0
+    assert recorded["branches"] == 89.0
+    assert recorded.get("reason") == reason, (
+        f"an update that repeated the same figure removed the reason that "
+        f"explains it: {recorded}"
+    )
+
+
+def test_a_partial_entry_keeps_its_reason_when_the_missing_metric_is_first_recorded(
+    checkout,
+):
+    """SPEC 10.7.1 (refreshed): the equal-figure comparison "compares only
+    the metrics the old entry actually has, and records the missing one for
+    the first time without treating it as a mismatch." A baseline entry
+    holding only `lines` and a `reason` - `branches` never having been
+    established - must keep that reason across an `--update` that repeats
+    the recorded `lines` figure and records `branches` for the first time;
+    the missing metric is not a drop from nothing, it is the first
+    measurement of it.
+    """
+    checkout.baseline({"plugin": {"lines": 90.0, "reason": "r"}})
+    checkout.measure(90.0, 95.0)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code == 0, (
+        f"an --update repeating the one recorded metric and recording the "
+        f"other for the first time was refused as a lowering: {output}"
+    )
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 90.0
+    assert recorded["branches"] == 95.0
+    assert recorded.get("reason") == "r", (
+        f"the reason on a partial entry did not survive recording its "
+        f"missing metric for the first time: {recorded}"
+    )
+
+
+def test_a_fall_in_lines_is_a_drop_even_when_branches_rise(checkout):
+    """SPEC 10.7.1: "A drop in either figure is a drop, and the two are never
+    averaged. An update where lines fall and branches rise is a lowering and
+    needs the flag, even though the pair read together looks like an
+    improvement." Lines fall 91.66 -> 90.0, branches rise 90.05 -> 95.0; the
+    net reads as an improvement and must still be refused without the flag."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(90.0, 95.0)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code != 0, (
+        f"lines fell from 91.66 to 90.0 and the update was accepted because "
+        f"branches rose: {output}"
+    )
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}
+
+
+def test_a_fall_in_lines_with_a_rising_branch_figure_is_accepted_with_the_flag(checkout):
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(90.0, 95.0)
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "lines fell, branches rose"
+    )
+
+    assert code == 0, output
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 90.0
+    assert recorded["branches"] == 95.0
+
+
+def test_a_fall_in_branches_is_a_drop_even_when_lines_rise(checkout):
+    """The mirror of the case above. SPEC 10.7.1 states the rule for lines
+    falling and branches rising; a per-metric rule written for one column and
+    not the other is exactly the bug this test exists to catch. Branches fall
+    90.05 -> 89.0, lines rise 91.66 -> 95.0."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(95.0, 89.0)
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code != 0, (
+        f"branches fell from 90.05 to 89.0 and the update was accepted because "
+        f"lines rose: {output}"
+    )
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}
+
+
+def test_a_fall_in_branches_with_a_rising_line_figure_is_accepted_with_the_flag(checkout):
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(95.0, 89.0)
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "branches fell, lines rose"
+    )
+
+    assert code == 0, output
+    recorded = checkout.recorded()["plugin"]
+    assert recorded["lines"] == 95.0
+    assert recorded["branches"] == 89.0
+
+
+def test_allow_drop_and_reason_on_an_update_that_lowers_nothing_is_refused(checkout):
+    """SPEC 10.7.1: "The flag and the reason on an update that lowers nothing
+    are a usage error. Not ignored, and not recorded: recording would put a
+    justification beside a figure it does not justify, and ignoring would let
+    somebody believe a lowering had been explained when nothing was lowered
+    and nothing was written."
+
+    Both figures rise, so nothing dropped; `--allow-drop --reason` is given
+    anyway. The file must be left byte-identical - not merely "the exit code
+    was non-zero" - because "warned and wrote anyway" is exactly the failure
+    this rule forbids, and an exit-status assertion alone cannot tell that
+    apart from a correct refusal.
+    """
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(95.0, 95.0)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "nothing actually dropped"
+    )
+
+    assert code != 0, (
+        f"--allow-drop --reason on a non-lowering update was accepted: {output}"
+    )
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though the update was refused as a "
+        "usage error - the file must be byte-identical, not merely unparsed "
+        "differently"
+    )
+
+
+def test_allow_drop_without_update_is_a_usage_error(checkout):
+    """SPEC 10.7.1: "`--allow-drop` without `--update`, and `--reason`
+    without `--allow-drop`, are usage errors refused during argument
+    parsing." Read-only invocations only ever warn or fail on the floor;
+    `--allow-drop` has no meaning without `--update` and must be refused
+    before anything is read or written.
+    """
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(91.66, 90.05)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run("plugin", "--allow-drop")
+
+    assert code != 0, f"--allow-drop without --update was accepted: {output}"
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though --allow-drop without "
+        "--update is a usage error"
+    )
+
+
+def test_reason_without_allow_drop_is_a_usage_error(checkout):
+    """SPEC 10.7.1, same bullet. `--reason` given on an `--update` that does
+    not also carry `--allow-drop` is a usage error, not a reason silently
+    discarded and not a lowering silently permitted."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run(
+        "plugin", "--update", "--reason", "no allow-drop given"
+    )
+
+    assert code != 0, f"--reason without --allow-drop was accepted: {output}"
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though --reason without "
+        "--allow-drop is a usage error"
+    )
+
+
+def test_a_whitespace_only_reason_is_refused_like_an_absent_one(checkout):
+    """SPEC 10.7.1: "the flag requires a reason." A reason made only of
+    whitespace carries no information a reviewer could read in the diff, so
+    it must be refused the same way an absent `--reason` already is
+    (`test_update_allow_drop_without_a_reason_is_refused`)."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(89.0, 89.0)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "   "
+    )
+
+    assert code != 0, f"a whitespace-only --reason was accepted as a reason: {output}"
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though the whitespace-only reason "
+        "was refused"
+    )
+
+
+def test_a_non_string_stored_reason_is_refused_like_one_from_the_command_line(checkout):
+    """SPEC 10.7.1 (refreshed): "A `reason` read back off disk is checked the
+    way one arriving on the command line is. The same string cannot be
+    refused as an argument and accepted as a file value: a `reason` that is
+    not a string ... makes the entry malformed like any other unreadable
+    field."
+
+    A stored `reason: 123` on an entry whose figures are being re-recorded
+    unchanged (no `--allow-drop` needed) must be refused rather than carried
+    onto the update verbatim - the way `--reason 123` would be refused as an
+    argument."""
+    checkout.baseline({"plugin": {"lines": 90.0, "branches": 90.0, "reason": 123}})
+    checkout.measure(90.0, 90.0)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code != 0, (
+        f"a stored reason of 123, not a string, was accepted on an equal "
+        f"update: {output}"
+    )
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though the stored reason was not a "
+        "string"
+    )
+
+
+def test_a_blank_stored_reason_is_refused_like_one_from_the_command_line(checkout):
+    """The other half of the same sentence: "or is blank" alongside "not a
+    string". A stored `reason: "  "` must be refused the same way
+    `--reason "  "` already is
+    (`test_a_whitespace_only_reason_is_refused_like_an_absent_one`), not
+    carried onto the next update unexamined."""
+    checkout.baseline({"plugin": {"lines": 90.0, "branches": 90.0, "reason": "  "}})
+    checkout.measure(90.0, 90.0)
+    before = checkout.baseline_path.read_text(encoding="utf-8")
+
+    code, output = checkout.run("plugin", "--update")
+
+    assert code != 0, (
+        f"a stored reason of whitespace only was accepted on an equal "
+        f"update: {output}"
+    )
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though the stored reason was blank"
+    )
+
+
+def test_update_with_allow_drop_still_refuses_below_the_floor(checkout):
+    """SPEC 10.7.1: "`--update` refuses to record a figure below the floor."
+    That sentence names no exception for `--allow-drop`, and giving a reason
+    for a below-floor figure would still leave a committed number the build
+    itself cannot pass."""
+    checkout.baseline({"plugin": {"lines": 91.66, "branches": 90.05}})
+    checkout.measure(70.0, 60.0)
+
+    code, output = checkout.run(
+        "plugin", "--update", "--allow-drop", "--reason", "reason given anyway"
+    )
+
+    assert code != 0, f"a below-floor figure was recorded with a reason attached: {output}"
+    assert "85" in output, output
+    assert checkout.recorded()["plugin"] == {"lines": 91.66, "branches": 90.05}
+
+
+def test_a_fall_past_the_tolerance_still_only_warns_without_update(checkout):
+    """The read-only comparison path - no `--update` at all - is the existing
+    drop-tolerance behaviour SPEC 10.7 already described, and the ratchet must
+    not have turned it into a build failure: the acceptance criteria for issue
+    #191 ask only that `--update` itself refuse a lowering, not that every run
+    that merely observes one now fails the build."""
+    checkout.baseline({"frontend": {"lines": 98.87, "branches": 95.14}})
+    checkout.measure(98.87, 94.61, component="frontend")
+
+    code, output = checkout.run("frontend")
+
+    assert code == 0, f"observing a drop without --update failed the build: {output}"
+    assert diagnostics(output), "a drop past the tolerance produced no report at all"
+    assert checkout.recorded()["frontend"] == {"lines": 98.87, "branches": 95.14}, (
+        "a run without --update rewrote the baseline"
+    )
+
+
 def test_update_on_a_malformed_baseline_does_not_lose_the_other_component(checkout):
-    """Recovering the file is a legitimate use of `--update`, and it must not
-    turn one bad entry into a file with one entry."""
+    """SPEC 10.7.1: "A malformed entry is not repaired by `--update`. ...
+    the repair is a hand edit ... and the refusal is the same one the
+    read-only path already gives."
+
+    `--update` on a malformed `plugin` entry must be refused, not used as a
+    chance to overwrite a figure the script could not read. Refused, and the
+    other component's entry - and the whole file - must survive untouched.
+    """
     checkout.baseline(
         {"plugin": 91.66, "frontend": {"lines": 96.18, "branches": 89.55}}
     )
+    before = checkout.baseline_path.read_text(encoding="utf-8")
     checkout.measure(93.5, 92.25)
 
     code, output = checkout.run("plugin", "--update")
 
     assert_no_traceback(output)
-    if code == 0:
-        assert checkout.recorded()["frontend"] == {"lines": 96.18, "branches": 89.55}
-        assert checkout.recorded()["plugin"] == {"lines": 93.5, "branches": 92.25}
+    assert code != 0, (
+        f"--update on a malformed plugin entry was accepted rather than "
+        f"refused, repairing a figure the script could not read: {output}"
+    )
+    after = checkout.baseline_path.read_text(encoding="utf-8")
+    assert after == before, (
+        "the baseline file changed even though the malformed entry was "
+        "refused - refusing is refusing, per SPEC 10.7.1"
+    )
+    assert checkout.recorded()["frontend"] == {"lines": 96.18, "branches": 89.55}
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +1289,32 @@ def test_the_script_is_run_from_anywhere_the_workflow_puts_it(checkout):
 # ---------------------------------------------------------------------------
 
 
+def assert_entry_is_well_formed(component: str, entry: dict) -> None:
+    """SPEC 10.7.1: an entry is the two figures, optionally beside a `reason`
+    for a lowering, and the reason - wherever it came from - must be a
+    non-blank string.
+
+    Shared between the committed file below and the synthetic fixtures right
+    after it: the committed baseline has never carried a `reason`, so a check
+    reachable only through that file never runs its own `reason` branch.
+    """
+    assert {"lines", "branches"} <= set(entry) <= {"lines", "branches", "reason"}, (
+        "SPEC 10.7.1: an entry is the two figures, optionally beside a "
+        f"'reason' for a lowering: {component} = {entry}"
+    )
+    if "reason" in entry:
+        assert isinstance(entry["reason"], str) and entry["reason"].strip(), (
+            f"{component}.reason must be a non-empty string when present: {entry}"
+        )
+    for metric in ("lines", "branches"):
+        value = entry[metric]
+        assert isinstance(value, (int, float)) and not isinstance(value, bool)
+        assert value >= cc.FLOOR, (
+            f"{component}.{metric} is recorded at {value}, under the "
+            f"{cc.FLOOR:g} floor: every run compares against a failing figure"
+        )
+
+
 def test_the_committed_baseline_is_well_formed_and_above_the_floor():
     """The validation is worth nothing if the file it guards was never run past
     it, and a committed figure below the floor is a build that cannot pass."""
@@ -752,10 +1327,22 @@ def test_the_committed_baseline_is_well_formed_and_above_the_floor():
     for component, entry in baseline.items():
         if entry is None:
             continue
-        assert set(entry) == {"lines", "branches"}, (component, entry)
-        for metric, value in entry.items():
-            assert isinstance(value, (int, float)) and not isinstance(value, bool)
-            assert value >= cc.FLOOR, (
-                f"{component}.{metric} is recorded at {value}, under the "
-                f"{cc.FLOOR:g} floor: every run compares against a failing figure"
-            )
+        assert_entry_is_well_formed(component, entry)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"lines": 90.0, "branches": 90.0, "reason": ""},
+        {"lines": 90.0, "branches": 90.0, "reason": 7},
+    ],
+    ids=["blank-reason", "non-string-reason"],
+)
+def test_an_entry_with_a_malformed_reason_fails_the_shared_validation(entry):
+    """Drives `assert_entry_is_well_formed`'s `reason` branch directly. The
+    committed baseline in `test_the_committed_baseline_is_well_formed_and_
+    above_the_floor` has no `reason` recorded today, so without a fixture
+    that has one, that branch is executed by nothing and its assertion is
+    dead - a check that passed because it never ran."""
+    with pytest.raises(AssertionError):
+        assert_entry_is_well_formed("plugin", entry)

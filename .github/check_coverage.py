@@ -16,7 +16,19 @@ only does the first:
    need a red build to land.
 
 Raising the recorded figure is `check_coverage.py <component> --update`, one
-documented command rather than an edit to a JSON file by hand.
+documented command rather than an edit to a JSON file by hand. Lowering it is
+deliberately harder (SPEC 10.7.1, issue #191): `--update` alone refuses a figure
+below the one on record, and `--update --allow-drop --reason "..."` is the only
+way past that refusal. The reason lands in the baseline entry next to the number
+it explains, so a reviewer reads it in the diff rather than having to ask why the
+number moved down. It is written into that committed, public file verbatim, so
+it has to describe what stopped being covered and why that was acceptable, not
+name a branch, an internal ticket, or a machine - the log already records where
+the change came from, and the log is not public in the way this file is. The
+next upward update replaces the whole entry and the reason
+goes with it - it explained that number, not the one that follows. Recording the
+same number again is not a rise, so it leaves the reason standing: the reason is
+still about the figure on file, which has not changed.
 
 Standard library only: this runs in a job that has installed the component's own
 dependencies and nothing else.
@@ -25,6 +37,7 @@ Usage:
     python .github/check_coverage.py plugin
     python .github/check_coverage.py frontend
     python .github/check_coverage.py frontend --update
+    python .github/check_coverage.py frontend --update --allow-drop --reason "..."
 """
 
 from __future__ import annotations
@@ -117,6 +130,21 @@ def read_plugin() -> tuple[Path, float, float]:
 READERS = {"frontend": read_frontend, "plugin": read_plugin}
 
 
+def _below_floor_text(value: float) -> str:
+    """Render a below-floor measurement so the message stays true.
+
+    The floor is checked against the raw measurement, not a rounded figure
+    (SPEC 10.7.1), but the usual two-decimal display can round a value that
+    failed the check up to the floor itself - `84.999` prints as `85.00`,
+    contradicting the "below" it sits next to. When rounding to two decimals
+    would hide the shortfall, show more digits instead.
+    """
+    text = f"{value:.2f}"
+    if float(text) >= FLOOR:
+        text = f"{value:.5f}".rstrip("0").rstrip(".")
+    return text
+
+
 def load_baseline() -> dict:
     """The recorded figures, or an empty record if none have been written yet."""
     if not BASELINE_PATH.exists():
@@ -140,6 +168,9 @@ def read_recorded(component: str, entry: object) -> dict[str, float]:
       metric holding a string is a malformed record, and it is reported rather
       than skipped: `.get(name, 0.0)` on a broken file turns the drop check off
       without saying so, which is the one failure this script must not have.
+    - **A `reason` that is not a string, or is blank.** SPEC 10.7.1 refuses a
+      `--reason` of the same shape from the command line, so a value read back
+      off disk is held to the same rule rather than carried verbatim.
     """
     if entry is None:
         return {}
@@ -148,6 +179,13 @@ def read_recorded(component: str, entry: object) -> dict[str, float]:
             f"error: {BASELINE_PATH.name} entry for {component} is "
             f"{type(entry).__name__}, not an object of coverage percentages"
         )
+    if "reason" in entry:
+        reason = entry["reason"]
+        if not isinstance(reason, str) or not reason.strip():
+            raise SystemExit(
+                f"error: {BASELINE_PATH.name} entry for {component} has an "
+                f"invalid 'reason' value: {reason!r}"
+            )
     figures: dict[str, float] = {}
     for key in ("lines", "branches"):
         if key not in entry:
@@ -178,13 +216,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="record the current figures as the new baseline instead of checking them",
     )
+    parser.add_argument(
+        "--allow-drop",
+        action="store_true",
+        help=(
+            "with --update, permit recording a figure below the one on record "
+            "(SPEC 10.7.1); requires --reason"
+        ),
+    )
+    parser.add_argument(
+        "--reason",
+        help=(
+            "what stopped being covered and why that was acceptable, not where "
+            "the change came from; required with --allow-drop"
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.allow_drop and not args.update:
+        parser.error("--allow-drop only makes sense with --update")
+    if args.reason is not None and not args.allow_drop:
+        parser.error("--reason only makes sense with --allow-drop")
 
     path, lines, branches = READERS[args.component]()
     measured = f"{lines:.2f}% lines, {branches:.2f}% branches"
 
     below = [
-        f"{name} coverage is {value:.2f}%, below the {FLOOR:g}% floor"
+        f"{name} coverage is {_below_floor_text(value)}%, below the {FLOOR:g}% floor"
         for name, value in (("line", lines), ("branch", branches))
         if value < FLOOR
     ]
@@ -202,8 +260,73 @@ def main(argv: list[str] | None = None) -> int:
                 "raise the coverage first, the baseline is not the floor."
             )
             return 1
+
         baseline = load_baseline()
-        baseline[args.component] = {"lines": round(lines, 2), "branches": round(branches, 2)}
+        old_entry = baseline.get(args.component)
+        recorded = read_recorded(args.component, old_entry)
+
+        # The file holds figures rounded to two decimals, so the comparison has
+        # to be against what would be *written*, not the full-precision
+        # measurement: otherwise a true 90.03999...% is recorded as 90.04% and
+        # a later run measuring the same coverage reads back as lower than
+        # itself (SPEC 10.7.1).
+        new_entry = {"lines": round(lines, 2), "branches": round(branches, 2)}
+
+        # SPEC 10.7.1 / issue #191: the recorded figure ratchets upward. A
+        # metric that would come in below what is already on record is a
+        # drop, and a drop needs --allow-drop and a reason, not just a run
+        # that happened to measure lower.
+        dropped = {
+            name: (recorded[key], new_entry[key])
+            for name, key in (("line", "lines"), ("branch", "branches"))
+            if key in recorded and new_entry[key] < recorded[key]
+        }
+
+        if dropped:
+            if not args.allow_drop:
+                for name, (before, after) in dropped.items():
+                    print(
+                        f"::error::{args.component}: {name} coverage would drop from "
+                        f"{before:.2f}% to {after:.2f}% (SPEC 10.7.1)"
+                    )
+                print(
+                    f"{args.component}: refusing to lower the recorded figure; rerun with "
+                    '--update --allow-drop --reason "..." if the drop is intended.'
+                )
+                return 1
+            reason = (args.reason or "").strip()
+            if not reason:
+                print(
+                    f"::error::{args.component}: --allow-drop requires --reason \"...\"; "
+                    "a lowering with no reason recorded is the thing this refuses."
+                )
+                return 1
+            new_entry["reason"] = reason
+        elif args.allow_drop or args.reason:
+            # Nothing dropped, so a reason would justify a figure it does not
+            # explain, and silently ignoring the flag would let someone believe
+            # a lowering had been recorded when nothing was. Neither is right;
+            # refuse instead (SPEC 10.7.1).
+            print(
+                f"::error::{args.component}: --allow-drop/--reason given but "
+                f"{measured} lowers nothing on record."
+            )
+            return 1
+        elif (
+            isinstance(old_entry, dict)
+            and "reason" in old_entry
+            and recorded
+            and all(new_entry[key] == value for key, value in recorded.items())
+        ):
+            # An equal figure keeps the reason that explains the number on
+            # file; only a rise removes it (SPEC 10.7.1). Only the metrics the
+            # old entry actually recorded are compared, so a partial entry
+            # (one metric only) is not required to match a metric it never
+            # had. A rise falls through to the plain new_entry below, with no
+            # "reason" key.
+            new_entry["reason"] = old_entry["reason"]
+
+        baseline[args.component] = new_entry
         write_baseline(baseline)
         print(f"{args.component}: baseline recorded at {measured} (from {path})")
         return 0

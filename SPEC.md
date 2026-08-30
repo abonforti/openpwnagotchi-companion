@@ -5922,6 +5922,19 @@ Release mechanics:
   than shipping a mislabelled artifact.
 - `CHANGELOG.md` follows Keep a Changelog, with an `Unreleased` section maintained as changes
   land, so cutting a release is renaming a heading rather than reconstructing history.
+- **The structure is checked, because it had already gone wrong twice.** Under a version
+  heading, each type heading appears **at most once**, every type heading is one of Keep a
+  Changelog's six, and they appear in that specification's own order. Both defects had landed:
+  `Unreleased` carried two separate `### Changed` blocks, and six entries that add something
+  sat under the second of them. Neither is a formatting quibble. A reader looking for what a
+  cycle added finds the first `Added` heading and stops, and entries filed under the wrong one
+  are entries nobody looking for them will see -- which is how the whole of the frontend came
+  to be missing from a changelog that had a section for it.
+- **What lands in the changelog is what a person installing this would want to know**, which is
+  not the same as what the diff did. A change with no user-visible consequence does not need an
+  entry, and the judgement is the author's; what is not acceptable is a cycle's worth of work
+  arriving with no entry because nobody was looking. Issue #179 carries the question of whether
+  that judgement should be gated by anything, and this specification does not pre-empt it.
 - `v0.0.1` is the first tag: the scaffold, the protocol schemas and the tooling, with no working
   plugin yet. Tags then advance through `0.x` as work lands — there is no obligation to tag
   every merge, only what is worth installing. `v1.0.0` is cut when the **`Field-ready` milestone** (§6.2)

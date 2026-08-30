@@ -12,6 +12,84 @@ against real hardware.
 
 ## [Unreleased]
 
+### Added
+
+- **The PWA is an app.** It began as a navigation shell around seven routes, six of which were
+  nine-line placeholders. Six of the seven views now exist, and each arrived with the rule it
+  needed decided before it was drawn. The Map is the one still to come (issue #198), and the
+  browser does not yet supply a position to draw on it (issue #175).
+  - **The navigation shell**: five slots for seven views, the seventh and the two spare ones
+    reached through a More sheet, a rail instead of a bottom bar in short landscape, and views
+    that stay mounted when navigated away from so a screen does not lose its place (issue #40).
+  - **Dashboard**, a status card of the unit's readings rather than a summary of them, saying
+    plainly what it does not know instead of showing a confident zero (issue #121).
+  - **Settings**, which is what made the app reachable at all: before it there was no screen that
+    called `activateHost`, so no client was ever built and the socket was never opened on a fresh
+    install, behind a Dashboard advising the owner to check a hotspot that nothing was using. It
+    derives the first-run host from the address the page was served from, and carries the host
+    list, the token field and the diagnostics (issue #134).
+  - **The four state controls** on the Dashboard, as an inline two-step confirm rather than a
+    dialog: one control armed at a time, arming that does not expire, focus moving to Cancel and
+    not to Confirm, and a refusal appearing next to the control that was tapped rather than
+    somewhere global (issue #184).
+  - **Wi-Fi**, two segments over one screen: networks in range, ordered by signal or by channel
+    on request, and captures on disk, left in the order the unit sent them. A read queues while
+    the socket is down and a state command is refused, which is not the same rule and is not made
+    to look like one (issue #187).
+  - **Peers**, and with it the refresh rule stopped being the Wi-Fi view's private business and
+    became shared (issue #190).
+  - **The Log**, live-following on the one timer this client is allowed, with the exception
+    argued rather than assumed, and a font-size control for reading it outdoors. Its filter
+    narrows what is on the screen and never what is asked for. The level filter §4.5.1 asks for
+    is deliberately **not** built: nothing here has seen a real log line, so its format is not a
+    fact this project may rely on (issue #193, blocked on issue #194).
+  - **The Mirror**, the unit's own e-ink screen, on the second timer, granted on the record with
+    what has not been measured written down beside it (issue #196).
+- **Tagging now produces something to install.** `.github/workflows/release.yml` builds the
+  frontend on a pushed `v*` tag, packs `frontend/dist` into `dist.tgz`, and publishes a Release
+  carrying that archive and a `SHA256SUMS` beside it - which is what `tools/install-on-pi.sh` has
+  always downloaded and verified. The workflow was specified in five places and had never been
+  written, so a tag built nothing, attached nothing, and failed at nothing (issue #128). It
+  refuses a tag that is not an ancestor of `master`, which catches a tag on a commit that was
+  never merged - though not a tag carrying its own copy of the workflow, since GitHub runs the one
+  it finds on the tagged ref, and closing that needs a tag protection ruleset (issue #181). It
+  refuses a tag whose version disagrees with
+  `plugin/companion.py` or `frontend/package.json` - which is the check SPEC §2.1 already claimed
+  CI performed. A tag with a pre-release suffix publishes a pre-release, so an `-rc` does not
+  become the version an installer picks up by default.
+- **A configuration key the plugin does not know is named at `WARNING`, once, at load.** The
+  message gives the key and the set of keys that are accepted, and the plugin comes up on its
+  defaults as before. Nothing was said until now, so `bind_address` for `bind_addresses` - a
+  singular that reads correctly and binds nothing - looked exactly like a working configuration.
+  `enabled` is pwnagotchi's own key and never warns, and the withdrawn `interfaces` keeps its own
+  message from the breaking change under `Changed` rather than being reported twice. A block with
+  nothing but valid keys logs nothing at all (issue #137).
+- `tools/gen-ca.sh` and `tools/gen-cert.sh`: a private CA and an `iPAddress`-SAN server
+  certificate, non-interactive and idempotent, encoding the three constraints iOS enforces
+  silently (critical `basicConstraints`, IP SANs and never `DNS:`, validity under 825 days).
+- `tests/test_integration_ws.py`: a real WSS server and a real client over TLS material issued
+  by those scripts, driving every command end to end.
+- `tests/tools/test_certs.py`: the certificate scripts driven with `subprocess` and inspected
+  with `openssl`, in pytest rather than bats.
+- `keepalive` is now actually emitted, every `keepalive_interval` seconds (default 20). It was in
+  the schema and in `docs/PROTOCOL.md` but nothing sent it. The `0`-disables behaviour described
+  here was withdrawn later in this same unreleased cycle; see `Changed` below.
+- `.github/labels.json` and `.github/sync_labels.sh`: the label taxonomy as a file, and the
+  script that applies it.
+- Build specification (`SPEC.md`), with a pinned-facts allowlist of every pwnagotchi symbol the
+  plugin may use, verified against the tag named by `verified_against` in
+  `.github/pinned_symbols.json`. The version was written here too until that key became the
+  one place it is named (issue #151).
+- WebSocket contract as JSON Schema (`docs/schemas/`), the single source of truth for the wire
+  format, plus `docs/PROTOCOL.md` for the framing and lifecycle rules a schema cannot express.
+- `tools/gen-protocol-types.mjs`, which generates `frontend/src/lib/protocol.ts` from the
+  schemas and can verify the two are in sync.
+- Repository scaffold: `README.md`, `SECURITY.md`, GPL-3.0 `LICENSE`, `.gitignore`.
+- Local quality gates: `.githooks/pre-commit` (leak scan against an out-of-repo denylist) and
+  `.githooks/pre-push` (refuses a direct push to `master`).
+- Project agent definitions in `.claude/agents/` for implementation, test authoring, review, QA
+  and security auditing.
+
 ### Changed
 
 - **`rebind_interval` is clamped to 5-300 seconds**, and a configured `0` now takes the floor of
@@ -40,7 +118,6 @@ against real hardware.
   `.github/pinned_symbols.json`, and `check_pinned_facts.py` now runs against that tag by default
   instead of against the latest release. `--latest` asks the other question, has upstream moved,
   and is what the weekly job runs (issue #151).
-
 - **`mode` is null when the plugin has no agent**, on both `Stats` and `FaceStatus`, where it
   used to be `AUTO`. This is a re-shaped message and therefore the project's first MINOR bump
   under SPEC §12, to **0.1.0**. It was found on the first end-to-end run on real hardware
@@ -65,7 +142,6 @@ against real hardware.
   session refresh is gone with it, which is a fix rather than a casualty: `agent.session()` is a
   bettercap GET with a 30 second timeout, and it was being made inside a pwnagotchi lifecycle
   hook.
-
 - **The two loop intervals are clamped: `keepalive_interval` to 5-20 s, `session_poll_interval`
   to 1-5 s.** `stats` now rides a ticker of its own at `keepalive_interval` (SPEC §2.4, §4.3.7,
   issue #65), so between
@@ -89,6 +165,9 @@ against real hardware.
   `bind_addresses = ["172.20.10.0/28", "10.0.0.2"]`, whose entries are IPv4 addresses or CIDR
   blocks. A configuration still carrying `interfaces` is warned about and ignored; it binds
   nothing, so anyone who installed from `master` must edit their `config.toml`.
+- `acknowledgment` no longer requires `message_id`: a successful `auth` is acknowledged whether
+  or not the request carried one, because it is the client's only signal that the connection is
+  usable.
 
 ### Security
 
@@ -115,55 +194,3 @@ against real hardware.
   just that one connection: every other visitor's PWA hung mid-request, and even reloading the
   plugin could not clear it, since the same stall blocked shutdown too. No token guards this
   port, so anyone who could reach it at all could trigger it with a single idle connection.
-
-### Added
-
-- **Tagging now produces something to install.** `.github/workflows/release.yml` builds the
-  frontend on a pushed `v*` tag, packs `frontend/dist` into `dist.tgz`, and publishes a Release
-  carrying that archive and a `SHA256SUMS` beside it - which is what `tools/install-on-pi.sh` has
-  always downloaded and verified. The workflow was specified in five places and had never been
-  written, so a tag built nothing, attached nothing, and failed at nothing (issue #128). It
-  refuses a tag that is not an ancestor of `master`, which catches a tag on a commit that was
-  never merged - though not a tag carrying its own copy of the workflow, since GitHub runs the one
-  it finds on the tagged ref, and closing that needs a tag protection ruleset (issue #181). It
-  refuses a tag whose version disagrees with
-  `plugin/companion.py` or `frontend/package.json` - which is the check SPEC §2.1 already claimed
-  CI performed. A tag with a pre-release suffix publishes a pre-release, so an `-rc` does not
-  become the version an installer picks up by default.
-- **A configuration key the plugin does not know is named at `WARNING`, once, at load.** The
-  message gives the key and the set of keys that are accepted, and the plugin comes up on its
-  defaults as before. Nothing was said until now, so `bind_address` for `bind_addresses` - a
-  singular that reads correctly and binds nothing - looked exactly like a working configuration.
-  `enabled` is pwnagotchi's own key and never warns, and the withdrawn `interfaces` keeps its own
-  message from the breaking change above rather than being reported twice. A block with nothing
-  but valid keys logs nothing at all (issue #137).
-- `tools/gen-ca.sh` and `tools/gen-cert.sh`: a private CA and an `iPAddress`-SAN server
-  certificate, non-interactive and idempotent, encoding the three constraints iOS enforces
-  silently (critical `basicConstraints`, IP SANs and never `DNS:`, validity under 825 days).
-- `tests/test_integration_ws.py`: a real WSS server and a real client over TLS material issued
-  by those scripts, driving every command end to end.
-- `tests/tools/test_certs.py`: the certificate scripts driven with `subprocess` and inspected
-  with `openssl`, in pytest rather than bats.
-- `keepalive` is now actually emitted, every `keepalive_interval` seconds (default 20). It was in
-  the schema and in `docs/PROTOCOL.md` but nothing sent it. The `0`-disables behaviour described
-  here was withdrawn later in this same unreleased cycle; see `Changed` above.
-- `.github/labels.json` and `.github/sync_labels.sh`: the label taxonomy as a file, and the
-  script that applies it.
-
-### Changed
-
-- `acknowledgment` no longer requires `message_id`: a successful `auth` is acknowledged whether
-  or not the request carried one, because it is the client's only signal that the connection is
-  usable.
-
-- Build specification (`SPEC.md`), with a pinned-facts allowlist of every pwnagotchi symbol the
-  plugin may use, verified against jayofelony v2.9.5.6.
-- WebSocket contract as JSON Schema (`docs/schemas/`), the single source of truth for the wire
-  format, plus `docs/PROTOCOL.md` for the framing and lifecycle rules a schema cannot express.
-- `tools/gen-protocol-types.mjs`, which generates `frontend/src/lib/protocol.ts` from the
-  schemas and can verify the two are in sync.
-- Repository scaffold: `README.md`, `SECURITY.md`, GPL-3.0 `LICENSE`, `.gitignore`.
-- Local quality gates: `.githooks/pre-commit` (leak scan against an out-of-repo denylist) and
-  `.githooks/pre-push` (refuses a direct push to `master`).
-- Project agent definitions in `.claude/agents/` for implementation, test authoring, review, QA
-  and security auditing.

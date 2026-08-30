@@ -7520,6 +7520,115 @@ name a path outside the repository rather than "outside the tree you were given"
 wording that produced `frontend/public/src/` in the first place: it is outside `frontend/src/`,
 and inside the directory that ships.
 
+### 13.3 Two leak gates, and the moment each one runs (issue #203)
+
+This project has two leak gates and they used to run at two different moments, and nothing said
+so in one place. That is written here so the next person does not have to reconstruct it from two
+files.
+
+- The **owner denylist** is hostnames, addresses, machine names, and it lives outside this
+  repository by construction (§13, rule 3). `.githooks/pre-commit` runs it, and it runs **before
+  a commit exists**.
+- The **generic scan** is PEM key material, provider token shapes, credential assignments and
+  file types that must never be tracked. `.github/check_secrets.py` is it, and until this section
+  it ran **only in CI**, which is after a push to a public remote.
+
+So the half that catches a private key or a provider token caught it once it was already
+published. The denylist gate, the early one, cannot be taught those shapes without turning the
+owner's out-of-repository list into a general-purpose scanner it was never meant to be, and the
+generic scanner cannot be taught the owner's terms without the runner knowing them, which is the
+leak. Neither gate can absorb the other. What was missing was not a merge of the two, it was the
+generic one running early as well.
+
+**`git push --force` does not unpublish a blob a crawler already fetched.** That asymmetry is the
+whole argument. A hostname committed and removed is embarrassing; a private key committed and
+removed has to be rotated, and rotation is a thing you do afterwards rather than instead. The
+denylist was put in the hook for this reason and the other half was left in CI without the reason
+ever being revisited.
+
+So the hook now runs both, and the split is by **what** each gate knows rather than by **when**
+it runs:
+
+| gate | knows | runs |
+| --- | --- | --- |
+| owner denylist | this owner's infrastructure | pre-commit only, and never in CI |
+| `check_secrets.py` | shapes that are credentials to anyone | pre-commit and CI |
+
+CI keeps the generic scan rather than delegating it to the hook, because a hook is a local
+courtesy: it is not installed until somebody runs `git config core.hooksPath`, it can be skipped
+with `--no-verify`, and a contributor's clone has neither. The hook is where a leak is cheapest
+to stop and CI is where it is guaranteed to be noticed, and those are different guarantees.
+
+**The staged content is what is scanned, not the working tree.** A file clean on disk and dirty
+in the index must fail, so `check_secrets.py --staged` reads each blob out of the index rather
+than off the filesystem. Materialising the index into a temporary directory and scanning that was
+the obvious alternative and it is wrong twice: the paths reported would be temporary ones rather
+than the ones a person has to go and fix, and the `tests/fakes/fixtures/` exemption is measured
+from the repository root (§5.1.2), so every capture fixture in a staged commit would be refused
+by name.
+
+**`--staged` reads the repository the script lives in.** The anchor is the script's own
+location, not the caller's working directory, because the hook is installed in the repository
+being committed to and a mode that scanned whatever repository somebody happened to be standing
+in would be a surprising thing to hand a gate. The consequence is worth stating because it costs
+an hour to rediscover: a test cannot exercise `--staged` against a throwaway repository without
+copying the script into it.
+
+**An empty staging area is not a vacuous scan.** §5.1.2 makes a run that considered nothing exit
+`2`, because a verdict earned by examining nothing is a fail-open. `--staged` on a commit that
+adds and modifies nothing is a different thing: the index was read successfully and it genuinely
+holds nothing to scan, which is what a deletion-only commit looks like. That exits `0` and says
+which of the two it was. The distinction is the whole of §5.1.2's argument applied honestly:
+"nothing was there" and "nothing was examined" are different sentences, and a gate that confuses
+them either fails-open or refuses ordinary commits.
+
+**A rename is a change, and neither gate used to think so.** Both enumerations filtered the
+staged diff with `--diff-filter=ACM`, and git classifies a file that is renamed and modified in
+one commit as `R`. So `ACM` returned nothing for such a commit, the hook reached its
+"nothing staged, exit 0" line, and **the denylist gate did not run at all**. Renaming a file and
+adding a credential to it in the same commit walked past the gate whose whole purpose is to stop
+that. Found while wiring the generic scan in, reproduced before it was believed: `git mv` plus an
+edit yields `R086` and an empty `ACM` listing. Renames and copies are in the filter now, in both
+gates, and the letter is spelled out in a comment beside each so nobody narrows it back on the
+grounds that a rename is not a change.
+
+The two gates still read different things about that file and that is deliberate. The denylist
+reads **the lines this commit added**, because re-reporting a pre-existing line on every commit
+trains people to ignore the hook. The generic scan reads **the whole blob from the index**,
+because a credential does not have to be on a line this commit touched to be published by it.
+Neither is the other's bug.
+
+**Failing closed, in the hook's own terms.** The rule of §13 rule 6 applies to the hook's call as
+much as to anything else. A missing interpreter, an unreadable file, a `check_secrets.py` that is
+not there, or any exit status that is not one of the three it documents, all refuse the commit
+and say which happened. Exit `1` and exit `2` are reported differently, because "this commit
+carries a credential" and "the gate is broken" ask the author for different things.
+
+That distinction is a contract and not a wording preference, so it is pinned here rather than
+left to whoever edits the hook next. **The hook's own line says `found a possible credential`
+when, and only when, the scanner exited 1.** Any other status produces a line naming the status
+it got and saying it was not one the hook understands, and that line must not claim a credential
+was found.
+
+Naming the phrase is not pedantry, and the reason is worth recording because a test author found
+it rather than reasoned it. The hook echoes the scanner's own stderr on both paths, and that
+stderr says `possible credential assignment` whenever there was a finding. So a test asserting
+only that the combined output mentions a credential passes even when the hook has routed a
+finding into the broken-gate branch: the wrapped tool's output satisfies the assertion instead of
+the hook's own words. Mutating `returncode == 1` to `returncode == 2` produced the self
+contradicting line `the secret scan exited 1, not 0 or 1.` and every test stayed green. What the
+test has to assert is the hook's **own** sentence, which is why this section now says what that
+sentence contains.
+
+**The order the hook runs its gates**, because it is observable and a test should not have to
+guess: the shipped-inventory check first and unconditionally, since the file it catches is
+typically untracked and there is no staged diff to scan yet; then the generic secret scan, also
+unconditional; then the owner denylist, which depends on `companion.denylist` being configured
+and refuses the commit when it is not. Each refusal is final, so the first gate to object is the
+one whose message the author sees.
+
+---
+
 ## 14. Execution order for the implementer
 
 Each step ships with the tests named in §10 and is not done until they pass (§10.7).

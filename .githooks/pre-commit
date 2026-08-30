@@ -67,6 +67,48 @@ if shipped.returncode:
         "pre-commit: a directory that ships to the unit holds a file nobody declared.",
     )
 
+# The generic secret scan runs next, and runs unconditionally too, for the
+# same reason the shipped-inventory gate does: it is the half of the leak
+# defence that used to run only in CI, after a push, and SPEC.md section 13.3
+# is what moved it here. It reads staged content, not the working tree, so a
+# file clean on disk and dirty in the index is still caught.
+secret_check = Path(__file__).resolve().parent.parent / ".github" / "check_secrets.py"
+if not secret_check.is_file():
+    fail(
+        "pre-commit: .github/check_secrets.py is missing, so the secret scan has not run.",
+        "  This hook expects to be reached through `git config core.hooksPath .githooks`.",
+        "  A hook copied into .git/hooks/ cannot find the rest of the repository.",
+    )
+try:
+    secrets = subprocess.run(
+        [sys.executable, str(secret_check), "--staged"], capture_output=True, text=True
+    )
+except OSError as err:
+    fail(
+        f"pre-commit: could not run the secret scan ({err.strerror or err}).",
+        "  Refusing to commit rather than reporting a scan that did not run.",
+    )
+if secrets.returncode == 1:
+    # check_secrets.py writes its findings to stderr, never to stdout - stdout
+    # is only ever the success wording, and this is not that path. Only
+    # stderr is printed, so the first line an author sees at commit time is
+    # the finding itself, not a blank line where stdout would have been.
+    fail(
+        secrets.stderr.rstrip(),
+        "pre-commit: the secret scan found a possible credential in the staged content.",
+    )
+elif secrets.returncode != 0:
+    # Anything other than 0 (clean) or 1 (a finding to act on) is the scan
+    # itself failing to run to completion - a missing interpreter, a crash,
+    # an unreadable index - and SPEC.md section 13 rule 6 applies here as much
+    # as to any other gate: fail closed and say so, rather than let a status
+    # this hook does not recognise pass as a green run.
+    fail(
+        secrets.stderr.rstrip(),
+        f"pre-commit: the secret scan exited {secrets.returncode}, not 0 or 1.",
+        "  Refusing to commit rather than reporting a scan that did not run to completion.",
+    )
+
 denylist_path = git("config", "--get", "companion.denylist", tolerate=(1,)).strip()
 if not denylist_path:
     fail(
@@ -94,7 +136,16 @@ for lineno, line in enumerate(raw, 1):
 if not patterns:
     fail("pre-commit: denylist contains no patterns. Refusing to commit.")
 
-staged = [n for n in git("diff", "--cached", "--name-only", "--diff-filter=ACM").split("\n") if n]
+# This is `d` - exclude deletions, admit everything else - and not an
+# allow-list of the letters that were thought of. It started as `ACM`, missed
+# a commit that renamed a file and edited it in the same breath (`git mv`,
+# then an edit - git calls that R, not M, so `--name-only` named nothing for
+# it), grew to `ACMR`, and then missed the same shape again for T: a regular
+# file staged over a symlink or the reverse. Two holes from the same cause in
+# one evening means the letters are not this gate's to keep enumerating.
+# `--name-only` prints the new name for a renamed or type-changed entry,
+# which is what the diff below needs anyway.
+staged = [n for n in git("diff", "--cached", "--name-only", "--diff-filter=d").split("\n") if n]
 if not staged:
     sys.exit(0)
 

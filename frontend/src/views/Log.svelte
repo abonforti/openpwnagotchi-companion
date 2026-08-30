@@ -234,10 +234,12 @@
     outline-offset: -2px;
   }
 
-  /* SPEC 4.5.1: a toggle says what it is, not what it does -- aria-pressed
-     carries the state for assistive tech; this is the sighted equivalent,
-     the same convention Segmented.svelte's aria-selected already gets a
-     visual match for. */
+  /* A toggle names what it offers, and `aria-pressed` carries whether it is
+     on; this is the sighted equivalent of that. A precedent in this codebase,
+     set by the Log's follow control and the Mirror's auto-refresh control, and
+     not a rule 4.5.1 states: this comment cited 4.5.1 for it in three files
+     and the sentence is not there. SPEC 4.6.2 caught the same fabrication in
+     its own prose and says where the convention actually comes from. */
   button[data-action='follow'][aria-pressed='true'] {
     border-color: var(--accent);
     color: var(--accent);

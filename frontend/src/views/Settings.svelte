@@ -3,7 +3,15 @@
   // view only reads the settings store and calls its mutators; the switch
   // itself -- teardown, resetStores(), attach -- belongs to lib/session.ts,
   // which subscribes to activeHost, and is not reimplemented here.
-  import { DASH, EMPTY_LABEL, formatConnectionState, formatUnauthorizedReason } from '../lib/format'
+  import {
+    DASH,
+    EMPTY_LABEL,
+    formatConnectionState,
+    formatGeoStateMessage,
+    formatGeoToggleLabel,
+    formatUnauthorizedReason,
+  } from '../lib/format'
+  import { geoState, toggleSharing } from '../lib/geo'
   import {
     activateHost,
     addHost,
@@ -203,6 +211,18 @@
   // not used reads to a grep exactly like using it.
   const pluginVersionText = $derived(caps === null || caps.pluginVersion === '' ? DASH : caps.pluginVersion)
   const pluginVersionEmpty = $derived(pluginVersionText === DASH)
+
+  // SPEC 4.6.2: the control's own state, from lib/geo.ts, the only module
+  // that calls into navigator.geolocation. This view lays it out; it does
+  // not decide when the watch starts, stops or pushes.
+  const geo = $derived($geoState)
+  const geoMessage = $derived(formatGeoStateMessage(geo))
+  const geoToggleLabel = $derived(formatGeoToggleLabel(geo))
+  // aria-pressed says whether the watch is actually running, which is
+  // `waiting` or `sharing` -- `denied`'s "Try again" and `unsupported`'s
+  // disabled control are neither, the same distinction
+  // formatGeoToggleLabel's own label already draws.
+  const geoPressed = $derived(geo === 'waiting' || geo === 'sharing')
 </script>
 
 <section class="view" data-view="settings" aria-labelledby="view-title-settings">
@@ -381,6 +401,25 @@
     </div>
   </form>
 
+  <h2>Geolocation</h2>
+  <!-- SPEC 4.6.2: a section of its own, not on the Dashboard and not on the
+       Map -- a permission prompt is not something a view should be able to
+       raise as a side effect of being navigated to. data-geo-state carries
+       the state name lib/geo.ts's GeoState names; data-geo-toggle is the
+       one control that ever calls into navigator.geolocation. -->
+  <div class="geo-section" data-geo-state={geo}>
+    <p class="geo-message" data-geo-message>{geoMessage}</p>
+    <button
+      type="button"
+      data-geo-toggle
+      aria-pressed={geoPressed}
+      disabled={geo === 'unsupported'}
+      onclick={toggleSharing}
+    >
+      {geoToggleLabel}
+    </button>
+  </div>
+
   <h2>Diagnostics</h2>
   <div class="fields">
     <div class="field">
@@ -545,6 +584,37 @@
   button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+
+  .geo-section {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .geo-message {
+    margin: 0;
+  }
+
+  /* A toggle names what it offers, and `aria-pressed` carries whether it is
+     on; this is the sighted equivalent of that. A precedent in this codebase,
+     set by the Log's follow control and the Mirror's auto-refresh control, and
+     not a rule 4.5.1 states: this comment cited 4.5.1 for it in three files
+     and the sentence is not there. SPEC 4.6.2 caught the same fabrication in
+     its own prose and says where the convention actually comes from. */
+  button[data-geo-toggle][aria-pressed='true'] {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  button[data-geo-toggle]:disabled {
+    opacity: 0.5;
   }
 
   .fields {

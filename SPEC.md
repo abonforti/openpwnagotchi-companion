@@ -4274,6 +4274,263 @@ time.
 Browser geolocation also needs its own refusal path: permission denied is a state the user chose
 and can change, and it is not the same as having no fix.
 
+#### 4.6.2 Acquiring the position: the tap, the third timer, and what backgrounding takes away (issue #175)
+
+§4.6 says what to push and how often. It does not say what makes the browser hand over a
+position in the first place, and on the one platform this app targets that is not a detail:
+**iOS refuses the permission prompt unless a tap asked for it**, and a `watchPosition()` called
+without one fails silently rather than raising. A module written against the specification as it
+stood would have called `watchPosition()` on connect, seen nothing, and had no way to tell that
+from a phone that simply has no fix yet.
+
+The four platform facts this section is built on, each verified rather than assumed:
+
+| # | fact | consequence here |
+|---|---|---|
+| G1 | `getCurrentPosition`/`watchPosition` need a user gesture on iOS to show the prompt; without one the call fails silently, with neither callback firing | the ask happens on a tap and nowhere else |
+| G2 | `navigator.permissions.query({name: 'geolocation'})` exists from iOS 16 and does not itself prompt, but on iOS it reports `prompt` for a permission denied in system settings | it is not called at all, for the reason below; were it ever called, **it could never be the reason this app says "denied"** |
+| G3 | `watchPosition` stops delivering while the document is hidden and does not resume on its own | the watch is torn down on hide and rebuilt on show; a client that merely kept it would push a frozen position |
+| G4 | `GeolocationPositionError.code` is `1` `PERMISSION_DENIED`, `2` `POSITION_UNAVAILABLE`, `3` `TIMEOUT` | `1`, and only `1`, is what §4.6.1's row 3 is |
+
+Sources: W3C Geolocation (`PositionOptions`, "position updates are exclusively delivered to
+fully active documents"), MDN `Permissions.query()` and `GeolocationPositionError.code`, and the
+Apple developer forum thread recording the `query()` inconsistency of G2. A fifth report -- that
+the prompt does not open at all for some units in standalone display mode -- is recorded in
+issue #175 as a hazard for the first hardware run and is **not** designed around: there is no
+client-side workaround for an alert that never appears, and pretending otherwise would be a
+mechanism that cannot be tested.
+
+##### Sharing is off at launch, and one tap turns it on for the life of the app
+
+Not persisted. The tempting design is a stored preference, and it is wrong for a reason G1
+supplies: a stored `true` cannot produce the gesture the next launch needs, so the app would
+come up believing it is sharing, push nothing, and report a state it does not have -- which is
+exactly what §4.3.1 forbids. Off at launch and one tap to arm is the same rule §4.5.2.5 already
+gives the Log's follow toggle, and for a stricter reason.
+
+The control is in **Settings** (§4.7), in a section of its own, and it is the only thing in this
+app that calls into `navigator.geolocation`. It is not on the Dashboard and not on the Map: a
+permission prompt is not something a view should be able to raise as a side effect of being
+navigated to.
+
+Turning it on attempts the watch immediately, inside the tap's own call stack. Nothing may be
+awaited before that call: a permission check, a store read or any other `await` first would spend
+the gesture and G1 would take the prompt away.
+
+**`navigator.permissions` is not called at all**, and that is a decision rather than an
+omission. G2 rules it out as a source of the denied state, which leaves it able to answer one
+question only -- has the owner been asked before -- and the copy table below has no sentence
+that turns on the answer. A call whose result nothing renders is a branch nothing can reach,
+which §4.5.2.1 already refused for being worse than absent, and it would be a call into the
+permissions layer kept alive for a use that does not exist. If a later section finds a sentence
+that needs it, G2 is the constraint that call has to be written under: **after** the watch has
+been started, never before, and never as the reason this app says "denied".
+
+##### The states this module holds are client-local, and they are not §4.6.1's four
+
+§4.6.1 decides what the *interface* says about the unit's position, and rows 1, 2 and 4 of that
+table are read from `stats.gps`. This module holds something narrower: what this browser is
+doing. The two meet at one point only -- row 3, permission denied, the one row §4.6.1 marks as
+client-local -- and this module is where that fact comes from.
+
+**It supplies that fact and does not compose the four rows**, and that division is deliberate
+rather than incidental. A function evaluating §4.6.1's table belongs in the change that renders
+its answer, which is issue #34; written here it would be an export nothing calls, which is the
+same objection this section already makes against calling `navigator.permissions` for an answer
+no sentence uses. An unrendered resolver is also an unreviewed one: the row conditions have a
+gap -- a unit with a fix from `gpsd` and no Pi fix matches no row as written -- and that gap is
+worth finding against a screen that has to show something, not against a unit test agreeing with
+a table.
+
+| state | reached when |
+|---|---|
+| `off` | at launch, and after the control is turned off |
+| `waiting` | the control is on and nothing has been acquired: either the watch is running and has produced nothing yet, or the document is hidden and the watch is torn down (see Backgrounding) |
+| `sharing` | a position has been received; it is what the push timer sends |
+| `denied` | the watch reported `GeolocationPositionError.code === 1` |
+| `unsupported` | `navigator.geolocation` is absent |
+
+`denied` is sticky for the life of the app: the owner changes it in the browser's own settings,
+not in this app, and the only honest thing the control can do afterwards is let them try again,
+which returns the state to `waiting`.
+
+**A callback from a watch this module no longer owns is ignored, whatever it says.** `clearWatch`
+does not promise that a callback the platform has already queued is cancelled, so a
+`PERMISSION_DENIED` from a watch that has been torn down can land afterwards. Each watch is
+started with a token, the callbacks carry it, and one that does not match the current watch does
+nothing at all.
+
+This reverses an earlier decision in this section, and the reasoning is worth keeping because the
+first answer was defensible and still wrong. It said the state should become `denied` even for a
+control the owner had already switched off, on the grounds that `denied` is a fact about the
+browser rather than about the control, and that suppressing it discards an explanation the app
+already has. Both halves of that are true. What it missed is the **second** consequence of the
+same race, which is worse than the one it was reasoning about: off, then "Try again", then the
+*previous* watch's queued refusal arrives and re-denies the fresh attempt and tears down the watch
+that was just started. The retry -- the one recovery this state exists to offer -- becomes
+defeatable by a callback belonging to a watch nobody is waiting on.
+
+And the explanation is not lost by dropping it, which is what made the first answer look free.
+Geolocation permission is per-origin and not per-watch, so a browser that refused the old watch
+refuses the new one too, and the denial arrives again from the watch that is actually current. The
+app says the same thing, one callback later, about something it owns.
+
+**A state this module keeps cannot tell a stale callback from a live one**, which is why the token
+is on the watch rather than a rule about ordering. Tearing a watch down invalidates its token
+before anything else happens, so a callback from it is inert immediately and not merely once a
+replacement exists. That is the general form: any answer that
+depends on reasoning about which callback arrives when is an answer that will be wrong on a
+platform nobody here has measured. **Reaching `denied` tears the watch and the timer down**,
+rather than leaving them running behind a state that says the browser refused: a watch that has
+reported `PERMISSION_DENIED` will not deliver a position afterwards, so keeping it is the module
+still appearing to try at something it has been told it may not do. The fresh attempt starts a
+new watch, and it is a new one rather than the old one resumed. There is no state for "the browser accepted the watch and
+said nothing", because G1 makes that indistinguishable from `waiting` and inventing a distinction
+the platform does not offer is the same defect as inventing a symbol.
+
+**A guard is dead when this module's own control flow makes it dead, and not when a fact about
+the platform does.** Three guards in the first version of this module were unreachable by the
+call graph alone: every caller had already asked the same question, synchronously, with nothing
+in between that could change the answer, and they were deleted on the argument this section makes
+twice over. The guard in front of `watchPosition` is not one of them, and the distinction is
+worth stating because it looks identical. It is reached again from the visibility handler,
+arbitrarily long after the tap that first checked, and what stands between the two calls is not
+control flow but the platform assumption below. An assumption about the environment is a weaker
+thing than a proof about the code, and a guard that rests on one is defence rather than
+decoration.
+
+**`unsupported` is recomputed from the same guard every time the state is published, and in a
+browser the answer never changes.** A browser does not remove `navigator.geolocation` from a
+document that is already running, so what this state costs is one capability read per publish and
+no branch of its own. What is deliberately **not** added is a publish of its own at the point the
+control is tapped and refuses: that would be a branch reachable only from a test, which §4.5.2.1
+refuses and which this section refused again for `navigator.permissions`. The distinction is
+narrow and worth stating exactly, because an earlier draft of this paragraph claimed the state
+was decided once and never revisited, and the code contradicts it -- the guard and the state read
+the same function, at every publish.
+
+`unsupported` is not a fifth GPS state and must never be presented as one: it says this browser
+cannot be a source, which is a fact about the phone, exactly as §4.6.1 says "not fitted" is a
+fact about the unit and belongs to neither table.
+
+##### The third timer, and why it is not a third exception
+
+§4.5.2.6 granted the second timer and said a third is harder to justify. This one does not stand
+on that argument at all, and it would be wrong to record it as a third view timer.
+
+The two granted so far are **polls**: a view asking the unit for something the unit will not
+push. This is a **cadence**, outbound, and §4.6 fixed it at five seconds before either poll
+existed, for a reason that is in the schema rather than in a view: `incoming/gps_data.json`
+drops browser coordinates after ten seconds, so a client that pushes less often than that is
+one whose position is periodically absent from the unit that is writing the sidecars. Five
+seconds is one missed push of margin, and it is not a preference.
+
+What it does have in common with them is the discipline: it exists only while the control is on,
+it stops the moment the control is off, and it stops on hide (G3). Pushing on significant change
+as well -- every `watchPosition` callback -- is the optimisation §4.6 already allows on top of
+the floor, and it is not a replacement for the timer, because a stationary phone produces no
+callbacks and its position is still true.
+
+**The watch asks for high accuracy.** `PositionOptions.enableHighAccuracy` defaults to false,
+and the default is wrong here rather than merely unconsidered: this app exists to say where a
+capture was taken, and a position good to the nearest cell tower does not locate a capture, it
+locates the neighbourhood. It costs battery, on a phone that is already the unit's hotspot, and
+that cost is the reason the whole feature is opt-in behind a tap rather than something the app
+does because it can.
+
+**The timer pushes nothing while `stats.gps.piFix` is true.** That is §4.6's rule, read from the
+`gps` store (§4.4.1) at push time rather than latched when the control was tapped: a unit whose
+on-Pi fix drops while the app is open must start receiving pushes without anyone touching the
+control, and one that acquires a fix must stop receiving them the same way. The timer keeps
+running across that transition rather than being stopped and restarted, so there is one rule and
+one place it is evaluated.
+
+**The tap consents to sharing with whichever unit is active, and not with the unit that was
+active when it was tapped.** `currentClient()` is asked at every push, so activating a different
+host while sharing is on starts pushing to that unit with no fresh tap. That is intended and is
+written down rather than left to be inferred: every unit in the host list is the owner's own, the
+list is edited on the same screen as this control, and a consent that had to be re-given per unit
+would mean the position silently stopping when the owner switched units, which is the failure
+this whole feature exists to avoid. It is stated here because it is the kind of decision that
+looks like an implementation detail and is not.
+
+**The push goes through `lib/ws.ts`'s `sendGps`, and through the client `lib/session.ts` holds.**
+This module does not build a client, does not hold one, and asks for the current one at each
+push. With no client, or with a socket that is not usable, `sendGps` discards the frame (§4.3.3),
+which is the whole of the offline rule: a position is only true at the instant it was taken, so
+there is nothing here to queue and nothing to replay on reconnect. A host switch needs no
+handling in this module for the same reason -- what the phone knows about where it is does not
+belong to the unit it was last connected to.
+
+##### Backgrounding
+
+On `visibilitychange` to hidden: the watch is cleared, the timer is stopped, **and the last
+reading is dropped there rather than on the way back**. That placement is the one that makes the
+state true throughout: `sharing` is defined in the table above as a position having been received and being
+what the timer sends, and while hidden nothing is sent, so a state left at `sharing` for the
+duration is the app describing something it is not doing. It is not invisible either -- iOS
+renders the hidden document in the app switcher. Dropping the reading on hide makes the state
+`waiting` for the whole trip, which is true, and it leaves the resume with nothing stale to
+push. On the way back
+to visible, with the control still on, both are started again -- and starting them clears
+whatever is already running first, unconditionally, so that an event that fires without the
+visibility having actually changed cannot leave two watches live with only the second one
+reachable to clear. G3 is the whole reason -- a watch that survives the trip delivers nothing and
+the module would push the last position it saw, which after a walk to somewhere else is a wrong
+position rather than a missing one, the worse of the two.
+
+**Coming back is a fresh start, not a resumption.** Tearing the watch down on hide stops the
+pushes that happen *while* hidden, and that alone is only half of what G3 asks for: the timer
+re-armed on the way back would fire up to a full interval before the new watch has delivered
+anything, and what it would send is the coordinate taken before the phone was pocketed. That is
+the wrong position rather than the missing one, which is the trade this whole paragraph exists to
+refuse. Dropping the reading with the watch is what closes it, and the state on resume is
+therefore `waiting` until the new watch produces something -- the same thing the control's own
+tap does, for the same reason.
+
+**Which property says the document is hidden is not a rule this section makes.** `document.hidden`
+is defined as `visibilityState !== 'visible'`, so the two cannot disagree in a browser, and a
+specification that picked one would be writing a test fixture's shortcoming into normative text.
+A fixture that sets only one of them is an incomplete fixture; §10.7 carries that, because it is
+a fact about the fake and not about the app.
+
+This is a lifecycle listener, and it is the first in this app. It is **not** the answer to issue
+#120, which asks the same question about the socket: releasing a socket on hide and re-opening it
+on show is a decision about the connection with consequences this one does not have, and the two
+must not be settled together because one of them happens to arrive first.
+
+##### DOM hooks and copy
+
+The control is a toggle whose label names what it offers, with `aria-pressed` carrying whether
+it is on, the same shape the Log's follow control and the Mirror's auto-refresh control already
+have. That is a precedent in this codebase and not a rule §4.5.1 states -- an earlier draft of
+this paragraph cited §4.5.1 for it and the sentence is not there, which is the same fabricated
+citation this specification has caught itself in twice now. `data-geo-toggle` on the
+control and `data-geo-state` on its section, carrying the state name from the table above, are
+what a test reads, with `data-geo-message` on the element holding the sentence. That third hook
+is there so that a test asserting the copy reads the one element that is the copy, rather than
+the section's flattened text, which also contains the control's own label and would pass a
+sentence that had gone missing as long as the label still matched.
+
+The control carries **`Share this phone's position`**, except at `denied`, where it carries
+**`Try again`**: that is not a state the control can be pressed back out of, and the only thing
+left to offer is another attempt. `aria-pressed` carries whether the watch is running, which is
+`waiting` or `sharing` and neither of the other three. At `unsupported` the control is
+`disabled`, since the tap has nothing to do and a control that responds to nothing is worse than
+one that says it cannot.
+
+| state | what the section says |
+|---|---|
+| `off` | Not sharing this phone's position. |
+| `waiting` | Waiting for a position. |
+| `sharing` | Sharing this phone's position. |
+| `denied` | This browser refused location access. Allow it in the browser's settings, then try again. |
+| `unsupported` | This browser cannot supply a position. |
+
+None of these five sentences says anything about what the unit has. That is §4.6.1's table and
+§4.4.1's `gps`, and a section that mixed the two would be telling the owner their captures are
+located because their phone is willing, which is the mistake §4.6.1 spends its second half on.
+
 ---
 
 ### 4.7 Settings (`lib/settings.ts`)
@@ -5320,8 +5577,12 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   belongs to `stores.spec.ts` below, which is where it is listed.
 - `stores.spec.ts`: each push message updating the right store; `capabilities.pasv` gating the
   PASV control; §4.3.4, the mode and PASV indicators derived from `stats` and never from the tap,
-  showing the request as pending in between and **not** reverting silently if the command fails;
-  §4.6.1's GPS states resolved first-match-wins in the stated order.
+  showing the request as pending in between and **not** reverting silently if the command fails.
+  This entry used to claim §4.6.1's four GPS states were resolved here, first-match-wins, and
+  nothing in `lib/stores.ts` has ever resolved them. The composition belongs to whichever change
+  renders it, which is issue #34; §4.6.2 says so and `lib/geo.ts` supplies the one row that is
+  client-local. An inventory claim with nothing behind it is precisely what this inventory exists
+  to prevent, so it is struck here rather than in a follow-up.
 - `settings.spec.ts`: persistence round-trip, defaults, migration of an unknown shape, and the rules that make this module the one place a token can go to the wrong unit: every malformed-blob shape asserted separately rather than as a class, the token key reconciled on load against a dropped host, a dangling id and a stale key, cleared when the active host is removed or its address is edited, an address accepted only as an IPv4 literal so that neither a credential nor a leading-zero octet can point the URL somewhere other than the entry on screen, and storage that throws leaving the app usable. It also holds the three cases §4.7 keeps apart, which is where they belong because they are the loader's behaviour and not the derivation's: a blob that will not parse taking the first-run path, a blob that lost every host restoring the defaults with Bluetooth active and **without** deriving, and a deliberately empty list staying empty. Each of the three drives the hostname seam with a usable address, because under a hostname that is not one the deriving and non-deriving branches produce the same list and an assertion made there proves nothing about the defect it names.
 - `protocol.spec.ts`: sample payloads from `docs/schemas` examples typecheck against the
   generated types.
@@ -5476,6 +5737,71 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   redundant against the pattern beside it and removed -- with `screen.ts` reporting full coverage
   throughout, since the line was executed either way. A line whose removal changes nothing is not
   covered in any sense the number can express.
+- `geo.spec.ts`: browser geolocation (§4.6.2), which is the first thing in this client that acts
+  on the world rather than only rendering it, and the first with a lifecycle listener. What it
+  pins that no other file can: that the watch is started **synchronously inside the tap's own call
+  stack**, asserted before any `await`, which is the one rule iOS enforces by failing silently
+  (G1) and therefore the one no manual test on a desktop would ever catch. The 5 s cadence with a
+  phone that has stopped moving, since a stationary position is still true and the plugin drops
+  what it has not been sent for ten seconds. `piFix` read at push time and not latched, including
+  the sharp case: the interval does **not** restart when `piFix` clears mid-window. The pushed
+  frame checked against `incoming/gps_data.json`, with `source` asserted absent, because the
+  incoming shape is `additionalProperties: false` and a client that adds it gets `bad_request`.
+  `denied` from error code `1` and from neither `2` nor `3`, and independent of `piFix` in both
+  directions: a Pi fix appearing does not clear a client-local denial, and a denial does not touch
+  what the unit reports. Backgrounding, both halves, and the half that is easy to leave out:
+  coming back is a fresh start, so the timer's first tick after a resume must not carry the
+  position taken before it.
+  **Coordinates in fixtures follow this repository's convention and are obviously nowhere**:
+  `10.1 / -30.2` is open Atlantic, used by `dashboard.spec.ts`, `dashboard-controls.spec.ts`,
+  `format.spec.ts`, `stores.spec.ts` and `wifi-view.spec.ts`; `12.34 / 56.78` is a digit sequence,
+  used by `ws.spec.ts`. Both lists were wrong on the first attempt at this paragraph and were then
+  produced with `grep`, which is the only way a citation like this is worth writing: a rule that
+  certifies fixtures and misnames its own precedent teaches the next reader to look in the wrong
+  file. The first version of this file used
+  four plausible pairs clustered inside forty kilometres of each other in one inhabited region,
+  which a security audit caught before it was committed. No assertion anywhere depends on a
+  coordinate being plausible, so the convention costs nothing, and this is the only file in the
+  project where getting it wrong would have narrowed a person to a place.
+  Two more fixture notes that belong here rather than in §4.6.2, because both are facts about the
+  fake rather than about the app. `visibilitychange` fakes set `document.visibilityState` **and**
+  `document.hidden`: they cannot disagree in a browser, so a fake that sets one of them tests
+  whichever property the implementation happens to read, and an earlier version of this file did
+  exactly that. And `GeolocationPositionError` has to be stubbed as a global, because jsdom does
+  not implement it at all while every real browser exposes it -- without the stub the error path
+  raises `ReferenceError` and the test observes the fake's gap rather than the code.
+  One more thing this file has to do that no other view's tests do, and it is a consequence of
+  the module being a singleton with a listener on `document`: a test that leaves sharing on
+  leaves that listener attached across `vi.resetModules()`, since there is no reset seam and
+  deliberately so. Teardown turns the control off. Absolute-count assertions are what surfaced
+  the stale listeners; relative ones never noticed, which is the same lesson as the assertion
+  that passed for the wrong reason above.
+  Its mutation results are recorded with the same care as the assertions, because two of them
+  turned out to be claims about the fixture rather than about the code. **The `document.hidden`
+  misread is no longer a mutant this file can kill, and that is correct**: once the fixture sets
+  both properties, as it must, reading either one is behaviourally identical and no test can
+  distinguish them. The defect was the fixture's incompleteness, and it is fixed there.
+  The mutant that does remain -- inverting the hidden branch -- is killed by **six** of the nine
+  backgrounding tests, measured twice against two different versions of the implementation and
+  giving the same six names both times.
+
+  That number is worth the space it takes, because three parties produced three answers for it and
+  only one of them ran anything. The first figure recorded here was four, from a measurement taken
+  before one of the tests existed. A review then traced the mutant by hand and reported seven. The
+  measurement says six. Nobody was being careless: a stale measurement and a careful trace are both
+  ordinary, and both are the same mistake, which is publishing a number about a mutant nobody
+  currently has in front of them. **A mutation result that was not produced this time is not a
+  mutation result.**
+  One of those assertions originally **passed for the wrong reason**: it checked only that the old
+  watch id had been cleared, and the buggy branch cleared it too, on its way to starting a second
+  one. It now also asserts that no new watch was started. That is the same standard the security
+  audits use on a zero-hit scan, applied to a green test: an assertion that cannot distinguish the
+  fix from the defect has not observed anything.
+  One mutant survived and is recorded rather than dropped: re-arming the interval from inside the
+  push, at the moment it fires, produces an identical future schedule and is unobservable from
+  outside at any test's resolution. The rule §4.6.2 actually warns about is the event-driven
+  restart on the `piFix` transition, which is a different implementation and which a test does
+  kill.
 - `navigation.spec.ts`: the shell's own logic, which §10.7 would otherwise leave uncovered
   because it excuses view components from coverage. That exclusion was written for list markup
   and does not hold for navigation: current-view selection and `aria-current` including the More

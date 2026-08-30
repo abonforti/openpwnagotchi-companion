@@ -57,112 +57,189 @@ with no further design decisions required.
 
 ```
 openpwnagotchi-companion/
-├── LICENSE                          # GPL-3.0
-├── README.md                        # top-level, see §7
-├── ROADMAP.md                       # milestones narrative, see §8
-├── CHANGELOG.md                     # Keep a Changelog, see §12
-├── CONTRIBUTING.md
-├── SECURITY.md                      # threat model + no-secrets policy, see §6.4
-├── SPEC.md                          # this file
-├── CLAUDE.md
-├── .gitignore
-├── plugin/
-│   ├── companion.py                 # the pwnagotchi plugin (installable, flat)
-│   └── README.md                    # plugin-specific install/config (mirrored in __help__)
-├── frontend/
-│   ├── package.json
-│   ├── package-lock.json            # COMMITTED — `npm ci` in CI requires it
-│   ├── vite.config.ts
-│   ├── vitest.config.ts
-│   ├── tsconfig.json
-│   ├── svelte.config.js
-│   ├── index.html
-│   ├── public/
-│   │   ├── manifest.webmanifest
-│   │   └── icons/                   # 180/192/512 PNG + maskable
-│   └── src/
-│       ├── main.ts
-│       ├── app.css                  # global styles, safe areas, dark theme
-│       ├── App.svelte
-│       ├── lib/
-│       │   ├── ws.ts                # WebSocket client: connect, reconnect, queue, heartbeat
-│       │   ├── protocol.ts          # GENERATED from docs/schemas — do not hand-edit
-│       │   ├── stores.ts            # Svelte stores
-│       │   ├── session.ts           # the one place a client is built and attached (§4.8)
-│       │   ├── settings.ts          # persisted connection settings (localStorage)
-│       │   ├── router.ts            # the seven routes of §4.5, and nothing more
-│       │   ├── format.ts            # value to string, the §4.5.1.1 rules a view must not hold
-│       │   └── geo.ts               # browser Geolocation acquisition + push to plugin
-│       ├── shell/                   # the navigation shell (§4.5), not a view
-│       │   ├── Nav.svelte           # bottom bar in portrait, leading rail in landscape
-│       │   └── MoreSheet.svelte     # dialog holding Peers, Mirror, Settings
-│       ├── views/
-│       │   ├── Dashboard.svelte
-│       │   ├── WiFi.svelte            # Nearby + Captured segments, see §4.5
-│       │   ├── Peers.svelte
-│       │   ├── Map.svelte
-│       │   ├── Log.svelte
-│       │   ├── Mirror.svelte
-│       │   └── Settings.svelte
-│       └── __tests__/               # vitest specs, see §10.5
-├── tools/
-│   ├── gen-ca.sh                    # create a private CA (idempotent)
-│   ├── gen-cert.sh                  # issue an iPAddress-SAN server cert from that CA
-│   ├── install-on-pi.sh             # pull latest Release dist.tgz to the Pi serve dir
-│   └── gen-protocol-types.mjs       # docs/schemas/*.json -> frontend/src/lib/protocol.ts
-├── tests/
-│   ├── conftest.py                  # fake `pwnagotchi` package + FakeAgent, see §10.2
-│   ├── fakes/
-│   │   ├── pwnagotchi_stub/         # importable stand-in for the real package
-│   │   └── fixtures/                # bettercap session JSON, handshake dirs, log samples
-│   ├── test_plugin_loads.py         # F30 loader contract, see §10.2
-│   ├── test_stats.py
-│   ├── test_access_points.py
-│   ├── test_handshakes.py
-│   ├── test_handshake_dir.py
-│   ├── test_config_keys.py
-│   ├── test_peers.py
-│   ├── test_gps.py
-│   ├── test_log_tail.py
-│   ├── test_battery.py
-│   ├── test_controls.py
-│   ├── test_tls_startup.py
-│   ├── test_auth.py
-│   ├── test_binding.py
-│   ├── test_listeners_stop_race.py  # stop() vs reconcile(), see §10.2 (issue #90)
-│   ├── test_https_handshake_off_accept.py  # accept-loop TLS handshake hang, see §10.2 (issue #100)
-│   ├── test_static_server.py
-│   ├── test_csp.py
-│   ├── test_protocol_conformance.py # every outgoing message validated against its schema
-│   ├── test_integration_ws.py       # real WSS server + real client, in-process
-│   └── tools/
-│       └── test_certs.py            # gen-ca.sh / gen-cert.sh assertions, see §10.6
+├── .claude/
+│   └── agents/                       # the agents CLAUDE.md's workflow names
+│       ├── companion-implementer.md
+│       ├── companion-qa.md
+│       ├── companion-reviewer.md
+│       ├── companion-security-auditor.md
+│       └── companion-test-author.md
+├── .githooks/                        # local gates, installed per CONTRIBUTING.md
+│   ├── pre-commit                    # owner denylist, before a commit exists (§13)
+│   └── pre-push
 ├── .github/
-│   ├── workflows/
-│   │   ├── ci.yml                   # lint + tests + build on push/PR
-│   │   └── release.yml              # build dist.tgz + create Release on tag
 │   ├── ISSUE_TEMPLATE/
 │   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   ├── connection_problem.yml
 │   │   └── feature_request.yml
-│   ├── labels.json                  # the label taxonomy (§6.1)
-│   ├── sync_labels.sh               # applies labels.json to the repository (§6.1)
-│   ├── check_plugin.py              # AST-based plugin sanity check (§5.1)
-│   ├── check_schemas.py             # JSON Schema validity and framing invariants (§5.1)
-│   └── check_secrets.py             # generic credential scan (§5.1)
-└── docs/
-    ├── SETUP.md                     # full setup: CA, cert, iOS trust, install, first run
-    ├── CERTIFICATES.md              # deep dive on the cert constraints and why
-    ├── PROTOCOL.md                  # human-readable rendering of docs/schemas
-    ├── PINNED-FACTS.md              # §11 of this document, extracted for standalone reference
-    └── schemas/
-        ├── common.json              # shared defs: AP, Handshake, Peer, Gps, Envelope
-        ├── incoming/*.json          # one schema per client->plugin message type
-        └── outgoing/*.json          # one schema per plugin->client message type
+│   ├── workflows/
+│   │   ├── ci.yml                    # lint + tests + build on push/PR (§5.1)
+│   │   ├── codeql.yml                # CodeQL, Python and JavaScript
+│   │   ├── pull-request.yml          # labelling and documentation-only auto-merge
+│   │   ├── release.yml               # build dist.tgz + create Release on tag (§5.2)
+│   │   └── upstream-drift.yml        # scheduled run of check_pinned_facts.py
+│   ├── check_coverage.py             # the coverage ratchet (§10.7.1)
+│   ├── check_no_inline_script.py     # inline-script gate over the built page (§2.15.1)
+│   ├── check_pinned_facts.py         # §11 against upstream (§11.2)
+│   ├── check_release_version.py      # tag against CHANGELOG and package.json (§5.2)
+│   ├── check_schemas.py              # JSON Schema validity and framing invariants (§5.1)
+│   ├── check_secrets.py              # generic credential scan (§5.1)
+│   ├── check_shipped_files.py        # what ships, and nothing else (§13.2)
+│   ├── CODEOWNERS
+│   ├── coverage-baseline.json        # the recorded figures the ratchet compares against
+│   ├── dependabot.yml
+│   ├── labels.json                   # the label taxonomy (§6.1)
+│   ├── pinned_symbols.json           # the pinned facts, and what they were verified against (§11)
+│   └── sync_labels.sh                # applies labels.json to the repository (§6.1)
+├── docs/
+│   ├── assets/
+│   │   └── banner.jpg
+│   ├── schemas/
+│   │   ├── incoming/                 # one schema per client->plugin message type
+│   │   │   └── ...
+│   │   ├── outgoing/                 # one schema per plugin->client message type
+│   │   │   └── ...
+│   │   └── common.json               # shared defs: AP, Handshake, Peer, Gps, Envelope
+│   ├── CERTIFICATES.md               # deep dive on the cert constraints and why
+│   ├── PROTOCOL.md                   # human-readable rendering of docs/schemas
+│   └── SETUP.md                      # full setup: CA, cert, iOS trust, install, first run
+├── frontend/
+│   ├── public/
+│   │   ├── icons/                    # 180/192/512 PNG + maskable
+│   │   │   ├── apple-touch-icon-180.png
+│   │   │   ├── icon-192.png
+│   │   │   ├── icon-512.png
+│   │   │   └── icon-maskable-512.png
+│   │   └── manifest.webmanifest
+│   ├── src/
+│   │   ├── __tests__/                # vitest specs, see §10.5
+│   │   │   └── ...
+│   │   ├── lib/
+│   │   │   ├── controls.ts           # the control messages and what may send one
+│   │   │   ├── format.ts             # value to string, the §4.5.1.1 rules a view must not hold
+│   │   │   ├── geo.ts                # browser Geolocation acquisition + push to plugin
+│   │   │   ├── lists.ts              # sorting and identity for the list views
+│   │   │   ├── log.ts                # log line parsing and the level filter
+│   │   │   ├── peers.ts              # peer identity and presence
+│   │   │   ├── protocol.ts           # GENERATED from docs/schemas - do not hand-edit
+│   │   │   ├── router.ts             # the seven routes of §4.5, and nothing more
+│   │   │   ├── screen.ts             # orientation and the landscape rail
+│   │   │   ├── session.ts            # the one place a client is built and attached (§4.8)
+│   │   │   ├── settings.ts           # persisted connection settings (localStorage)
+│   │   │   ├── stores.ts             # Svelte stores
+│   │   │   ├── viewRefresh.ts        # one place decides how often a view refetches
+│   │   │   ├── wifi.ts               # the Nearby and Captured segments' data
+│   │   │   └── ws.ts                 # WebSocket client: connect, reconnect, queue, heartbeat
+│   │   ├── shell/                    # the navigation shell (§4.5), not a view
+│   │   │   ├── MoreSheet.svelte      # dialog holding Peers, Mirror, Settings
+│   │   │   ├── Nav.svelte            # bottom bar in portrait, leading rail in landscape
+│   │   │   └── Segmented.svelte
+│   │   ├── views/
+│   │   │   ├── Dashboard.svelte
+│   │   │   ├── Log.svelte
+│   │   │   ├── Map.svelte
+│   │   │   ├── Mirror.svelte
+│   │   │   ├── Peers.svelte
+│   │   │   ├── Settings.svelte
+│   │   │   └── WiFi.svelte           # Nearby + Captured segments, see §4.5
+│   │   ├── app.css                   # global styles, safe areas, dark theme
+│   │   ├── App.svelte
+│   │   └── main.ts
+│   ├── tests/
+│   │   └── e2e/                      # Playwright, four projects (§10.5)
+│   │       └── ...
+│   ├── .npmrc                        # the Node floor is enforced, not warned about (§5.1.1)
+│   ├── index.html
+│   ├── package-lock.json             # COMMITTED - `npm ci` in CI requires it
+│   ├── package.json
+│   ├── playwright.config.ts
+│   ├── svelte.config.js
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── vitest.config.ts
+├── plugin/
+│   └── companion.py                  # the pwnagotchi plugin (installable, flat)
+├── tests/
+│   ├── fakes/
+│   │   ├── fixtures/                 # bettercap session JSON, handshake dirs, log samples
+│   │   │   ├── handshakes/
+│   │   │   │   └── ...
+│   │   │   └── ...
+│   │   ├── i2c_stub/                 # importable stand-in, PiSugar over smbus2
+│   │   ├── netifaces_stub/           # importable stand-in for netifaces
+│   │   ├── pwnagotchi_stub/          # importable stand-in for the real package
+│   │   └── README.md
+│   ├── tools/
+│   │   ├── test_certs.py             # gen-ca.sh / gen-cert.sh assertions, see §10.6
+│   │   ├── test_check_coverage.py
+│   │   ├── test_check_release_version.py
+│   │   ├── test_install.py
+│   │   └── test_pinned_facts.py
+│   └── ...
+├── tools/
+│   ├── gen-ca.sh                     # create a private CA (idempotent)
+│   ├── gen-cert.sh                   # issue an iPAddress-SAN server cert from that CA
+│   ├── gen-protocol-types.mjs        # docs/schemas/*.json -> frontend/src/lib/protocol.ts
+│   └── install-on-pi.sh              # pull latest Release dist.tgz to the Pi serve dir
+├── .gitignore
+├── CHANGELOG.md                      # Keep a Changelog, see §12
+├── CLAUDE.md
+├── CONTRIBUTING.md
+├── LICENSE                           # GPL-3.0
+├── pytest.ini                        # coverage configuration, and the ban on pragma: no cover
+├── README.md                         # top-level, see §7
+├── ruff.toml                         # E and F only, argued in §5.1
+├── SECURITY.md                       # threat model + no-secrets policy, see §6.4
+└── SPEC.md                           # this file
 ```
 
 Note: the plugin lives in `plugin/companion.py`, NOT the repo root. It is installed by the
 install script or by manual copy, documented in SETUP.md — do NOT rely on the flat-root
 `custom_plugin_repos` unpack for this repo.
+
+### 1.1 The tree above is checked, and here is what it claims (issue #201)
+
+A tree in a specification decays silently. This one named four files that did not exist, one of
+them a CI gate described in §5.1 in enough detail to be believed, and it named two of the seven
+check scripts in `.github/` while missing a hook directory and the whole end-to-end suite.
+The fourth was `plugin/README.md`, "plugin-specific install/config (mirrored in `__help__`)",
+which nothing else in this document or in the repository refers to: it is removed rather than
+written, and it is named here because a removal nobody records reads later as an oversight.
+Nobody noticed by
+reading it, which is the point: it was found by a script comparing it to `git ls-files`, and the
+fix that lasts is that comparison running in CI rather than this particular correction.
+
+So the tree is a claim with a contract, and `tests/test_spec_tree.py` fails the build when the
+claim stops being true.
+
+- **Every path named exists** as a tracked file or a tracked directory. A name with nothing
+  behind it fails, whether it was deleted, renamed, or never written.
+- **Every tracked directory is named.** A new directory is a new area of the repository, and the
+  cost of adding one line here is the point rather than an inconvenience.
+- **A directory whose entries end with `...` is not enumerated for files.** Its subdirectories
+  are still named and still checked; only the file list is open. This is where the test suites
+  live: a repository whose every new test costs a SPEC edit gets fewer tests, and the tree
+  carries nothing about `test_gps.py` that its name does not.
+- **A directory named with no children under it at all is opaque**, and nothing inside it is
+  checked. There are three, all of them importable stand-ins for packages this project does not
+  own: `tests/fakes/pwnagotchi_stub/`, `tests/fakes/i2c_stub/` and
+  `tests/fakes/netifaces_stub/`. Their internal shape is upstream's, not a decision of ours, and
+  pinning it here would be pinning somebody else's layout.
+- **The comments are prose and are not checked.** They say why a file exists; a stale one is a
+  review finding, not a build failure.
+- **The repository root is enumerated**, like any other directory without a `...` in it. A new
+  top-level file costs a line here, and a top-level file is the one addition that should.
+
+`.gitignore`d files are not tracked and so are not named: `frontend/node_modules/`,
+`frontend/dist/`, `.venv/` and the rest are absent from the tree because they are absent from
+the repository, and the tree describes what is committed rather than what is on a working host.
+
+The general form is worth stating once, because this is the second instance.
+`.github/check_shipped_files.py` declares what ships and fails on anything else in that
+directory (§13.2). §1's tree is the same kind of claim about the repository as a whole, and
+until issue #201 nothing compared the two. A claim about a set of files, written by hand, is a
+claim that needs a test.
 
 ---
 
@@ -4830,9 +4907,28 @@ listener rather than something this sentence can claim.
 
 ### 5.1 `ci.yml` (push + PR)
 
-- **plugin-lint**: `.github/check_plugin.py` (AST-based, adapted from the owner's
-  `check_plugins.py`: parses without importing, verifies the `plugins.Plugin` subclass and the
-  required metadata, and greps for committed secrets), then `python -m compileall plugin/`.
+- **plugin-lint**: `python -m ruff check plugin/ tools/ tests/ .github/*.py`, then
+  `python -m compileall plugin/`. `ruff.toml` enables `E` and `F` and argues for that pair: a
+  formatter is not wanted here and a style rule that fires on prose in a docstring costs more
+  attention than it saves.
+
+  This bullet described a different script for an unknown length of time (issue #201). SPEC named
+  `.github/check_plugin.py`, an AST-based check that parsed the plugin without importing it,
+  verified the `plugins.Plugin` subclass and the metadata, and grepped for secrets. It does not
+  exist and it is not what CI runs. A specification naming a gate nobody can run is worse than
+  one saying nothing, because the next person writing a gate reads it as already covered, which
+  is why §1.1 now has a test behind it rather than a promise.
+
+  What that script claimed to check is covered elsewhere, and the audit that established this is
+  worth keeping rather than repeating: the secret grep is `.github/check_secrets.py` as its own
+  job and does the job better; `__version__` is asserted against `package.json` by
+  `tests/test_release_workflow.py`; the `plugins.Plugin` subclass is covered in effect, because
+  the suite imports the plugin against `tests/fakes/pwnagotchi_stub/` and would fail if it
+  stopped being one. `__author__` and `__license__` were covered by nothing, which is why they
+  now have a test of their own. `__license__` is pinned to the literal `GPL3` because §2.1
+  requires the plugin to declare it, and this is a GPL fork whose licence declaration is the
+  thing a downstream reader checks first. The header comment crediting `BraedenP232/PwnIOS` is a
+  separate requirement of §2.1 and a separate string; neither stands in for the other.
 - **plugin-tests**: `pytest` on **Python 3.13**, the version the device ships (F26), and again on
   **3.11**, the floor upstream declares (F21). The device's version is the one that blocks a merge;
   the floor runs because somebody can be on an older image. No pwnagotchi installation required:
@@ -5359,8 +5455,8 @@ That sentence is the perimeter. Anything that does not serve it belongs in the b
 | Tooling | `gen-ca.sh`, `gen-cert.sh`, `install-on-pi.sh` |
 | Frontend | The seven views and the navigation model (§4.5), `lib/` (generated `protocol.ts`, `ws`, `stores`, `settings`, `geo`), PWA manifest, service worker, iOS specifics (§4.2) |
 | Tests | The whole of §10, including the 85% line-and-branch coverage gate |
-| CI | `ci.yml`, `release.yml`, `check_plugin.py`, schema validation, protocol type sync, secret scan |
-| Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, `PINNED-FACTS.md`, README, ROADMAP, CONTRIBUTING, issue templates |
+| CI | `ci.yml`, `release.yml`, `ruff`, schema validation, protocol type sync, secret scan |
+| Docs | `SETUP.md`, `CERTIFICATES.md`, `PROTOCOL.md`, README, CONTRIBUTING, issue templates |
 
 **Out of scope** — backlog, no milestone: pcap download over BT, handshake filtering and search,
 map clustering and tracks, offline tile cache, theme options, multi-device switcher, WiGLE/CSV
@@ -5393,13 +5489,15 @@ precondition of leaving `0.x`.
 One issue per §2 backend capability, per §4 view, plus the TLS scripts, CI, docs, the test suite,
 the schema pipeline, and the GitHub setup itself. Each issue carries a crisp title and acceptance
 criteria lifted from this spec, with area and type labels. A tracking/epic issue links them all.
-`ROADMAP.md` is populated from the milestones.
+The milestones are the roadmap (§8).
 
 ### 6.4 Issue templates, CONTRIBUTING, SECURITY
 
 `bug_report.yml` (device, pwnagotchi version, plugin version, iOS version, cert setup, logs),
 `feature_request.yml`. `CONTRIBUTING.md` covers the English-only rule, the AST/parse CI rules,
-the schema-first protocol workflow, and the requirement that changes ship with tests.
+the schema-first protocol workflow, and the requirement that changes ship with tests. It said
+"the AST/parse CI rules" until issue #201: that was `check_plugin.py`, the only AST check this
+repository ever described, and CONTRIBUTING.md never carried such a rule to begin with.
 `SECURITY.md` states the threat model (tether-local exposure, private CA, optional token) and
 the hard rule: no private keys, CA keys, tokens, or pwnagotchi whitelists in the repository,
 ever.
@@ -5411,15 +5509,25 @@ ever.
 What it is (free PWA companion, self-hosted), a screenshot placeholder, the honest security
 model (a private CA and a fully trusted profile are required, and why), a feature matrix against
 the paid app (parity plus the three gaps plus GPS/map and mirror), a quickstart pointing at
-`docs/SETUP.md`, the each-user-builds-their-own note, and GPL-3.0 with attribution to
-`BraedenP232/PwnIOS`.
+`docs/SETUP.md`, the each-user-builds-their-own note, a link to the GitHub milestones as the
+roadmap (§8), and GPL-3.0 with attribution to `BraedenP232/PwnIOS`.
 
 ---
 
-## 8. ROADMAP.md
+## 8. The roadmap is the milestones
 
-Narrative of the §6.2 milestones, each with its issue list, and a clearly marked "Not planned"
-section for web push with the one-line reason (only useful while tethered with the app open).
+The roadmap is the §6.2 milestones on GitHub, each with its issues, and it is not a tracked file.
+
+SPEC declared a `ROADMAP.md` carrying a narrative of those milestones and it was never written
+(issue #201). Writing it now would put the milestone list in two places, one of which updates
+when an issue is closed and one of which updates when somebody remembers, and a roadmap that
+disagrees with the issue tracker is read as the tracker being wrong. So the file is gone from §1
+rather than created, and §7 requires the README to link the milestones, which is what a reader
+follows.
+
+The one thing the file was to carry that the milestones cannot is the **"Not planned"** note, so
+it is written here: **web push is not planned**, because it is only useful while tethered with
+the app open, which is the case where the app is already showing what it would notify about.
 
 ---
 
@@ -5489,6 +5597,7 @@ Tests are part of the deliverable, not a follow-up. Every task in §14 lands wit
 | File | Covers |
 |---|---|
 | `test_plugin_loads.py` | F30: loads `plugin/companion.py` via `spec_from_file_location` + `exec_module` with the module absent from `sys.modules` throughout, and again with it registered first; both assert a `Companion` class present, a `plugins.Plugin` subclass, and instantiable; `sys.modules` cleanup scoped to the two names the file itself registers |
+| `test_spec_tree.py` | §1.1: every path §1's tree names is tracked, every tracked directory is named, and the two exemptions are exactly the seven open listings and the three opaque stubs. Parses the tree from `SPEC.md` and compares it with `git ls-files`; the parse is asserted against landmarks and floors before any comparison, because a parser that returned nothing would make every later assertion pass |
 | `test_stats.py` | field-by-field `stats` mapping; `pasv_or_auto` across all four states; `capabilities` reflects `plugins.loaded`; **asserts `session()` call count is 0** during `get_stats`; `SessionCache.refresh` before `on_ready` (agent getter returning `None`) and on a non-`Mapping` bettercap snapshot both return `False` without raising and leave a prior snapshot and its climbing age untouched, and the `None`-agent case is asserted to log nothing at all - it is a normal startup state, not the failure a dead bettercap logs |
 | `test_access_points.py` | `mac`→`bssid` mapping; `clients: None`; missing keys; empty list |
 | `test_handshakes.py` | SSID containing underscores; `.pcap` and `.pcapng`; unparseable name yields `bssid: null`; sidecar present/absent/malformed; 500-entry cap sets `truncated`; unreadable file skipped; both `on_handshake` argument shapes normalise identically |
@@ -6001,7 +6110,7 @@ command method directly and expecting an acknowledgment from it.
 ### 10.8 Definition of done
 
 A task is complete when: its tests pass locally and in CI, the §10.7 coverage gate is green,
-`check_plugin.py` passes, the schema and protocol-type checks are clean, the
+the §5.1 gates pass, the schema and protocol-type checks are clean, the
 `companion-reviewer` and `companion-security-auditor` agents have signed off, and the acceptance
 criteria in its issue are satisfied. Not before.
 
@@ -6419,8 +6528,8 @@ Each step ships with the tests named in §10 and is not done until they pass (§
    The shell comes before the views on purpose: it is where every layout defect this project has
    hit so far lives, and it is far cheaper to get right against one placeholder view than to
    retrofit under seven.
-7. `.github/check_plugin.py`, `release.yml` (CI landed early, see §5.1).
-8. README, ROADMAP, CONTRIBUTING, issue templates, `docs/PINNED-FACTS.md`.
+7. The `.github/` gates and `release.yml` (CI landed early, see §5.1).
+8. README, CONTRIBUTING, issue templates.
 9. GitHub project: labels, milestones, seed issues, epic (via `gh`).
 10. Tag a `0.x` release → the release workflow builds `dist.tgz`; run `install-on-pi.sh` on the Pi;
     end-to-end test from the iPhone (trust the CA, install the PWA, connect, exercise every view

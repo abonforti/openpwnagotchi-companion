@@ -152,3 +152,28 @@ def test_imports_when_already_registered_in_sys_modules():
 
     instance = module.Companion()
     assert isinstance(instance, module.Companion)
+
+
+def test_author_and_license_are_declared():
+    """SPEC.md section 2.1 requires the plugin to declare `__license__ =
+    'GPL3'`, and separately requires a header comment crediting
+    `BraedenP232/PwnIOS` as the origin - two different requirements, and two
+    different strings, neither standing in for the other.
+
+    This test imports `plugin.companion` itself rather than at module scope,
+    so this file's own claim above - that it is the one exception to the
+    ordinary `from plugin import companion` import, and uses no fixture that
+    imports the plugin the easy way - stays true.
+
+    SPEC.md pins the exact value only for `__license__` ('GPL3', matching
+    upstream's own plugin convention rather than the SPDX identifier
+    'GPL-3.0' used elsewhere in this repository, e.g. LICENSE). `__author__`
+    has no pinned value to assert against - only that pwnagotchi can read a
+    real, non-empty string off it, which is what a `str.strip()` check
+    establishes without guessing at content SPEC never wrote down.
+    """
+    from plugin import companion
+
+    assert companion.__license__ == "GPL3"
+    assert isinstance(companion.__author__, str)
+    assert companion.__author__.strip() != ""

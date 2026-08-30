@@ -6160,19 +6160,28 @@ is the most a repository can do about a fact kept outside it.
 **Putting the checker on a pull-request path changed who can steer it.** The repository it fetches
 comes from `upstream` in the manifest, interpolated into a URL, and until this change nothing
 validated it: a pull request editing that field redirected CI's outbound fetch wherever it liked.
-It is contained rather than dangerous, since the job holds `contents: read`, a fork's pull request
-gets no secrets, and the archive is parsed and string-matched and never executed. It is still a
-value out of the diff steering a network call, so `upstream` is now checked against the
-`owner/name` shape, the same check and the same reasoning `tools/install-on-pi.sh` applies to
-`--repo`, and a value that fails it is the check refusing to run rather than a drift result. The
-member-count limit that would bound a hostile archive is issue #165, and the finding is the
-ordinary consequence of a script's audience widening: it was written for a weekly cron, where a
-dead runner cost nothing and nobody could reach it from outside.
+It is contained rather than dangerous on the pull-request path, where `ci.yml`'s job holds
+`contents: read`, a fork's pull request gets no secrets, and the archive is parsed and
+string-matched and never executed. **On the cron path it is `upstream-drift.yml`, and that job
+holds `contents: read` and `issues: write`**, which is the grant worth protecting and the one the
+workflow's own comment names: a token that can file an issue is a token that can be made to file
+a fabricated one. It is still a value out of the diff steering a network call, so `upstream` is
+now checked against the `owner/name` shape, the same check and the same reasoning
+`tools/install-on-pi.sh` applies to `--repo`, and a value that fails it is the check refusing to
+run rather than a drift result. What bounds a hostile archive is §11.3, and the finding was the
+ordinary consequence of a script's audience widening:
+it was written for a weekly cron, where a dead runner cost nothing and nobody could reach it
+from outside.
 
 `--ref` names a tag explicitly and overrides both, which is how a candidate version is examined
 before anybody decides to move to it. Passing `--ref` and `--latest` together is a **usage error**
 and not a precedence rule: they are the two different questions, and a script that silently picked
-one would answer a question nobody asked.
+one would answer a question nobody asked. An **empty** `--ref` is the same usage error and exits
+the same way, because the flag was given and names no tag: it asks no question at all, and the
+failure mode to avoid is that it stops being distinguishable from not passing the flag. That holds
+whether it arrives alone or with `--latest`, and the second is worth saying because `"" and True`
+is falsy, so a mutual-exclusion check written on truthiness lets `--ref "" --latest` through the
+very rule that exists to catch it.
 
 **A manifest with no `verified_against`, or an empty one, is the check failing rather than
 drifting.** It exits the way a malformed manifest already does, above 1, so
@@ -6186,6 +6195,249 @@ number in the manifest was read by nothing and the weekly job answered only the 
 means **this repository is wrong about the code it was written against**, which is a defect here.
 The second means **upstream changed**, which is news, and may well end in widening what the plugin
 tolerates rather than following it.
+
+### 11.3 What the checker says when it fails, and what it refuses to read (issues #150, #165, #167)
+
+§11.2 settled which question the checker is answering. This settles the two things that go wrong
+after it has an answer: the sentence it prints, and how much of upstream it is willing to hold in
+memory to get there.
+
+Both matter more here than they would elsewhere, and for the same reason. The `--latest` run's
+output does not go to somebody watching a terminal; `upstream-drift.yml` files an issue with it,
+and the first person to read that issue is reading it cold, weeks later, with no idea what the
+run was doing. A wrong sentence there is not a cosmetic defect. It is a wrong instruction to the
+only person who will ever act on it.
+
+#### The reason comes from the fact, never from the branch that caught it
+
+A fact fails with the reason **that fact carries**, from its own `why`, and never with a reason
+fixed in the branch that caught it. The branch does not know why the entry is there.
+
+The printer already had this right: every drifted entry is reported with its `why` appended
+underneath, as `matters because: ...`, and in the JSON output as its own field. What was wrong
+was one branch adding a *second* reason of its own on top, and getting it wrong for three of the
+four entries that reach it. So the correction is subtraction: the `absent` branch says what it
+observed and stops, which is what every other kind already did.
+
+The `absent` kind was written for §11.1, and its message says so: it reports a symbol "which
+section 11.1 forbids relying on". **That is false of every entry using it, all four**, and the
+first draft of this paragraph said "one of the four", which was itself the defect this section
+is about, arriving in the sentence describing it. §11.1 names none of them. They are **positive
+claims about upstream's shape**: F28d pins that `display.py` defines no `get`, which is what
+makes the delegation chain F28b and F28c pin hold; F30b pins that `plugins/__init__.py` never
+names `sys.modules`; F31b pins that `cli.py` never emits `ready`, which is why manual mode is
+agent-less; F32c pins that pwnagotchi puts no key of its own into a plugin's options, which is
+F32's load-bearing claim. Each of those failing would mean upstream **gained** something, and in
+most of them that would be good news: a constraint this project works around would have lifted.
+The filed issue would announce it as a forbidden symbol somebody had started relying on and send
+the reader to §11.1, which does not mention any of them.
+
+The count was got wrong by reading the kind's name rather than the four entries, which is the
+same shortcut the original message took. It is left visible here rather than corrected in place,
+because a section arguing that a citation must be checked is the last place to quietly fix an
+unchecked one.
+
+**Nothing may cite §11.1 for a fact §11.1 does not mention.** A citation to a section that does
+not contain the thing cited is worse than no citation, because it is checkable and it survives
+being checked: the reader looks, finds nothing, and concludes they have misunderstood.
+
+This generalises past the `absent` kind, and it is written as a rule rather than as a fix so that
+the next kind added does not repeat it: every message a fact failure prints is built from that
+fact's own entry. A kind may say what it observed -- what it found, what it expected -- because
+that is the branch's own knowledge. Why the observation matters is the entry's, and the entry
+already carries it.
+
+#### A malformed manifest is the check failing, never upstream drifting
+
+§11.2 already draws the line: exit 1 means upstream moved and `upstream-drift.yml` files a ticket
+saying so, and anything above 1 means the check could not run. `verified_against` already honours
+it. `upstream` did not, and the gap was in the shape of the guard rather than in its intent: the
+guard tests `".." in repo` and matches a pattern against it, and both raise `TypeError` for a
+value that is not a string, while a missing key raises `KeyError`. An uncaught exception exits
+**1**, which is the one status that means something specific and false.
+
+**Nothing a fact asserts with may be empty, at any depth, and this is the rule rather than the
+three fixes that produced it.** Three times on this branch a security audit found the same shape:
+a value of the required type whose *empty* value makes the assertion vacuous, so the check holds
+for ever and the required job exits 0. First `facts` itself. Then `params`, where `""` skips the
+signature half of a fact. Then `text` and `names`, which between them carry **33 of the 42 real
+facts** -- 31 through `text` as a list and 2 more through `names`: emptying one `text` array
+turns a red run green while the output still says forty-two
+facts were checked. It was isolated end to end -- twenty-seven genuinely drifted facts report
+`exit 1, drifted 27`, and the same twenty-seven with `text: []` report `exit 0, drifted 0`.
+
+Emptiness is not the whole of it either: `text: [""]` is non-empty and still vacuous, because
+`"" in source` is true of every source there has ever been. So the rule is about what the value
+**asserts**, not about its length: every collection a fact checks with must be non-empty, and so
+must its elements. A `why` of `""` is the same defect wearing #150's clothes -- the key is
+present, the type is right, and the report prints no reason at all.
+
+**And it reaches the fields a fact is written *about*, not only the ones it asserts *with*.** A
+first pass guarded `text`, `names`, `params` and `why` and left `file`, `name`, `class` and `id`
+type-checked only, which is the same rule applied to half the manifest. An empty one of those does
+not make the check vacuous; it makes it **permanently false**, which is worse, because the run
+exits 1 and `.github/workflows/upstream-drift.yml` reads exactly that status as upstream having
+moved. `name: ""` reports `m.py no longer defines ()`, `file: ""` reports ` no longer exists
+upstream`, and an empty `id` prints a drift line with nothing identifying it. That is the same
+fabricated drift the `count: "1"` case was fixed for, arriving through four more doors.
+
+The general form is worth more than the instances. **A gate's arguments must be checked for
+vacuity and not only for shape**, because a well-typed empty value is the one input that makes a
+check pass by asking nothing, and it is indistinguishable in the output from a check that asked
+everything and was satisfied.
+
+**A manifest with no facts in it is the check failing, not the check passing.** This is written
+first because it is the one way this section could make things worse than it found them. The
+`facts` key was read as `manifest["facts"]`, which raised for a manifest that lacked it and went
+red; routing every read through a validated local with a default turns that into a clean exit
+reporting zero facts checked. `Pinned facts still hold` is a required check on every pull
+request, so a diff that empties or drops that key would report success while checking nothing,
+which is the failure §5.1's rule about the ban scans exists to prevent, arriving through the
+door marked tidiness. `facts` must be present, must be a list, and must not be empty.
+
+**And an unknown key on a fact is refused, not ignored.** The same audit found `params` reaching a
+branch with no validation behind it, where `params: ""` makes the signature half of a fact silently
+not checked and the run exits 0, and `params: "celsius"` iterates characters and reports that a
+function no longer takes `c`, `e`, `i`, `l`, `s`, `u`. A misspelt key is the same defect with a
+better disguise: `param:` disables a check and leaves nothing behind to notice. This is the
+argument §2.2.1 already makes about an unknown configuration key, applied to the manifest, and it
+is stronger here because nobody reads this file except a script. The same
+applies one level up: a manifest whose top level is not an object at all is malformed, and
+reaching `.get()` on it raises and exits 1, which is the status that means upstream moved.
+
+**Every manifest value is type-checked before it is used, and a value of the wrong type exits the
+way a missing one does.** Every value means every value the script reads, not the ones that
+happened to have a guard nearby: `upstream`, `verified_against`, `facts` and, on each fact, every
+key any branch reaches -- `file`, `id`, `kind`, `why`, and the per-kind fields. The first version
+of this change checked four of them and left `file`, `id`, `count`, `name` and `class` unguarded,
+and review found three shapes that still exited **1**: a `file` that is a list is unhashable and
+raises building the wanted set, a fact with no `id` raises in the reporter, and a `count` that is
+a string compares unequal to an integer for ever and reports a drift that is not one. This is
+stated for the
+manifest as a whole rather than for `upstream` alone, because the failure was not really about
+`upstream`: it was about a validator that checked the shape of `facts` and left the fields beside
+it to whatever guard happened to be nearest the point of use. A guard written against the value it
+expects is not a guard against the value it does not.
+
+**`why` is required, and that is a consequence of #150's subtraction rather than a tidiness
+rule.** Before it, the `absent` branch carried a reason of its own; after it, the reason comes
+only from the entry, so a fact with no `why` produces a report with no reason at all. A rule that
+the reason comes from the fact is only safe if every fact has one.
+
+#### The checker keeps what the manifest asked for, and refuses an archive that will not fit
+
+`fetch_tree` bounds the compressed download and bounds each member as it reads it, and bounds
+neither the number of members nor the total it accumulates. Every text member of the whole
+upstream repository is decoded and kept, of which the manifest names a handful. An archive of
+many small members stays under both existing caps and exhausts the runner.
+
+The changes below, and the first is the one that does the work. They are not counted, for the
+reason this section gives twice already:
+
+- **Only the paths the manifest names are kept.** The checker knows exactly which files it is
+  about to ask questions of; keeping the rest is not a precaution against anything and is what
+  makes the memory a function of upstream's size rather than of this repository's manifest. This
+  is the bound that cannot be tuned wrong, because it is not a number.
+- **Exit 1 means upstream moved, and nothing else may produce it.** `upstream-drift.yml` files a
+  ticket saying pwnagotchi drifted when it sees 1, so every failure that is *not* drift has to
+  exit above it. That makes the transport and the archive part of this rule rather than incidental
+  to it: a download cut short raises `http.client.IncompleteRead`, and a truncated or corrupt
+  gzip stream raises `EOFError` or a `zlib` error while the members are being iterated. None of
+  those is an `OSError`, so an `except OSError` around the download does not see them and the
+  member loop outside every `try` does not either; the process dies with the interpreter's own
+  status, which is 1, and the workflow reports drift that did not happen.
+
+  **There are four `except` clauses across three stages, carrying two different exception sets,
+  and the split is load-bearing.** The download has two of them: one for `HTTPError`, with its own
+  message, and one for `(URLError, TimeoutError, OSError, HTTPException)`. `tarfile.open()` and the
+  member loop have one each, and those two share `(TarError, EOFError, zlib.error, OSError,
+  HTTPException)`. Only the last two carry the same set; a reader who unifies all four on the
+  strength of a sentence saying "the same exception set" drops either `URLError` and `TimeoutError`
+  or `TarError`, `EOFError` and `zlib.error`, which is the silent reopening this paragraph exists
+  to prevent -- and an earlier draft of it said exactly that, which is why the arithmetic is spelt
+  out here rather than summarised. The messages differ because an archive that would not open and
+  one that broke while being read are different failures with different next actions. The split
+  is not tidiness: a truncated
+  stream raises from the constructor or from the loop depending on where the cut lands and how
+  well the content compressed, and the two paths were closed on different days -- the constructor
+  one only after a test author's fixture kept going red and the red turned out to be real. A later
+  simplification back to one handler would reopen it silently, which is why the arrangement is
+  stated here rather than left in a comment.
+
+  **Two silent skips remain in the loop and they are named rather than closed.** `if not
+  member.isfile(): continue` fires for a wanted path served as a symlink or a directory, and it
+  produces the same fabricated "no longer exists upstream" the decode case was fixed to stop. It
+  is left because a pinned path becoming a symlink upstream is arguably real drift, unlike a
+  decode failure, so the reporter's sentence is arguable rather than wrong -- but it is arguable,
+  which is why it is written down. `if handle is None: continue` is unreachable:
+  `TarFile.extractfile()` returns a file object for every member `isfile()` admits, so the branch
+  is dead and cannot be covered.
+
+  **A wanted member that is not valid UTF-8 fails the run.** Skipping it leaves the manifest's
+  path absent from what was read, and the reporter says the file no longer exists upstream: exit
+  1, and a ticket saying pwnagotchi moved. Silently skipping an undecodable member was right when
+  every text member of the tree was decoded and skipping binaries was the point; once only the
+  paths the manifest names are kept, the skip can fire on nothing but a file the manifest asked
+  for by name, and it turns a decode problem into a fabricated fact about upstream.
+- **The member count is bounded**, and the archive is iterated rather than indexed:
+  `getmembers()` materialises the whole index before the first bound can apply, so a hostile
+  archive wins before any cap is consulted. The number lives in the script and not here, and
+  that is a different choice from the Node floor in §5.1.1 rather than the same one: there, one
+  constraint genuinely has three spellings across three files and the answer is a check between
+  them. Here there is no second spelling to check against, because the specification does not
+  repeat the number at all. It says the bound exists and what it is derived from -- and
+  it is derived from **upstream's whole tree**, not from the manifest. A real pwnagotchi checkout
+  runs to a few thousand files, so the cap sits generously above any legitimate release and far
+  below what a crafted archive can pack into the compressed-input bound. The manifest's path count
+  is what the *total kept* is derived from, in the bullet below; the two bounds answer different
+  questions and an earlier draft of this bullet conflated them, which would have sent the next
+  person retuning the number to the wrong quantity.
+- **The total kept is bounded, by its own number, and the arithmetic is why.** The first
+  version of this section said no third bound was needed, because what survives the filter is
+  the manifest's path count times the existing per-member cap, "a small fixed quantity". That
+  reasoning is sound and the adjective is wrong. The arithmetic, done on 2026-08-30 rather than
+  assumed: twenty paths in the manifest times a four mebibyte per-member cap is eighty
+  mebibytes of decoded text held in a dictionary, and it grows with every fact anybody adds.
+  **Those two numbers are written out here and the other caps are not, deliberately.** A worked
+  sum has to show its operands or it is not a sum, and the rule against repeating a constant is
+  about a limit that could drift out of step with the code -- this is a calculation done on a
+  stated date against the values of that day, which ages into history the way §11's dated
+  observations do rather than into being wrong. An
+  archive serving each of those real paths padded to just under the per-member cap compresses
+  to almost nothing, passes the download cap, passes the member count, and is exactly the shape
+  issue #165 was opened about. So there is a total, it is checked as members are kept, and
+  exceeding it is the check refusing to run. The number lives at the constant with its
+  derivation, not here; what belongs here is that the derivation has to be done rather than
+  asserted, which is the whole reason this bullet exists.
+
+- **An oversized member is refused, not truncated**, and this one is not about memory at all.
+  The reader stopped at the per-member cap and kept what it had, which is the only limit in the
+  file that fails by continuing rather than by stopping. A truncated file is a file this checker
+  then asks questions of: a `contains_all` fact whose string sits past the cut reports that
+  upstream no longer contains it, `upstream-drift.yml` files an issue saying upstream moved, and
+  nothing moved. That is this section's own subject arriving inside the mechanism the section is
+  about. Every other bound here refuses; so does this one.
+
+Exceeding any of them is the check refusing to run, above 1, not a drift result.
+
+**Every one of the numeric caps bounds memory, and none bounds decompressed bytes, which is
+named here rather than closed.** Two shapes get past them: a PAX or GNU long-name header, whose
+payload `tarfile` reads
+whole while walking headers, before any of the caps can apply; and a member the manifest does not
+name, which is skipped by inflating past it, so `MAX_ARCHIVE_BYTES` of compressed input can
+still cost the runner tens of gigabytes of decompression. Both are CPU rather than memory, both
+are contained in
+practice because codeload generates the archive from real repository content, and neither is
+closed. It is written down for the same reason §2.15.1 writes down the `os.walk` gap it does not
+close: a known limit invites less doubt about the ones that are closed than a silent one does.
+It is contained rather than dangerous -- on the pull-request path `ci.yml`'s job holds
+`contents: read`, a fork's pull request gets no secrets, and the archive is parsed and
+string-matched and never executed -- so the failure mode is a dead runner and not a compromised
+one. `upstream-drift.yml` additionally holds `issues: write`, which is why exhausting its runner
+is worth naming at all: the job that dies is the one that would otherwise have filed the ticket.
+It is worth fixing anyway, because the script's audience
+widened: it was written for a weekly cron where a dead runner cost nothing and nobody outside
+could reach it, and §11.2 put it on a pull-request path that gates merges.
 
 ## 12. Versioning and releases
 

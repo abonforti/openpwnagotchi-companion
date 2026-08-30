@@ -16,8 +16,8 @@ SPEC 2.15.1 states is exact and this module tests exactly that sentence:
     case it is, since they want different next actions: "no HTML file anywhere" says the build
     did not run, "no scripts in this file" says this page is wrong, "could not read this file"
     says this page could not be opened, and two more join them for a subtree that could not be
-    read and one that was not followed. Every one of them names the file or directory it is
-    about.
+    read and one that was not followed. Every one of them names the inode the reader has to
+    change.
 
 The check runs against every HTML file the real build emits under `dist/`, after `Build`, in
 the `frontend` job of `.github/workflows/ci.yml`. SPEC 13 (and issues #112, #126) is explicit
@@ -1210,6 +1210,249 @@ def test_three_subdirectories_under_one_unsearchable_parent_are_named_once(tmp_p
             f"a child directory must never be named individually - the "
             f"parent is what could not be searched; got {output!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The naming rule: a failure names the inode the reader has to change
+# (SPEC 2.15.1, issues #159, #160). A read failure on a file is the one
+# ambiguous case - the file's own mode or its parent's could equally be the
+# cause - so it alone names both; a missing file (or an EISDIR) is
+# unambiguous and names the file alone, and a decode failure is unambiguous
+# for the same reason, no directory mode can cause it.
+# ---------------------------------------------------------------------------
+
+
+def _annotation_lines(output: str, path: str) -> list[str]:
+    """Every `::error file=<path>::...` annotation line naming exactly
+    `path` - not a path that merely contains it as a substring, since
+    `::error file=` is a fixed prefix and the path ends at the next `::`."""
+    prefix = f"::error file={path}::"
+    return [line for line in output.splitlines() if line.startswith(prefix)]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are POSIX-specific")
+def test_unreadable_file_caused_by_parent_directory_mode_names_both(tmp_path):
+    """Issue #160, and SPEC 2.15.1's naming rule: a read failure on a file
+    is the one ambiguous inode, because either the file's own mode or its
+    parent's could be the cause, and the gate has no reason to make a
+    second stat to tell which - so it names both. A subdirectory that is
+    readable but not executable (mode 0444) still lists its own entries -
+    `os.walk` populates the filenames from the directory's dirent type
+    without needing to traverse into it - so the walk hands `check_file` a
+    path it believes it can open. Opening it is where the permission
+    failure actually happens: resolving `dist/sub/page.html` requires
+    search (execute) permission on `dist/sub`, which mode 0444 does not
+    grant, so `open()` raises `PermissionError` on the file itself. The old
+    message named only the file
+    (`could not read frontend/dist/sub/page.html: Permission denied`,
+    quoted directly in the excerpt this test is written from) - the victim,
+    not the cause.
+
+    This asserts the `::error file=` annotation itself, not a substring of
+    the surrounding text: a fix that printed a bare sentence with no
+    `::error file=` prefix - leaving GitHub with nothing to render - would
+    still satisfy a check for `"dist/sub/page.html" in output`, which is
+    exactly the gap a prior version of this test left open.
+
+    A single plain file directly under the mode-0444 directory - no
+    further nested subdirectory - is deliberate: with a nested `deep/`
+    subdirectory instead (as in
+    `test_subdirectory_readable_but_not_searchable_fails_without_a_traceback`
+    above), the symlink check's own `lstat` on the `deep` entry name is
+    what raises, caught by `os.walk`'s `onerror` before `check_file` is
+    ever reached, and that is a different failure site already pinned by
+    that test. A file directly inside `sub/` is only ever discovered by
+    `os.walk` proper and only fails once `check_file` tries to open it,
+    which is the code path #160 is about."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permission bits, so this cannot be exercised as root")
+
+    frontend_dir = _build_scratch_tree(tmp_path)
+    _write_html(frontend_dir, "index.html", _clean_html("root"))
+    page = _write_html(frontend_dir, "sub/page.html", _dirty_html("nested"))
+    sub_dir = page.parent
+    sub_dir.chmod(0o444)
+
+    try:
+        result = _run_check(frontend_dir)
+    finally:
+        sub_dir.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+
+    assert result.returncode != 0, (
+        f"a file made unreadable by its parent directory's mode must fail "
+        f"the gate; stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    output = result.stdout + result.stderr
+    assert "Traceback" not in output, (
+        f"the open() failure on dist/sub/page.html must be caught and "
+        f"reported, not raised; got {output!r}"
+    )
+    lines = _annotation_lines(output, "frontend/dist/sub/page.html")
+    assert len(lines) == 1, (
+        f"expected exactly one ::error file=frontend/dist/sub/page.html:: "
+        f"annotation, the file the failing open() call was actually made "
+        f"on; got {output!r}"
+    )
+    line = lines[0]
+    # "dist/sub" is a substring of "dist/sub/page.html" itself, so this
+    # alone would already be satisfied by an annotation naming only the
+    # file - exactly the old, #160 behaviour. Strip the file path out of
+    # this one annotation line first and require the directory to still be
+    # there, proving it is named separately as the ambiguous second cause,
+    # in the same message, not only present as a fragment of the file's own
+    # path or printed somewhere else in the run.
+    assert "frontend/dist/sub" in line.replace("frontend/dist/sub/page.html", ""), (
+        f"frontend/dist/sub's own mode is the ambiguous second cause of the "
+        f"read failure and must be named in the same annotation, separately "
+        f"from the file it was made on, not only appear as a substring of "
+        f"frontend/dist/sub/page.html; got line={line!r} full output={output!r}"
+    )
+    assert str(tmp_path) not in output, f"no message may carry an absolute path; got {output!r}"
+
+
+def test_a_missing_file_names_only_the_file_with_no_cause_clause(tmp_path):
+    """SPEC 2.15.1's naming rule the other way: a read failure is
+    ambiguous only when the file's own mode or its parent's could equally
+    be the cause. A missing file is unambiguous - no directory mode makes a
+    file exist - so appending "may be the directory whose mode is actually
+    the cause" here would send the reader to an inode that cannot possibly
+    be implicated, which the coordinator named as issue #160 inverted. A
+    broken symlink produces exactly this: `os.walk` classifies a symlink
+    whose target does not exist as a file (`DirEntry.is_dir()` treats a
+    dangling or inaccessible target as "not a directory" rather than
+    raising), so it reaches `check_file` as an ordinary filename, and
+    `open()` on it raises `FileNotFoundError` (`errno.ENOENT`,
+    `strerror` "No such file or directory") - the reference message from
+    the coordinator's report is
+    `could not read frontend/dist/missing.html: No such file or directory`,
+    with nothing after it. `dist/` itself is given full, ordinary
+    permissions throughout, so there is no directory-mode explanation
+    available for this failure even in principle - the missing target is
+    the only possible cause, and that is the point being pinned."""
+    if os.name != "posix":
+        pytest.skip("symlink creation is POSIX-specific here")
+
+    frontend_dir = _build_scratch_tree(tmp_path)
+    _write_html(frontend_dir, "index.html", _clean_html("root"))
+    dist_dir = frontend_dir / "dist"
+    link = dist_dir / "missing.html"
+    link.symlink_to(dist_dir / "does_not_exist_target.html")
+
+    result = _run_check(frontend_dir)
+
+    assert result.returncode != 0, (
+        f"a missing file must fail the gate; "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    output = result.stdout + result.stderr
+    assert "Traceback" not in output, (
+        f"a missing file must be caught and reported, not raised; got {output!r}"
+    )
+    lines = _annotation_lines(output, "frontend/dist/missing.html")
+    assert len(lines) == 1, (
+        f"expected exactly one ::error file=frontend/dist/missing.html:: "
+        f"annotation; got {output!r}"
+    )
+    line = lines[0]
+    # A literal `"may be the directory" not in line` is coupled to today's
+    # wording: a mutant that rewords the cause clause while still naming
+    # the parent by path - "frontend/dist may also need its permissions
+    # checked", say - would survive it. It would also survive a bare
+    # `"frontend/dist" not in line` check for the mirror-image reason the
+    # EACCES-case test above already had to work around: "frontend/dist"
+    # is a substring of "frontend/dist/missing.html" itself, so the file's
+    # own annotated path would trip a naive check on its own, with no
+    # cause clause involved at all. Strip the file's own path out first,
+    # the same technique the EACCES case uses, and require nothing
+    # directory-shaped to remain in what is left - that pins "no cause was
+    # asserted", not "this particular sentence was absent".
+    assert "frontend/dist" not in line.replace("frontend/dist/missing.html", ""), (
+        f"a missing file is unambiguous - no directory mode can make a "
+        f"file exist - so no clause naming a directory as a possible cause "
+        f"may be appended here, under any wording; it would send the "
+        f"reader to an inode that cannot possibly be the cause; "
+        f"got line={line!r} full output={output!r}"
+    )
+    assert str(tmp_path) not in output, f"no message may carry an absolute path; got {output!r}"
+
+
+# EPERM is excluded from the same guard as EACCES's opposite: `open()`
+# returns EPERM for a property of the file itself - an immutable or
+# append-only attribute, O_NOATIME without ownership, sealing - and never
+# for a parent directory's mode, so a clause naming the parent on EPERM
+# would be issue #160 inverted in miniature, the same as the ENOENT case
+# above. No test exercises it, and not for lack of trying: setting the
+# immutable or append-only attribute needs CAP_LINUX_IMMUTABLE, and
+# O_NOATIME on a file the caller does not own needs CAP_FOWNER - neither is
+# available to an unprivileged test process on any host, a fact about the
+# capability model rather than about this machine. Confirmed directly
+# rather than assumed: `chattr +i` on a throwaway file fails at the
+# `chattr` call itself with "Operation not permitted", before a read is
+# even attempted, and O_NOATIME on a self-owned file - the only kind an
+# unprivileged fixture can create, so ownership is never denied - opens
+# without error rather than returning EPERM, and `Path.read_text()` does
+# not pass `O_NOATIME` regardless. Sealing applies to `memfd_create`
+# objects, not a path opened by name, so it cannot apply to a file
+# `check_file` reads either. This is left as a documented gap, along with
+# the walk-level `DT_UNKNOWN` classification hole and the `.htm`/`.HTML`
+# extension gap already named elsewhere in this file, rather than a test
+# that opens a fixture and asserts on an errno it did not actually raise.
+
+
+def test_a_file_that_opens_but_does_not_decode_fails_and_names_the_file_distinctly(tmp_path):
+    """Issue #159, and SPEC 2.15.1's naming rule: a decode failure is
+    unambiguous, because no directory mode can cause one, so it names the
+    file alone rather than reaching for a second, uninvolved inode.
+    `read_text(encoding="utf-8")` raises `UnicodeDecodeError`, a
+    `ValueError` rather than an `OSError`, so a naive `except OSError`
+    around the read lets it escape and end the run in a Python traceback -
+    no `::error file=` annotation for GitHub to render. A bare non-zero
+    exit status does not prove the fix, since an unhandled exception also
+    exits non-zero; this test asserts the traceback is gone and a proper
+    `::error file=` annotation naming the file takes its place, not merely
+    that the filename appears somewhere in the output - a bare sentence
+    with no annotation prefix would still satisfy a plain substring check,
+    which is exactly the gap a prior version of this test left open. That
+    annotation must also read as its own case rather than reusing the
+    read-failure wording - "could not read" is quoted directly, in the
+    excerpt this test is written from, as issue #160's read-failure
+    phrasing (`could not read frontend/dist/sub/page.html: Permission
+    denied`) - because a file that opened fine but failed to decode is a
+    different problem from one that would not open at all: a wrong or
+    corrupt build artifact, not a permission or a missing file."""
+    frontend_dir = _build_scratch_tree(tmp_path)
+    dist_dir = frontend_dir / "dist"
+    dist_dir.mkdir()
+    # 0xFF is not a legal leading byte in any UTF-8 sequence, so this must
+    # raise UnicodeDecodeError rather than merely decode to unexpected
+    # characters.
+    (dist_dir / "index.html").write_bytes(b"<!doctype html><html>\xff\xfe</html>")
+
+    result = _run_check(frontend_dir)
+
+    assert result.returncode != 0, (
+        f"a page that opened but did not decode as UTF-8 must fail the "
+        f"gate; stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    output = result.stdout + result.stderr
+    assert "Traceback" not in output, (
+        f"a UnicodeDecodeError escaping an except OSError ends the run in "
+        f"a traceback with no ::error file= annotation - it must be caught "
+        f"and reported as a message instead; got {output!r}"
+    )
+    lines = _annotation_lines(output, "frontend/dist/index.html")
+    assert len(lines) == 1, (
+        f"expected exactly one ::error file=frontend/dist/index.html:: "
+        f"annotation naming the file that opened but did not decode; "
+        f"got {output!r}"
+    )
+    line = lines[0]
+    assert "could not read" not in line.lower(), (
+        f"a file that opened and did not decode wants a different next "
+        f"action from one that would not open at all, so it must not read "
+        f"as the same 'could not read' failure; got line={line!r}"
+    )
+    assert str(tmp_path) not in output, f"no message may carry an absolute path; got {output!r}"
 
 
 # ---------------------------------------------------------------------------

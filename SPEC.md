@@ -1682,10 +1682,11 @@ anywhere" says the build did not run; "`index.html` is missing" says the entry p
 "no scripts in this file" says this page is wrong; "could not read this file" says this page
 could not be opened; and a subtree that could not be read and one that was not followed each say
 the gate could not look there. They are not counted here: the count went stale twice while this
-section was being written, and the list is the code's to grow. Every one of them **names the file or directory
-it is about**, and that is the half a test forgets to pin: an assertion looking for `sub` in the
-output is satisfied by the word "subtree" in the sentence around it, and one looking for `linked`
-by the word "symlinked". Pin the path, not a fragment of the prose.
+section was being written, and the list is the code's to grow. Every one of them **names the
+inode the reader has to change**, by the rule stated below, and that is the half a test forgets
+to pin: an assertion looking for `sub` in the output is satisfied by the word "subtree" around
+it, and one looking for `linked` by the word "symlinked". Pin the path, not a fragment of the
+prose.
 
 **No two messages may be printed together when one contradicts the other.** This went wrong three
 times in one ticket, each time one level further down: a message saying the gate could not see
@@ -1753,11 +1754,20 @@ because mode `0` fails at the listing and takes the path that works. Any call th
 during the walk is treated as the walk failing on that directory: caught, recorded, and reported
 with the same named message.
 
-**No message the gate prints carries an absolute path, and one path out of it still does.** The
-rules below hold for every one of the messages; they do not hold for a `UnicodeDecodeError`, which
-is a `ValueError` rather than an `OSError`, escapes the handler, and ends the run in a traceback
-carrying this script's absolute path and a fragment of the offending page. That is issue #159, and
-it is named here because the paragraph would otherwise read as a guarantee it does not make.
+**No message the gate prints carries an absolute path, with one named exception.** The rules
+below hold for every one of the messages. They did not hold for a `UnicodeDecodeError`, which is a
+`ValueError` rather than an `OSError`, escaped the handler, and ended the run in a traceback
+carrying this script's absolute path and a fragment of the offending page. That was issue #159; it
+is caught now, and the paragraph below says which case it is. The history is kept because the
+guarantee is only worth as much as the exception that once escaped it.
+
+The exception is the fallback that renders a path **outside** the repository root, which returns
+the path as it stands because `relative_to` raises rather than approximating. No reachable route
+to it is known: the root is resolved, `dist/` is built from it, and every path printed derives
+lexically from `dist/`. It is named here rather than claimed closed, alongside the `.htm` and
+`DT_UNKNOWN` gaps, because an absolute stated without its exception is the shape this section
+keeps having to correct -- three times tonight, each time a rule that was true of most of the
+messages written as though it were true of all of them.
 
 **No message prints an operating-system error object whole.** `str(OSError)` embeds the absolute
 filesystem path, and every message here is deliberately repo-relative, so the reason is printed
@@ -1779,9 +1789,55 @@ walking with `os.scandir` directly so the classification error is ours to record
 for the same reason as the `.htm` gap: a known limit invites less doubt about the ones that are
 closed than a silent one does.
 
-Inside the walk a failure names **the directory the call was made on** rather than the child that
-raised: a subdirectory with the wrong mode makes the stat on its children fail, and naming a child
-says which call broke instead of what the reader has to change.
+
+**One naming rule, and it covers every message this gate can print (issues #159, #160).** A
+failure names **the inode the reader has to change**. Where that is unambiguous the message names
+that one and nothing else, and where it is genuinely ambiguous the message names both candidates.
+The rule is about the reader's next action rather than about which call happened to raise, and it
+resolves the three cases this gate actually has:
+
+- **Where the walk *raises*, that is the directory**, not the child that raised. A subdirectory
+  with the wrong mode makes the stat on its children fail; the child is a bystander, the
+  directory's mode is the thing to change, and naming children would print one line per entry for
+  a single cause. No child is named individually for a stat failure, which is pinned by a test.
+  The walk's **other** message is not this case and must not be read as an exception to it: a
+  symlinked subdirectory names the entry itself, because there the entry *is* the inode the
+  reader changes -- nothing about its parent is wrong, and the next action is about that link.
+- **A read that fails on a file is the ambiguous case.** `open()` really was called on that file,
+  so the file's own mode is a candidate; but so is its parent's, and the message cannot tell which
+  without a second stat it has no reason to make. It names both. That was issue #160: it named the
+  file alone, which is the victim whenever the cause is one level up. It names both **only where a
+  parent's mode can actually have caused the failure**, which is `EACCES` and nothing else:
+  path-resolution denial is `EACCES`, while `EPERM` from `open()` is always about the file itself,
+  and appending the clause to `ENOENT` or `EPERM` points the reader at an inode that cannot be
+  implicated -- issue #160 inverted, and a smaller version of the same defect. The `dist/`-by-name
+  check has the same two-candidate shape and deliberately does not name both, because the second
+  candidate is `frontend/` and there is no useful next action above it; that is a scoped exception
+  and not a second reading of the rule.
+- **A file that opened and did not decode is unambiguous, and the inode is the file.** No
+  directory mode can cause a decode error, so naming a directory there would send the reader to an
+  inode that is not implicated.
+- **The `dist/` block emits two messages and they name different inodes**, which is the rule
+  working rather than an inconsistency: a `dist/` that will not open names `dist/`, whose mode the
+  reader changes, and a `dist/` with no `index.html` names `frontend/dist/index.html`, the file
+  the reader has to produce.
+
+An earlier version of this paragraph said a failure names the failing call's path **and** the
+directory that could have caused it, always. That was wrong in both directions at once -- it
+contradicted the walk's deliberate rule, which a test already pinned, and it contradicted the
+decode message added in the same change. It is recorded rather than quietly replaced because the
+absolute was easier to write than the true rule and read as more rigorous than it was.
+
+**A file that opened and did not decode is its own case.** `read_text` raises `UnicodeDecodeError`
+on a page that is not valid UTF-8, and that is a `ValueError`: it escapes an `except OSError` and
+ends the run in a traceback. The gate does not falsely pass -- the exit status is still non-zero,
+which is the property that matters most -- but a traceback carries no `::error file=` annotation,
+so GitHub renders nothing against the file and the reader gets a Python stack instead of a
+sentence naming the page. It gets its own sentence rather than being folded into "could not read",
+because the two want different next actions: a file that would not open is a permission or a mode,
+and a file that opened and did not decode is a wrong or corrupt build artifact, which is exactly
+the class of thing this gate exists to catch early. The promise that a failure says which of its
+cases it is has to hold for this one too.
 
 **`style-src 'self'` also forbids inline `style="..."` attributes**, not only `<style>` blocks.
 No component uses one today, and Leaflet mutates `element.style.*` through the CSSOM, which CSP

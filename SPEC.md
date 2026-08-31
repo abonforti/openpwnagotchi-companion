@@ -5476,7 +5476,8 @@ listener rather than something this sentence can claim.
   capture files, because the handshake listing cannot be tested without them. Those fixtures are
   synthetic by policy (§13), enforced by review and by the security auditor rather than by the
   scanner. Matched text is never echoed, because the match
-  is the secret. Note what this job **cannot** do: the owner-specific infrastructure denylist
+  is the secret. Its outcome is three-valued and every pattern in it is probed in both
+  directions (§5.1.2). Note what this job **cannot** do: the owner-specific infrastructure denylist
   lives outside the repository by design (§13), so that check is a local pre-commit gate only.
   CI catches secrets that look like secrets to anyone; it cannot catch a hostname it is not
   allowed to know, and a green run is not proof a diff is safe to publish.
@@ -5485,7 +5486,9 @@ listener rather than something this sentence can claim.
 - **exit status of the ban scans**: each reads `git grep` in three cases rather than two. A match
   fails the job, exit 1 is the clean result, and anything else fails the job as a scan that did
   not run (§13). Without that, a pattern that stops compiling turns its own ban off and the job
-  stays green.
+  stays green. The rule is not about `git grep`: it reaches every gate whose clean verdict is an
+  absence, and §5.1.2 applies it to the secret scan, which used to reach a file it could not
+  decode and exit 0 anyway.
 - **mutation** (scheduled, not a PR gate): `mutmut` over `plugin/`, reported not enforced.
   Mutation testing is too slow to block a pull request and too valuable to skip entirely.
 
@@ -5556,6 +5559,148 @@ There is nothing red to notice. It is kept rather than traded away because what 
 install that refuses instead of warning -- is the whole of what issue #132 asked for, and the
 alternative on offer is to relax the floor to whatever the updater happens to run, which is the
 floor being set by the least relevant consumer of it. Issue #202 carries the watch.
+
+#### 5.1.2 The secret scan has three outcomes, and there were files it never opened (issue #199)
+
+The scanner holds ten patterns as this is written, and issue #199's title says nine, which is
+the whole argument against writing the count anywhere a reader could take it for a fact. Two of
+the ten had tests, both arriving with the pair issue #132 needed, and a green run therefore said
+that ten patterns found nothing while saying nothing at all about whether any of them could
+still find anything. That is the shape §13's rule 6 names one level up and it applies here
+unchanged: a zero-hit result is not evidence unless something proved the matcher alive.
+
+**Every pattern is probed, in both directions.** Each entry in `PATTERNS` fires on a synthetic
+probe written for it by hand, and does not fire on the placeholder shapes its own comment
+tolerates: `token = ""`, `password = <redacted>`, `api_key = "your-key-here"`. The test
+enumerates `PATTERNS` itself rather than a copy of the list and fails on a label it has no probe
+for, so an eleventh pattern arrives with its tests or does not arrive, and no count has to be
+kept true in two places. The probes are composed for the test and are never drawn from real
+credential material: a fixture that is a working token is the leak the gate exists to prevent. A
+pattern edited into uselessness, or dropped in a merge, now fails a test instead of quietly
+widening the tree.
+
+**A file that was skipped is not a file that was clean.** The scanner read every path as UTF-8
+and, on a `UnicodeDecodeError`, printed a warning and carried on to exit 0. Nine tracked files
+decode as nothing of the sort -- four icons, a banner, four capture fixtures -- so key material
+pasted into any of them produced a warning line and a clean verdict, which is precisely the
+outcome the script's own comment at that `except` says it exists to prevent. It prevented the
+silence and not the pass.
+
+The fix is to stop treating decoding as a precondition for scanning. The bytes are read once and
+decoded as `latin-1`, which is total -- every one of the 256 byte values maps to a character, so
+no input can fail it -- and which leaves the ASCII range fixed, and ASCII is the alphabet every
+one of the patterns is written in. A credential that lies in a `.png` as bytes is recognisable
+for the same reason it is in a `.py`. Line numbers still count `\n`, so what is reported is still
+a place a person can go and look.
+
+What this buys is exactly the bytes as they lie in the file, and the section says so rather than
+letting the next reader take more. A credential inside a deflate stream, a PNG `zTXt` chunk, an
+archive member or a UTF-16 encoding is still invisible to every pattern, and those files now
+count towards the number in the clean verdict. So the count means "these files had the patterns
+run over their bytes", not "the content of these files was examined". That was equally true
+before -- UTF-16 decoded as UTF-8 with a NUL between every character and matched nothing either
+-- and it is written down here because this is the section arguing about not calling unexamined
+things clean, and a sentence in it that overstates the reach is worse placed than anywhere else. This was measured before it was chosen rather than
+assumed to be safe: on 2026-08-30 the tree held 208 tracked files, of which the scanner examines
+207 because it exempts itself, and decoding every one of them and matching every pattern produced
+zero hits. Closing the hole cost no false positive on the tree as it stood.
+
+**Three outcomes, not two.** `0` is clean, `1` is at least one finding, and `2` is a scan that
+did not run. Exit `2` covers two cases and both were exit `0` before:
+
+- **A path that could not be read.** An `OSError` leaves a file unexamined, and an unexamined
+  file is the thing this rule refuses to call clean. It is reported by name and the run fails.
+  This covers reaching the file as well as reading it: `Path.is_file()` answers `False` for a
+  file whose parent directory cannot be traversed, because it swallows the `OSError` underneath,
+  so a check written on it drops exactly the unreadable file it was meant to catch and drops it
+  one line before the `except` that would have caught it. The path is stat'ed inside the `try`
+  for that reason, and the quiet skip is left only for a path that stats cleanly and is not a
+  regular file.
+- **A run that considered nothing at all.** `check_secrets.py <a path that is not a file>`
+  walked zero files and printed `secret scan: 0 file(s), no credential material found.` A
+  verdict earned by examining nothing is the vacuity fail-open in its plainest form, and it
+  matters more once the hook of issue #203 passes the scanner a list of staged paths, because
+  there the argument list is computed rather than typed.
+
+  **Considered is not the same as scanned, and the difference is what keeps this usable.** The
+  scanner exempts itself and refuses some files by name without reading them, and neither is a
+  file it failed to look at: it is a file it looked at and decided about. A commit that stages
+  only `.github/check_secrets.py` is an ordinary commit, and the first version of this rule
+  answered it with "the gate is broken", which is how a gate teaches people to pass `--no-verify`.
+  So a self-exempt path and a by-name refusal both count as considered, and exit `2` is reserved
+  for a run in which nothing was scanned, nothing was refused and nothing was exempt. A path that
+  A run that considered paths and scanned none of them because all of them were exempt says
+  exactly that and exits `0`, and it names any path it was handed and did not scan, because a
+  path that stats cleanly and is not a regular file was the last place in the file where
+  something passed through leaving no trace. A sentence containing the word "all" has to be able
+  to survive the reader checking it against the argument list. It does not borrow the wording of a scan that looked: a count of
+  zero beside "no credential material found" is a verdict the run did not earn, and this is the
+  section that argues against writing one. A path that is not there is not one of the three
+  either, and it fails the run deliberately: the hook passes
+  paths it staged as added or modified, and a name in that list with nothing behind it is a
+  broken gate rather than a quiet day. It fails it as an unreachable path, named, rather than by
+  falling through to the count being zero, because the two sentences a reader needs are which
+  path and what was wrong with it.
+
+When a run has both -- something unreadable and something found -- the status is `2` and the
+findings are still printed. A run that could not read everything cannot vouch for its own list
+being complete either, so the weaker claim is the one the exit status makes, and the findings are
+reported anyway because they are true whatever else went wrong.
+
+A finding outranks the vacuity check, and that ordering is load-bearing rather than incidental:
+a run over nothing but by-name refusals scans no bytes at all, and it has to exit `1` for the
+refusal rather than `2` for having scanned nothing.
+
+The separation of `1` from `2` is not decoration. A caller has to be able to tell "this diff
+carries a credential" from "this gate is broken", and the first is a finding to act on while the
+second is a gate to repair before anything is trusted.
+
+§13's survey of rule 6 concluded that this script "already read the status of what they call and
+needed no change". That was a statement about the exit status of the `git ls-files` it runs, and
+it was correct about that. It was silent about what the script then does with the files that
+command names, which is where both of the failures above lived.
+
+**The refusals by name are pinned too.** `FORBIDDEN_SUFFIXES` and `FORBIDDEN_NAMES` refuse a
+file whatever its content, and the one exemption is exactly one path prefix:
+`tests/fakes/fixtures/`. A `.pcap` inside it passes and the same file one directory up does not,
+which is the difference between an exemption for the fixtures the handshake listing cannot be
+tested without and an exemption for anything ending in the right characters.
+
+That prefix is measured from the repository root and from nowhere else, which is what makes it
+safe to hand the scanner a computed list of paths. A caller's working directory does not enter
+into it, and a directory named `tests/fakes/fixtures/` somewhere outside this repository is not
+the exempt one: a path that does not sit under the root is compared whole and matches no prefix.
+So issue #203's hook, whose staged paths are by construction inside the repository, gets the
+same exemption for the same files as the tracked-tree walk does, and gets it for nothing else.
+
+**A test for a pattern cannot spell the pattern out.** `tests/test_check_secrets.py` is itself a
+tracked file, and one of its own tests runs the scanner over the tracked tree, so a probe written
+as a contiguous literal makes the suite fail on its own source. The probes are assembled at run
+time from separate pieces instead.
+
+That rule is enforced by a test that reads this module's own source and refuses a probe that
+appears in it whole, and not by the tree test, which cannot do it. The security audit of this
+change is what established the difference. Eight probes for the `npm registry credential` pattern
+were written contiguously and the tree test passed over them anyway, because that pattern is
+anchored to the start of a line and the opening quote of the Python string sits between the
+indentation and the key: the pattern matches the probe when handed the probe, and does not match
+it when reading the file the probe lives in. So the tree test only enforces the rule for a probe
+the patterns would catch in place, which is to say it enforces it wherever it is not needed.
+
+The distinction matters beyond tidiness. A probe no pattern catches in its contiguous form sits
+in the file in one piece and nothing goes red, and that is precisely the shape a real credential
+would take if one were ever pasted into this module, which is the one file in the repository
+whose subject is credential-shaped strings. Widening the anchor was measured and rejected: it
+catches a probe in a list literal and a key in a markdown code span, misses `x = "_authToken=..."`
+which is the likelier paste, and turns a documentation line that begins with a backtick into a
+false positive. Half a fix bought with a false positive is worse than the honest limit the
+pattern's own comment already declares, so the limit stands and the discipline is enforced where
+it can be enforced for every pattern at once, including the ones added after this was written.
+
+Two behaviours are deliberately unchanged, and are pinned so that a later edit has to argue with
+a test rather than with nobody. The script exempts itself, because it necessarily contains the
+patterns it looks for. Matched text is never echoed in a finding, because the match is the
+secret; a finding is a path, a line number and a label, and that is enough to go and look.
 
 ### 5.2 `release.yml` (on tag `v*`)
 
@@ -7285,7 +7430,12 @@ Enforcement, in layers, because a single gate gets forgotten:
      produced an empty staged list, and an empty staged list means "nothing to scan, exit 0":
      the leak gate itself reported a scan it had not run. Fixed.
    - `.github/check_secrets.py` and the drift job in `upstream-drift.yml` already read the
-     status of what they call and needed no change.
+     status of what they call and needed no change. That verdict was about the exit status of
+     the commands they run, and it stands. It was not a verdict on what `check_secrets.py` did
+     with the files `git ls-files` named for it, and there the same rule was broken twice: a
+     file it could not decode was warned about and passed, and a run that scanned nothing at all
+     printed a clean verdict. Issue #199, fixed in §5.1.2. A survey answers the question it
+     asked.
 
 If an agent needs to know how the device is reached in order to do a task, the answer is to ask
 the owner, in the conversation, and not write it down.

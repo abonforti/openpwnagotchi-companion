@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -125,32 +126,76 @@ def tracked_files() -> list[Path]:
 def main() -> int:
     paths = [Path(a).resolve() for a in sys.argv[1:]] or tracked_files()
     findings: list[str] = []
-    skipped: list[str] = []
+    errors: list[str] = []
+    ignored: list[str] = []
     checked = 0
+    exempted = 0
 
     for path in paths:
-        if not path.is_file():
-            continue
         rel = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+
+        try:
+            is_regular = stat.S_ISREG(path.stat().st_mode)
+        except OSError as err:
+            # Stat'd directly rather than through `Path.is_file()`, which
+            # swallows a missing path, a missing parent, and a handful of
+            # other common failures internally and reports False for every
+            # one of them - the exact swallowing this section exists to stop
+            # doing. A path that does not exist and a parent directory that
+            # cannot be traversed both fail here instead, and both are an
+            # error to name rather than a file that happened not to be one.
+            errors.append(f"{rel}: unreadable ({err.strerror or err})")
+            continue
+        if not is_regular:
+            # A directory (or another non-regular entry: a socket, a FIFO, a
+            # device node) is not unreadable and is not this scanner's job to
+            # expand into the files under it - `git ls-files` never names
+            # one, and the hook of issue #203 stages files, never
+            # directories. Left unscanned is still the right call. What was
+            # wrong was leaving no trace: this used to `continue` here
+            # without being counted anywhere, so a run handed one of these
+            # alongside an exempt path could describe itself as "all exempt"
+            # while one of the paths it was given was never looked at in any
+            # sense. Named here so the summary below can never make that
+            # claim again.
+            ignored.append(str(rel))
+            continue
+
         is_fixture = str(rel).replace(os.sep, "/").startswith(FIXTURE_PREFIX)
 
         if not is_fixture and (path.suffix in FORBIDDEN_SUFFIXES or path.name in FORBIDDEN_NAMES):
             findings.append(f"{rel}: this file must never be tracked")
             continue
 
-        # This script necessarily contains the patterns it looks for.
+        # This script necessarily contains the patterns it looks for. Counted
+        # as exempted rather than dropped without a trace: a commit that
+        # stages only this file hands the pre-commit hook of issue #203 a
+        # single path, and that path being exempt is not the same thing as
+        # nothing having been supplied to look at.
         if path.resolve() == SELF:
+            exempted += 1
             continue
 
         try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError) as err:
-            # Say so rather than skipping quietly. A binary blob carrying key
-            # material would otherwise produce no output at all, and silence
-            # reads identically to "checked, clean".
-            kind = "not UTF-8" if isinstance(err, UnicodeDecodeError) else "unreadable"
-            skipped.append(f"{rel}: {kind}, not scanned")
+            raw = path.read_bytes()
+        except OSError as err:
+            # An unread file is not a file that was checked and found clean -
+            # it is a file this run says nothing about at all. Reported by
+            # name and counted against the run rather than skipped quietly,
+            # because a warning that does not change the exit status reads
+            # exactly like "checked, clean" to anything that only looks at
+            # the status code.
+            errors.append(f"{rel}: unreadable ({err.strerror or err})")
             continue
+
+        # Decoded as latin-1 rather than UTF-8: every one of the 256 byte
+        # values maps to a character under latin-1, so this can never raise,
+        # and there is no longer a "file this scanner could not read" outcome
+        # distinct from the OSError above. The ASCII range is unchanged by
+        # the choice, and ASCII is the alphabet every pattern above is
+        # written in, so a credential is found the same way whether the file
+        # around it is text or a binary blob such as an icon or a capture.
+        text = raw.decode("latin-1")
 
         checked += 1
         for label, pattern in PATTERNS:
@@ -161,12 +206,22 @@ def main() -> int:
                 # The matched text is not echoed: it is the secret.
                 findings.append(f"{rel}:{lineno}: possible {label}")
 
-    for line in skipped:
-        print(f"warning: {line}", file=sys.stderr)
+    # Three outcomes, not two. `0` is clean, `1` is a credential to act on,
+    # and `2` is a run that could not be trusted to have looked at everything
+    # - the reader has to be able to tell those apart from the output alone,
+    # not only from the exit status.
+    for line in errors:
+        print(f"error: {line}", file=sys.stderr)
 
     for line in findings:
         print(line, file=sys.stderr)
 
+    # This paragraph is the only actionable instruction the script ever
+    # gives, so it has to survive on the exit-2 path too: a run that also
+    # hit an unreadable file is exactly the run where a person is already
+    # dealing with a broken gate and least likely to go looking for it.
+    # Printed once, ahead of whichever return below fires, rather than
+    # duplicated into both branches.
     if findings:
         print(
             f"\n{len(findings)} finding(s). Nothing is printed from the offending lines "
@@ -175,10 +230,69 @@ def main() -> int:
             "remediation on its own.",
             file=sys.stderr,
         )
+
+    if errors:
+        detail = f"{len(errors)} file(s) unreadable"
+        if findings:
+            detail += f", {len(findings)} finding(s) reported above"
+        print(
+            f"\nsecret scan: did not run to completion, {detail}. "
+            "An unread file cannot be called clean, so this is reported as the gate failing, "
+            "not as a pass.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Checked here, ahead of the vacuity check below, and not merely as an
+    # optimisation: a run over nothing but by-name refusals scans zero files
+    # yet has something real to report, and it has to exit 1 for that reason
+    # rather than 2 for the unrelated reason that nothing was scanned.
+    if findings:
         return 1
 
-    suffix = f", {len(skipped)} not scanned (see warnings above)" if skipped else ""
-    print(f"secret scan: {checked} file(s), no credential material found{suffix}.")
+    if checked == 0 and exempted == 0:
+        # A verdict earned by examining nothing is the vacuity this scanner
+        # exists to refuse, but "nothing was examined" is not the same claim
+        # as "nothing was scanned": a path that was refused by name already
+        # returned above, and a path that was exempted counts here too,
+        # because it was supplied and accounted for rather than absent. Exit
+        # 2 is left for when the argument list truly gave this run nothing -
+        # including a path that does not exist, which is deliberate: the
+        # hook of issue #203 passes paths it staged, and a name in that list
+        # that is not on disk really is a broken gate.
+        print(
+            "secret scan: 0 file(s) scanned, nothing was examined. Reported as the gate "
+            "failing rather than as a clean run.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if checked == 0:
+        # Every path this run considered was the scanner exempting itself -
+        # the only way to reach here with no findings, no errors, and
+        # `exempted` above zero. No pattern was run over anything, so this
+        # is not the verdict "no credential material found" earned by
+        # looking: it is "there was nothing to look at". Reusing the clean
+        # wording here would print a count of zero beside a clean bill of
+        # health, which is the exact shape this section exists to refuse.
+        #
+        # `exempted` alone is not the whole story if `ignored` is not empty
+        # too: a directory in the same argument list stats cleanly, is not
+        # exempt, and is not scanned, so a sentence naming only `exempted`
+        # would claim "all" of a set smaller than the one this run was
+        # actually handed. Named rather than folded into the count, because
+        # a number alone would not say what kind of path it was.
+        if ignored:
+            named = ", ".join(ignored)
+            print(
+                f"secret scan: {exempted} file(s) exempt, {len(ignored)} argument(s) not a "
+                f"regular file and not scanned ({named}). Nothing to report."
+            )
+        else:
+            print(f"secret scan: {exempted} file(s) considered, all exempt. Nothing to report.")
+        return 0
+
+    print(f"secret scan: {checked} file(s), no credential material found.")
     return 0
 
 

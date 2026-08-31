@@ -33,7 +33,7 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, LastError, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { ConnectionState, Diagnostics, LastError, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
 import {
   accessPoints,
   capabilities,
@@ -267,10 +267,16 @@ interface RecordedRequest {
   data: unknown
 }
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'offline'
   reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: Stats | null = null
+  // SPEC 4.4.1 / issue #131: mirrors the real client's own restartReason(),
+  // which gates the same way - non-null only while currentState is
+  // 'restarting' (ws.ts: "currentState === 'restarting' ? restartReasonValue
+  // : null"). The raw value survives leaving restarting (nothing clears it),
+  // exactly as the real client's own field does; only the getter's gate does.
+  private restartReasonValue: RestartReason | null = null
+  private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
   private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
@@ -300,7 +306,11 @@ class FakeWsClient {
     return this.reasonValue
   }
 
-  lastStats(): Stats | null {
+  restartReason(): RestartReason | null {
+    return this.currentState === 'restarting' ? this.restartReasonValue : null
+  }
+
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
 
@@ -338,9 +348,9 @@ class FakeWsClient {
     // Not exercised: the store layer only subscribes, per SPEC 4.4.
   }
 
-  /** Test-only: sets the value connectStores should seed lastStats from at mount, before connect() was ever called on a real client. */
-  primeLastStats(data: Stats): void {
-    this.lastStatsValue = data
+  /** Test-only: sets the value connectStores should seed lastStats from at mount, before connect() was ever called on a real client. Takes the envelope timestamp alongside the payload (SPEC 4.3.10's StatsSnapshot), the same pairing a live stats push carries. */
+  primeLastStats(data: Stats, timestamp: number = T): void {
+    this.lastStatsValue = { stats: data, timestamp }
   }
 
   /** Test-only: sets the value connectStores should seed diagnostics from at mount, before connect() was ever called on a real client (SPEC 4.3.10, mirrors primeLastStats). */
@@ -357,7 +367,10 @@ class FakeWsClient {
 
   /** Test-only: simulates a frame arriving from the plugin, on the same stream a request's reply would also arrive on. */
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = message.data
+    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    // Mirrors ws.ts's own handleRestarting: the reason is captured off the
+    // wire frame itself, before the state transition that follows it.
+    if (message.type === 'restarting') this.restartReasonValue = message.data.reason
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -390,15 +403,8 @@ class FakeWsClient {
   }
 }
 
-/**
- * The interface under test (WsClient) declares request/command as generic
- * methods keyed off types private to ws.ts. The double above implements the
- * runtime shape connectStores actually uses (state/onState/onMessage/close/
- * connect/lastStats/unauthorizedReason/request/sendGps); the cast covers the
- * part of the type nothing in this suite calls with a matching signature.
- */
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 let teardown: (() => void) | null = null
@@ -428,7 +434,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     fake.currentState = 'degraded'
     mount(fake)
-    expect(get(connection)).toEqual({ state: 'degraded', unauthorizedReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'degraded', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
   })
 
   it('carries every connection state through unchanged', () => {
@@ -437,7 +443,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'restarting']
     for (const state of states) {
       fake.emitState(state)
-      expect(get(connection)).toEqual({ state, unauthorizedReason: null, lastError: null, latencyMs: null })
+      expect(get(connection)).toEqual({ state, unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
     }
   })
 
@@ -445,9 +451,9 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'rejected', lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'rejected', restartReason: null, lastError: null, latencyMs: null })
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', restartReason: null, lastError: null, latencyMs: null })
   })
 
   it('clears the reason once the client leaves unauthorized, rather than keeping it stale', () => {
@@ -455,7 +461,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
     fake.emitState('connecting')
-    expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
   })
 
   it('reads offline once no client is attached, not the client\'s last reported state (SPEC 4.4.2)', () => {
@@ -468,11 +474,106 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('connected')
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
 
     teardown?.()
 
-    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC 4.4.1 (issue #131): "the restarting reason reaches the store ...
+// mode_change, reboot and shutdown differ in wording alone [except] shutdown
+// [which] is terminal ... So ConnectionView carries the reason beside the
+// state, the same way it carries the unauthorized one ... It is null in
+// every state but restarting." SPEC now pins the field by this exact name:
+// "So `ConnectionView` carries it as `restartReason`, beside the state, the
+// same way it carries `unauthorizedReason` and for the same reason." What
+// every test below defends against is a view that can see the connection is
+// `restarting` but not which of the three reasons it is, which for
+// `shutdown` (§4.3.1 makes it terminal, no reconnection is ever attempted)
+// is the difference between correct copy and telling someone to wait for a
+// screen that is not coming.
+//
+// WsClient does carry a `restartReason()` accessor (mirrored by this file's
+// own FakeWsClient below, gated the same way the real one is), but these
+// tests still drive it the way the wire actually delivers it rather than by
+// priming that accessor directly: the `restarting` message's own
+// `data.reason`, pushed through `emitMessage` exactly as a real `restarting`
+// frame would arrive, immediately followed by the state transition
+// `emitState('restarting')` reports for it. That leaves the accessor itself
+// - and specifically whether connectStores reads it correctly rather than
+// re-deriving the gate - to be covered against the real client, not this
+// double, in ws.spec.ts (issue #131 follow-up).
+// ---------------------------------------------------------------------------
+
+describe('connection: the restarting reason reaches the store, and only there (SPEC 4.4.1, issue #131)', () => {
+  it('is null before anything has happened, and in the ordinary connected state', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    expect(get(connection).restartReason).toBeNull()
+    fake.emitState('connected')
+    expect(get(connection).restartReason).toBeNull()
+  })
+
+  it('is null in offline, connecting, degraded and unauthorized - restarting is the only state that carries one', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    for (const state of ['offline', 'connecting', 'degraded'] as const) {
+      fake.emitState(state)
+      expect(get(connection).restartReason).toBeNull()
+    }
+    fake.emitState('unauthorized', 'required')
+    expect(get(connection).restartReason).toBeNull()
+  })
+
+  it('carries mode_change through to the store', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(restartingEnvelope('mode_change', 'MANUAL'))
+    fake.emitState('restarting')
+    expect(get(connection)).toMatchObject({ state: 'restarting', restartReason: 'mode_change' })
+  })
+
+  it('carries reboot through to the store', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(restartingEnvelope('reboot', null))
+    fake.emitState('restarting')
+    expect(get(connection)).toMatchObject({ state: 'restarting', restartReason: 'reboot' })
+  })
+
+  it('carries shutdown through, distinct from reboot - the value a view needs to tell the terminal case apart', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(restartingEnvelope('shutdown', null))
+    fake.emitState('restarting')
+    expect(get(connection).restartReason).toBe('shutdown')
+    expect(get(connection).restartReason).not.toBe('reboot')
+  })
+
+  it('clears once the client leaves restarting, the same way unauthorizedReason clears on leaving unauthorized', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(restartingEnvelope('reboot', null))
+    fake.emitState('restarting')
+    expect(get(connection).restartReason).toBe('reboot')
+
+    fake.emitState('connecting')
+    expect(get(connection).restartReason).toBeNull()
+  })
+
+  it('reads null once no client is attached, not the last reason a torn-down client reported (SPEC 4.4.2)', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(restartingEnvelope('shutdown', null))
+    fake.emitState('restarting')
+    expect(get(connection).restartReason).toBe('shutdown')
+
+    teardown?.()
+
+    expect(get(connection).restartReason).toBeNull()
   })
 })
 
@@ -504,6 +605,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
     expect(get(connection)).toEqual({
       state: 'offline',
       unauthorizedReason: null,
+      restartReason: null,
       lastError: seededError,
       latencyMs: 42,
     })
@@ -525,6 +627,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
     expect(get(connection)).toEqual({
       state: 'connected',
       unauthorizedReason: null,
+      restartReason: null,
       lastError: error,
       latencyMs: 88,
     })
@@ -613,6 +716,21 @@ describe("seeding at mount: the adapter reads the client's current stats, not on
     mount(fake)
     expect(get(stats)).toBeNull()
   })
+
+  // SPEC 4.3.10/4.4.1 (issue #162's hole): the seeded channel carries the
+  // envelope stamp lastStats() now hands over, so it is gated exactly as a
+  // live push would be, from the moment a view mounts rather than only from
+  // the next broadcast. A double that seeded the channel unguarded (or a
+  // lastStats() that dropped the timestamp again) would let the older push
+  // below win and this test would catch it.
+  it('a channel seeded at mount is gated like a live push: a stats push timestamped before the seed does not move it backward', () => {
+    const fake = new FakeWsClient()
+    fake.primeLastStats(statsData({ channel: 9 }), T + 100)
+    mount(fake)
+    expect(get(channel)).toBe(9)
+    fake.emitMessage(statsEnvelopeAt(T + 50, 20)) // older than the seed's own timestamp
+    expect(get(channel)).toBe(9) // must not move backward
+  })
 })
 
 describe('stats: the last stats message, verbatim', () => {
@@ -672,6 +790,60 @@ describe('channel: derived, and stats is never patched to hold it', () => {
     expect(get(channel)).toBe(9)
     expect(get(stats)).toEqual(baseline.data)
     expect(get(stats)?.channel).toBe(6)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC 4.4.1 (amended, issue #162): "'Whichever came later' is a timestamp,
+// not an arrival order ... the store therefore keeps the timestamp it last
+// wrote and ignores a message carrying an older one." Every test in the
+// describe block above shares one hardcoded timestamp (T) across every
+// envelope, so arrival order and timestamp order are the same sequence
+// there and neither the regression nor its fix can be told apart by it -
+// that is exactly the gap issue #162 names ("a test that only sends
+// messages in timestamp order passes on the broken implementation"). These
+// four tests give hop and stats independent timestamps for that reason.
+// ---------------------------------------------------------------------------
+
+function statsEnvelopeAt(timestamp: number, channelValue: number): OutgoingStats {
+  return { type: 'stats', timestamp, data: statsData({ channel: channelValue }) }
+}
+
+function channelHopEnvelopeAt(timestamp: number, value: number): OutgoingChannelHop {
+  return { type: 'channel_hop', timestamp, data: { channel: value } }
+}
+
+describe('channel: "whichever came later" is the timestamp, not the arrival order (issue #162)', () => {
+  it('a stats produced before a hop, but delivered after it, does not overwrite the newer channel - the regression itself', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(channelHopEnvelopeAt(T + 100, 11)) // the hop, timestamped later
+    fake.emitMessage(statsEnvelopeAt(T + 50, 6)) // a broadcast the unit produced earlier, arriving after the hop
+    expect(get(channel)).toBe(11) // a plain "last write wins" store would read 6 here
+  })
+
+  it('the ordinary direction still works: a stats timestamped after the hop does overwrite it', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(channelHopEnvelopeAt(T, 9))
+    fake.emitMessage(statsEnvelopeAt(T + 50, 20))
+    expect(get(channel)).toBe(20)
+  })
+
+  it('an equal timestamp is accepted, hop then stats: the message that arrived second is the newer of the two', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(channelHopEnvelopeAt(T, 9))
+    fake.emitMessage(statsEnvelopeAt(T, 20))
+    expect(get(channel)).toBe(20)
+  })
+
+  it('an equal timestamp is accepted, stats then hop: reversing arrival order reverses which one wins', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(statsEnvelopeAt(T, 20))
+    fake.emitMessage(channelHopEnvelopeAt(T, 9))
+    expect(get(channel)).toBe(9)
   })
 })
 
@@ -1081,7 +1253,7 @@ describe('unauthorized clears every data store', () => {
     mount(fake)
     populateEverything(fake)
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', restartReason: null, lastError: null, latencyMs: null })
   })
 })
 
@@ -1121,7 +1293,7 @@ describe('resetStores: the explicit clear a caller reaches for around close()', 
     // SPEC 4.4.2: connection is a mirror of the client (4.4.1); resetStores
     // must not report offline while the client is still connected, which
     // would be the second opinion that row forbids.
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
   })
 
   it('is safe to call with no client ever connected, and every data store starts from that same cleared shape', () => {

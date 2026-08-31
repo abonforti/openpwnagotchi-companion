@@ -1,9 +1,16 @@
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AccessPoint, OutgoingAccessPoints, OutgoingLogLines, OutgoingMessage, OutgoingPeersList, Peer } from '../lib/protocol'
+import type { AccessPoint, OutgoingAccessPoints, OutgoingLogLines, OutgoingMessage, OutgoingPeersList, Peer, Stats } from '../lib/protocol'
 import type { Host } from '../lib/settings'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 // Written from SPEC.md 4.8, 4.4.2 and 4.7, and the fixed public surface
 // handed to the test author for issue #119. Deliberately not read from
@@ -158,6 +165,36 @@ function logLinesEnvelope(lines: string[], path = '/tmp/pwnagotchi.log'): Outgoi
   return { type: 'log_lines', timestamp: T, data: { lines, path } }
 }
 
+/** A complete, minimal Stats fixture: only `uptime` varies across the two calls that need one distinguishable from the other, everything else is a realistic but arbitrary fill so primeLastStats() below hands lastStats() a real StatsSnapshot rather than a partial the real client could never produce. */
+function minimalStats(uptime: number): Stats {
+  return {
+    uptime,
+    mode: 'AUTO',
+    channel: 6,
+    battery: { percent: null, charging: null },
+    temperature: null,
+    handshakes: 0,
+    handshakesTotal: 0,
+    peers: 0,
+    accessPoints: 0,
+    lastHandshake: null,
+    lastPeer: null,
+    gps: {
+      enabled: false,
+      source: null,
+      piFix: false,
+      fix: false,
+      lat: null,
+      lon: null,
+      altitude: null,
+      accuracy: null,
+      updated: null,
+    },
+    sessionAge: null,
+    capabilities: { pasv: false, pisugar: false, gpsSource: 'auto', pluginVersion: '0.1.0' },
+  }
+}
+
 /** Starts a session with one host already active, for the tests below that drive a further mutation and check whether the client is rebuilt. Shared by the rebuild-trigger and active-host-disappearing suites. */
 async function withOneClient() {
   const mods = await loadModules()
@@ -185,13 +222,13 @@ async function withOneClient() {
 // on its own: no socket, no timers.
 // ---------------------------------------------------------------------------
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   readonly options: WsClientOptions
   connectCalls = 0
   closeCalls = 0
   private currentState: ConnectionState = 'offline'
   private reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: unknown = null
+  private lastStatsValue: StatsSnapshot | null = null
   private readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   private readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
 
@@ -222,7 +259,14 @@ class FakeWsClient {
     return this.reasonValue
   }
 
-  lastStats(): unknown {
+  // SPEC 4.4.1 (issue #131): not exercised by this file - no test here
+  // drives a restarting state, so this always answers null rather than
+  // gating on state like stores.spec.ts's own double does.
+  restartReason(): null {
+    return null
+  }
+
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
 
@@ -260,9 +304,9 @@ class FakeWsClient {
     return () => {}
   }
 
-  /** Test-only: what connectStores' attach-time seeding (SPEC 4.4.2) will read for lastStats(). */
-  primeLastStats(stats: unknown): void {
-    this.lastStatsValue = stats
+  /** Test-only: what connectStores' attach-time seeding (SPEC 4.4.2) will read for lastStats(). Wraps the payload as a StatsSnapshot ({ stats, timestamp }, SPEC 4.3.10) -- the shape lastStats() now hands over, not the bare payload -- since the seeding code reads `.stats`/`.timestamp` off it. */
+  primeLastStats(stats: Stats, timestamp: number = T): void {
+    this.lastStatsValue = { stats, timestamp }
   }
 
   /** Test-only: simulates the client entering a new state, exactly as onState would deliver it. */
@@ -278,9 +322,8 @@ class FakeWsClient {
   }
 }
 
-/** as WsClient: the double implements the runtime shape session.ts/connectStores actually use; the generic request/command signatures are typed against ws.ts internals this suite never calls through. */
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +618,7 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
     const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.3' }))
 
     const created: FakeWsClient[] = []
-    const statsByIndex = [{ uptime: 111 }, { uptime: 222 }]
+    const statsByIndex = [minimalStats(111), minimalStats(222)]
     const stop = startSession({
       createClient: (options) => {
         const c = new FakeWsClient(options)
@@ -584,7 +627,7 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
         // not yet have received. This is what makes "attach before reset"
         // observable: a premature attach would seed this value, and a
         // reset that then runs after would wipe it again.
-        c.primeLastStats(statsByIndex[created.length])
+        c.primeLastStats(statsByIndex[created.length] as Stats)
         created.push(c)
         return asClient(c)
       },
@@ -721,7 +764,7 @@ describe('the active host disappearing (4.7, 4.8)', () => {
   it('removing the active host tears down, resets the stores, and attaches nothing', async () => {
     const { removeHost, host, created, currentClient, connection, stats, peers, stop } = await withOneClient()
     const client = created[0]!
-    client.primeLastStats({ uptime: 1 })
+    client.primeLastStats(minimalStats(1))
     client.emitState('connected')
 
     removeHost(host.id)
@@ -964,5 +1007,239 @@ describe('the rebuild identity and the token (4.8, corrected)', () => {
     expect(created).toHaveLength(1)
     expect(created[0]!.options.token).toBeUndefined()
     stop()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC 4.8 (issue #120): "It is stopped when the shell unmounts, and
+// released when the page is hidden away ... pagehide releases it and
+// pageshow builds it again ... visibilitychange alone does not release it
+// ... A visibilitychange back to visible does restart a session that is not
+// running ... Releasing an already-dead session must be a no-op rather than
+// a throw." Real window/document events are dispatched here rather than a
+// deps seam - nothing in the public surface handed to this file's own
+// SessionDeps offers one, and dispatching the actual events iOS fires is
+// what the negative below needs to be honest: a fake that called some
+// injected "release" function directly could not tell a listener that
+// releases on visibilitychange (wrong) from one that releases on pagehide
+// only (right), since a test driving the seam by name already assumes which
+// one it is calling.
+//
+// document.visibilityState is redefined the same way geo.spec.ts's own
+// setVisibility() does, and for the same stated reason: "document.hidden is
+// defined as visibilityState !== 'visible', so the two cannot disagree in a
+// browser ... a fixture that sets only one of them is an incomplete
+// fixture." Restated here rather than imported, since geo.ts and session.ts
+// are two independent listeners on the same document and this file must not
+// take on a dependency on geo.spec.ts's fixtures to stay honest about that.
+// ---------------------------------------------------------------------------
+
+function setVisibility(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+  Object.defineProperty(document, 'hidden', { value: state !== 'visible', configurable: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+describe('page lifecycle: pagehide releases, pageshow rebuilds, visibilitychange alone does neither (4.8, issue #120)', () => {
+  afterEach(() => {
+    // Belt and braces: leaves document.visibilityState at the jsdom default
+    // for whatever runs after this file, regardless of which test in this
+    // block last ran or whether it threw before reaching its own cleanup.
+    setVisibility('visible')
+  })
+
+  it('pagehide releases the session: the client is closed and currentClient() reads null', async () => {
+    const { currentClient, connection, created, stop } = await withOneClient()
+    created[0]!.emitState('connected')
+    expect(get(connection).state).toBe('connected')
+
+    window.dispatchEvent(new Event('pagehide'))
+
+    expect(currentClient()).toBeNull()
+    expect(created[0]!.closeCalls).toBe(1)
+    // SPEC 4.4.2: with no client attached, connection reads offline.
+    expect(get(connection).state).toBe('offline')
+
+    stop()
+  })
+
+  it('pageshow rebuilds it: a fresh client is built for the still-active host', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(currentClient()).toBeNull()
+
+    window.dispatchEvent(new Event('pageshow'))
+
+    expect(created).toHaveLength(2) // the original, plus the rebuild
+    expect(currentClient()).toBe(asClient(created[1]!))
+    expect(created[1]!.connectCalls).toBe(1)
+
+    stop()
+  })
+
+  it('visibilitychange to hidden does NOT release the session - hiding is not leaving, the negative issue #120 exists to pin', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+    const live = created[0]!
+
+    setVisibility('hidden')
+
+    // The negative that matters: an implementation that tears down on
+    // every glance at a notification shade would also pass a test that
+    // only checked pagehide releases the session - this is the assertion
+    // that catches it instead.
+    expect(created).toHaveLength(1) // no rebuild happened
+    expect(currentClient()).toBe(asClient(live)) // the same client, not a new one
+    expect(live.closeCalls).toBe(0) // and it was never closed either
+
+    stop()
+  })
+
+  it('visibilitychange to visible restarts a session that is not running, catching a release this rule did not predict', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+    window.dispatchEvent(new Event('pagehide')) // released by a path OTHER than visibilitychange
+    expect(currentClient()).toBeNull()
+
+    setVisibility('visible')
+
+    expect(created).toHaveLength(2)
+    expect(currentClient()).toBe(asClient(created[1]!))
+
+    stop()
+  })
+
+  it('releasing an already-dead session is a no-op, not a throw: a second pagehide right after the first', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+
+    window.dispatchEvent(new Event('pagehide'))
+    expect(created[0]!.closeCalls).toBe(1)
+
+    expect(() => window.dispatchEvent(new Event('pagehide'))).not.toThrow()
+    expect(currentClient()).toBeNull()
+    expect(created[0]!.closeCalls).toBe(1) // not closed a second time
+
+    stop()
+  })
+
+  it('releasing a session with no client ever attached is also a no-op, not a throw', async () => {
+    const { loadSettings, startSession, currentClient } = await loadModules()
+    seedNoActiveHost() // reached deliberately (4.7): nothing active, so no client was ever built
+    loadSettings()
+    const stop = startSession({
+      createClient: () => {
+        throw new Error('must not be called: no host is active, so nothing should ever try to build one')
+      },
+    })
+    expect(currentClient()).toBeNull()
+
+    expect(() => window.dispatchEvent(new Event('pagehide'))).not.toThrow()
+    expect(currentClient()).toBeNull()
+
+    stop()
+  })
+
+  // Review finding (issue #120 follow-up): the pair of tests above only
+  // ever dispatch pageshow AFTER a pagehide already released the session,
+  // so neither exercises a pageshow arriving while a session is still
+  // running - the cold-start-adjacent case a real iOS session can produce
+  // (e.g. a second pageshow firing without an intervening pagehide, on a
+  // bfcache restore). SPEC 4.8 pins pageshow as what "builds it again", not
+  // as an unconditional build, and this is the negative that distinguishes
+  // the two: an implementation that rebuilds on every pageshow regardless
+  // of whether anything was released would pass every other test in this
+  // block and still duplicate the client here.
+  it('pageshow while the session is still running (no pagehide first) builds no second client', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+    const live = currentClient()
+
+    window.dispatchEvent(new Event('pageshow'))
+
+    expect(created).toHaveLength(1) // no rebuild happened
+    expect(currentClient()).toBe(live) // the same client, not a new one
+
+    stop()
+  })
+
+  // Review finding (issue #120 follow-up): SPEC 4.8 says the shell's own
+  // stop() removes the pagehide/pageshow listeners; nothing before this
+  // test asserted that removal by observing its effect, so an edit that
+  // dropped the removeEventListener call would leave a released session's
+  // listener reachable through the window and every other test in this
+  // suite would still pass (each of them dispatches its lifecycle event
+  // before calling stop(), never after). This dispatches after stop() and
+  // checks that nothing downstream reacted: no further client is built for
+  // the pageshow, and the already-released client is not closed a second
+  // time by a stray pagehide.
+  it('a lifecycle event dispatched after stop() reaches no listener: no client is built, nothing is closed again', async () => {
+    const { currentClient, created, stop } = await withOneClient()
+    const released = created[0]!
+
+    stop()
+    expect(currentClient()).toBeNull()
+    expect(released.closeCalls).toBe(1)
+
+    expect(() => window.dispatchEvent(new Event('pageshow'))).not.toThrow()
+    expect(currentClient()).toBeNull() // stop()'s own listener removal means pageshow built nothing
+    expect(created).toHaveLength(1) // no second client
+
+    expect(() => window.dispatchEvent(new Event('pagehide'))).not.toThrow()
+    expect(released.closeCalls).toBe(1) // not closed again by a stray pagehide either
+  })
+
+  // Review finding (issue #120 follow-up): "no test for pagehide landing
+  // mid host switch." A host switch (activateHost's subscribe callback,
+  // SPEC 4.4.2/4.8: teardown, resetStores(), then attach, in that order) is
+  // synchronous, so the only way a test can land a pagehide inside it
+  // rather than before or after is reentrantly - from inside the outgoing
+  // client's own close(), which is exactly where a real browser's pagehide
+  // handler and this module's own teardown could both be mid-flight on
+  // real hardware (a WebSocket close callback and a page-lifecycle event
+  // arriving in the same tick). SPEC 4.8 does not say what happens when the
+  // two overlap; this pins the one property that has to hold regardless -
+  // no throw, and the session ends up fully released rather than in a state
+  // with two live clients or a client currentClient() cannot see - and
+  // flags the interpretation, since nothing in SPEC.md names this ordering
+  // directly (see the report).
+  it('a pagehide reentrant from inside a host switch\'s own client teardown does not throw and leaves the session releasable', async () => {
+    const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    seedNoActiveHost()
+    loadSettings()
+    const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
+    const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.3' }))
+    const created: FakeWsClient[] = []
+    let reentered = false
+    const stop = startSession({
+      createClient: (options) => {
+        const c = new FakeWsClient(options)
+        if (options.url.includes(hostA.address) && !reentered) {
+          // Fires only on hostA's client, and only once: simulates a
+          // pagehide arriving while THIS close() (driven by the switch to
+          // hostB below) is still on the stack.
+          const originalClose = c.close.bind(c)
+          c.close = () => {
+            reentered = true
+            originalClose()
+            window.dispatchEvent(new Event('pagehide'))
+          }
+        }
+        created.push(c)
+        return asClient(c)
+      },
+    })
+    activateHost(hostA.id)
+    expect(created).toHaveLength(1)
+
+    expect(() => activateHost(hostB.id)).not.toThrow()
+
+    // Whatever currentClient() lands on, it must be a single consistent
+    // answer: either released (null, if the reentrant pagehide's own
+    // release "won") or the switch's new hostB client (if the switch
+    // completed after the reentrant call), never hostA's already-closed
+    // client left live.
+    const finalClient = currentClient()
+    if (finalClient !== null) {
+      expect(finalClient).not.toBe(asClient(created[0]!))
+    }
+
+    expect(() => stop()).not.toThrow()
   })
 })

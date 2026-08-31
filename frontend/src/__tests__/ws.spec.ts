@@ -999,6 +999,33 @@ describe('state machine: restarting', () => {
     client.connect()
     expect(client.state()).toBe('connecting')
   })
+
+  // SPEC 4.4.1/review issue #131 follow-up: "null in every state but
+  // `restarting`". Against the real client, not a copy of the accessor
+  // (that copy is what stores.spec.ts's own double reimplements, and its
+  // comment there says as much) - a mutation to restartReason() itself that
+  // returned the value ungated would pass every store-layer test in the
+  // suite because none of them exercise the real accessor.
+  it('restartReason() reads the reason only while restarting, and null again once the reconnect leaves it (§4.4.1, issue #131)', () => {
+    const { client, sockets } = setup()
+    client.connect()
+    const s = toConnected(sockets)
+    expect(client.restartReason()).toBeNull() // connected: not restarting yet
+
+    s.push(restartingEnvelope('reboot', null))
+    expect(client.state()).toBe('restarting')
+    expect(client.restartReason()).toBe('reboot')
+
+    s.serverClose(1000, 'restarting')
+    expect(client.state()).toBe('restarting') // the state survives the close
+    expect(client.restartReason()).toBe('reboot') // and so does the reason
+
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 0))
+    nth(sockets, 1).open()
+    nth(sockets, 1).push(statsEnvelope(4))
+    expect(client.state()).toBe('connected') // left restarting via the reconnect
+    expect(client.restartReason()).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1485,7 +1512,20 @@ describe('subscriptions', () => {
     expect(client.lastStats()).toBeNull()
     client.connect()
     firstStats(sockets, 7)
-    expect(client.lastStats()?.sessionAge).toBe(7)
+    expect(client.lastStats()?.stats.sessionAge).toBe(7)
+  })
+
+  // SPEC 4.3.10: lastStats() hands over a StatsSnapshot, the envelope's own
+  // `timestamp` alongside the payload -- not the payload alone -- so a store
+  // adapter seeding a channel at mount (§4.4.2) has the same stamp §4.4.1's
+  // ordering rule needs for a live push. A client that remembered the
+  // payload but dropped the stamp would pass the assertion above and fail
+  // only this one.
+  it('lastStats() carries the envelope timestamp the stats frame arrived under, beside the payload', () => {
+    const { client, sockets } = setup()
+    client.connect()
+    firstStats(sockets, 7)
+    expect(client.lastStats()?.timestamp).toBe(1700000000)
   })
 })
 
@@ -1845,6 +1885,152 @@ describe('diagnostics: a drop this client detects itself is recorded too, source
       message: '',
       at: clock.value(),
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Issue #122: "The first attempt is already protected; the retry is not,
+// and it runs inside a bare timer callback." Every other test in this file
+// that drives createSocket through makeDeps' default never throws at all,
+// so none of them can distinguish a client that guards every attempt from
+// one that only guards the first - this is the one that makes createSocket
+// fail on a LATER attempt, specifically to prove the guard survives past
+// attempt 1.
+// ---------------------------------------------------------------------------
+
+describe('reconnect: createSocket throwing on a later attempt does not escape the backoff timer (issue #122)', () => {
+  it('a throw on the SECOND attempt (not the first) is caught, recorded as socket_failed, and the retry schedule keeps running past it', () => {
+    clearStoredToken()
+    const liveSockets: FakeSocket[] = []
+    let attempt = 0
+    const { client } = setup(
+      {},
+      {
+        createSocket: (_url: string) => {
+          attempt += 1
+          if (attempt === 2) {
+            // The retry itself, not the first attempt: connect()'s own call
+            // to createSocket already has to survive this file's other
+            // tests, so a version of this test that threw on attempt 1
+            // would prove only what §4.3.9's guard already proves.
+            throw new Error('ENETUNREACH: the browser refused this attempt synchronously')
+          }
+          const socket = new FakeSocket()
+          liveSockets.push(socket)
+          return socket
+        },
+      },
+    )
+
+    client.connect()
+    expect(attempt).toBe(1)
+    expect(liveSockets).toHaveLength(1)
+    nth(liveSockets, 0).serverClose(1006, '') // never opened: an ordinary refused connection, sets up the retry
+
+    // The retry runs inside the backoff timer callback. If it is
+    // unprotected the way ticket #122 describes, createSocket's throw on
+    // attempt 2 escapes that callback, and vitest's fake timers surface an
+    // uncaught exception from inside a scheduled callback as
+    // advanceTimersByTime itself throwing - which is the assertion below,
+    // not an incidental detail of it. An implementation missing the guard
+    // fails this line, not a later one.
+    expect(() => waitOutBackoff(nth(BACKOFF_CAPS_S, 0))).not.toThrow()
+    expect(attempt).toBe(2)
+    // SPEC 4.3.1/review issue #131 follow-up: beginConnect sets `connecting`
+    // before it asks for a socket, and neither the catch nor the reschedule
+    // moves it back - a retry is scheduled, and that is what §4.3.1 calls
+    // trying. Dropping to `offline` would tell a screen the app had given
+    // up while a timer is pending.
+    expect(client.state()).toBe('connecting') // survives: not stuck, not thrown into some other state
+    expect(client.diagnostics().lastError).toMatchObject({ source: 'local', code: 'socket_failed' })
+
+    // The schedule itself is still alive underneath the caught throw: a
+    // further backoff step produces a third attempt, and this one is
+    // allowed to succeed and reach connected, exactly like the "the loop is
+    // still running" assertions in the connecting-state suite above (issue
+    // #139) prove for a socket that fails to open rather than fails to
+    // construct at all.
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 1))
+    expect(attempt).toBe(3)
+    expect(liveSockets).toHaveLength(2)
+    nth(liveSockets, 1).open()
+    nth(liveSockets, 1).push(statsEnvelope(5))
+    expect(client.state()).toBe('connected')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The pong timeout is the second caller SPEC §4.3.10 names for this guard:
+// "The reconnect schedule is one such caller and the pong timeout is
+// another: it discards the dead socket and rebuilds immediately ... with
+// the same nothing above it." The #122 suite above proves the reconnect
+// schedule's own beginConnect is guarded; this proves the pong timeout's is
+// too, since a fix that guarded only the caller a ticket named would leave
+// this one unprotected until the next ticket found it independently.
+// ---------------------------------------------------------------------------
+
+describe('reconnect: the pong timeout also rebuilds through a guarded beginConnect, not just the backoff schedule (§4.3.10, the second #122 caller)', () => {
+  it('createSocket throwing on the immediate rebuild after a pong timeout is caught, recorded as socket_failed, and the client is not left dead: a further backoff step still reconnects', () => {
+    clearStoredToken()
+    const clock = makeClock()
+    const liveSockets: FakeSocket[] = []
+    let attempt = 0
+    const { client } = setup(
+      {},
+      {
+        now: clock.now,
+        createSocket: (_url: string) => {
+          attempt += 1
+          if (attempt === 2) {
+            // The pong timeout's own immediate rebuild, not the first
+            // connect(): the first attempt has to succeed and reach
+            // 'connected' for a pong timeout to be possible at all.
+            throw new Error('ENETUNREACH: the browser refused this attempt synchronously')
+          }
+          const socket = new FakeSocket()
+          liveSockets.push(socket)
+          return socket
+        },
+      },
+    )
+
+    client.connect()
+    expect(attempt).toBe(1)
+    const s = nth(liveSockets, 0)
+    s.open()
+    s.push(statsEnvelope(5))
+    expect(client.state()).toBe('connected')
+
+    vi.advanceTimersByTime(15000) // the heartbeat ping goes out (§4.3.2)
+    expect(s.sentOf('ping')).toHaveLength(1)
+
+    clock.advance(10000)
+    // The pong timeout fires inside this advance: it discards the dead
+    // socket and calls beginConnect immediately, from inside its own
+    // setTimeout callback, where createSocket throws on this (the second)
+    // attempt. An unguarded caller lets the throw escape the timer
+    // callback, which vitest surfaces as advanceTimersByTime itself
+    // throwing - the same signature the #122 suite above relies on.
+    expect(() => vi.advanceTimersByTime(10000)).not.toThrow()
+    expect(attempt).toBe(2)
+    expect(client.diagnostics().lastError).toMatchObject({ source: 'local', code: 'socket_failed' })
+
+    // SPEC 4.3.1/review issue #131 follow-up: a retry is scheduled, so the
+    // state stays `connecting`, the same as the #122 suite above - dropping
+    // to `offline` would claim the app had given up while a timer is
+    // pending. The assertion the guard exists for: catching the throw and
+    // doing nothing else would also pass this line (both leave the state
+    // untouched from its already-`connecting` value), and would leave the
+    // client stopped with no timer pending. It is the backoff step below
+    // that tells the two apart - nothing schedules it unless the guard's
+    // catch handed off to the ordinary backoff.
+    expect(client.state()).toBe('connecting')
+    waitOutBackoff(nth(BACKOFF_CAPS_S, 0))
+    expect(attempt).toBe(3)
+    expect(liveSockets).toHaveLength(2)
+    nth(liveSockets, 1).open()
+    nth(liveSockets, 1).push(statsEnvelope(5))
+    expect(client.state()).toBe('connected')
   })
 })
 

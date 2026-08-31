@@ -21,6 +21,7 @@ import type {
   OutgoingMessage,
   OutgoingScreenImage,
   Peer,
+  RestartReason,
   Stats,
 } from './protocol'
 
@@ -30,9 +31,17 @@ import type {
  * mirrored the same way: written from `client.diagnostics()`, never
  * computed here.
  */
+/**
+ * SPEC 4.4.1 (issue #131): `restartReason` is null in every state but
+ * `restarting`, the same way `unauthorizedReason` is null in every state but
+ * `unauthorized`. `restarting`'s `shutdown` reason is terminal (SPEC 4.3.1)
+ * and the other two are not, so a view that cannot tell them apart tells
+ * somebody who just tapped shut down that the unit is coming back.
+ */
 export interface ConnectionView {
   state: ConnectionState
   unauthorizedReason: UnauthorizedReason | null
+  restartReason: RestartReason | null
   lastError: LastError | null
   latencyMs: number | null
 }
@@ -53,6 +62,7 @@ export type ScreenFrame = OutgoingScreenImage['data']
 const connectionWritable = writable<ConnectionView>({
   state: 'offline',
   unauthorizedReason: null,
+  restartReason: null,
   lastError: null,
   latencyMs: null,
 })
@@ -80,10 +90,30 @@ const faceWritable = writable<FaceStatus | null>(null)
 // sentence), so there is nothing this store needs to record about the answer
 // beyond what arrived.
 const screenWritable = writable<ScreenFrame | null>(null)
-// SPEC 4.4.1: `channel` is the later of its two sources, `stats` and
-// `channel_hop`; a plain writable set from both handlers below already
-// gives that for free.
+// SPEC 4.4.1 (issue #162): `channel` is the later of its two sources, `stats`
+// and `channel_hop`, compared by the unit's own timestamp rather than by
+// arrival order -- see setChannel below. `lastChannelTimestamp` is this
+// store's half of that comparison, reset alongside it in resetStores().
 const channelWritable = writable<number | null>(null)
+let lastChannelTimestamp: number | null = null
+
+/**
+ * SPEC 4.4.1 (issue #162): "whichever came later" is the unit's own
+ * `timestamp`, not arrival order. `stats` is broadcast on a ticker and
+ * `channel_hop` is pushed when the hop happens, so a `stats` produced before
+ * a hop can be delivered after it and overwrite a newer channel with an
+ * older one; a plain writable set from both handlers gives *last arrived*,
+ * not *latest*. Both timestamps come from the same unit, which is the one
+ * clock comparison SPEC 4.3.10 does not refuse -- that section only refuses
+ * subtracting the unit's clock from the phone's. An equal timestamp is
+ * accepted: two messages can carry the same second, and the one that
+ * arrived second is the newer of them.
+ */
+function setChannel(value: number | null, timestamp: number): void {
+  if (lastChannelTimestamp !== null && timestamp < lastChannelTimestamp) return
+  lastChannelTimestamp = timestamp
+  channelWritable.set(value)
+}
 
 export const connection: Readable<ConnectionView> = { subscribe: connectionWritable.subscribe }
 export const stats: Readable<Stats | null> = { subscribe: statsWritable.subscribe }
@@ -321,11 +351,11 @@ function handleMessage(message: OutgoingMessage, client: WsClient): void {
       // SPEC 4.4.1: the payload as it arrived, never patched with a later
       // channel_hop or gps_update.
       statsWritable.set(message.data)
-      channelWritable.set(message.data.channel)
+      setChannel(message.data.channel, message.timestamp)
       gpsWritable.set(message.data.gps)
       break
     case 'channel_hop':
-      channelWritable.set(message.data.channel)
+      setChannel(message.data.channel, message.timestamp)
       break
     case 'access_points':
     case 'wifi_update':
@@ -408,6 +438,7 @@ export function resetStores(): void {
   gpsWritable.set(null)
   faceWritable.set(null)
   channelWritable.set(null)
+  lastChannelTimestamp = null
   screenWritable.set(null)
 }
 
@@ -460,14 +491,20 @@ export function connectStores(client: WsClient): () => void {
   connectionWritable.set({
     state: client.state(),
     unauthorizedReason: client.unauthorizedReason(),
+    restartReason: client.restartReason(),
     lastError: seededDiagnostics.lastError,
     latencyMs: seededDiagnostics.latencyMs,
   })
   const seededStats = client.lastStats()
   if (seededStats !== null) {
-    statsWritable.set(seededStats)
-    channelWritable.set(seededStats.channel)
-    gpsWritable.set(seededStats.gps)
+    statsWritable.set(seededStats.stats)
+    // SPEC 4.4.1/4.3.10 (issue #162): seeded through setChannel, with the
+    // envelope stamp `client.lastStats()` now hands over beside the
+    // payload, so a channel seeded at mount is gated the same as one set
+    // from a live push -- the gate no longer has a hole for the first
+    // message this store ever sees.
+    setChannel(seededStats.stats.channel, seededStats.timestamp)
+    gpsWritable.set(seededStats.stats.gps)
   }
 
   const unsubscribeState = client.onState((state) => {
@@ -478,7 +515,13 @@ export function connectStores(client: WsClient): () => void {
     // change (entering 'connected'/'degraded'), and by the time this
     // handler runs that clearing has already happened.
     const { lastError, latencyMs } = client.diagnostics()
-    connectionWritable.set({ state, unauthorizedReason: client.unauthorizedReason(), lastError, latencyMs })
+    connectionWritable.set({
+      state,
+      unauthorizedReason: client.unauthorizedReason(),
+      restartReason: client.restartReason(),
+      lastError,
+      latencyMs,
+    })
     if (state === 'unauthorized') {
       // SPEC 4.4.2: the data belongs to a session the unit refused; leaving
       // it on screen behind a token prompt would show it to whoever is
@@ -513,6 +556,12 @@ export function connectStores(client: WsClient): () => void {
     // detach, not only that failure path -- an explicit stop (SPEC 4.4.2)
     // leaves `connection` honest the same way it leaves the data stores
     // empty.
-    connectionWritable.set({ state: 'offline', unauthorizedReason: null, lastError: null, latencyMs: null })
+    connectionWritable.set({
+      state: 'offline',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   }
 }

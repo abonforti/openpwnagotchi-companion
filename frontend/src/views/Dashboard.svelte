@@ -16,6 +16,7 @@
     formatGpsSource,
     formatMode,
     formatNamedEvent,
+    formatRestartReason,
     formatTemperature,
     formatUnauthorizedCallToAction,
     formatUnauthorizedReason,
@@ -299,13 +300,12 @@
         return `${formatUnauthorizedReason(reason)} ${formatUnauthorizedCallToAction(reason)}`
       }
       case 'restarting':
-        // SPEC 4.5.1.1 gives distinct copy for reason mode_change/reboot and
-        // for reason shutdown, but `connection` (lib/stores.ts) mirrors only
-        // the client's state and its unauthorized reason (SPEC 4.4.1): the
-        // reason a `restarting` message carries is not written to any store
-        // this view can read (issue #131), so both reasons share this line
-        // until it is.
-        return 'The unit is restarting.'
+        // SPEC 4.4.1/4.5.1.1 (issue #131): `connection` (lib/stores.ts)
+        // mirrors `restartReason` alongside the state, null in every state
+        // but this one (SPEC 4.3.1 never leaves it null here), so the
+        // distinct copy for mode_change/reboot and for shutdown lives in
+        // one place, formatRestartReason, rather than being retyped here.
+        return conn.restartReason === null ? '' : formatRestartReason(conn.restartReason)
     }
   })
   const bannerHasCopy = $derived(bannerText !== '')

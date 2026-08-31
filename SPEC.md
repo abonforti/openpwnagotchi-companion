@@ -2756,7 +2756,7 @@ can already reach.
 **The client exposes a diagnostics pair, and the stores mirror it.**
 
 ```ts
-export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+export type LocalErrorCode = 'pong_timeout' | 'connect_timeout' | 'socket_failed'
 
 export type LastError =
   | { source: 'frame'; code: string; message: string; at: number }
@@ -2792,6 +2792,17 @@ one, and it says nothing about whether a send stamp exists. So the measurement i
 send stamp itself. With no outstanding ping there is nothing to measure from, and the alternative
 is to date the round trip from the previous ping, which reports a number that is not a
 measurement of anything -- or, worse, to subtract from a null and put `NaN` on the screen.
+
+**The last `stats` is remembered with the timestamp it arrived under.** `lastStats()` exists so
+the store adapter can seed a view mounted into a live connection (§4.4.2) instead of showing an
+empty screen for up to a broadcast interval. It returned the payload alone, and §4.4.1's channel
+rule needs the envelope's `timestamp` to decide whether what it holds is older than what arrives
+next -- so a seeded channel was written with no timestamp to compare against, and the ordering
+guarantee started working only from the next live push. A guarantee with a hole at exactly the
+moment a view mounts is one that fails when somebody opens the app, which is the moment it is
+for. The client keeps the envelope stamp beside the payload and hands both over, as a
+`StatsSnapshot` of `{ stats, timestamp }` -- the same pairing `Diagnostics` already uses in that
+interface, rather than a second accessor that a caller could read without the first.
 
 **Latency is cleared when the socket goes**, not carried across the gap. The figure describes a
 link, and a link that has dropped has no round trip; showing 40 ms next to `offline` claims the
@@ -2843,14 +2854,47 @@ source beside `frame` and `close`, because it is neither -- and a `code` naming 
 rather than a number: `pong_timeout` and `connect_timeout`. `message` is empty; there is no
 remote to have said anything, and inventing a sentence here would put words in the unit's mouth.
 
-**Each of the two gets its own sentence, and the five-code table above does not govern them.**
+**A socket that throws while being rebuilt is the third one (issue #122).** §4.8 wraps the first
+build, the first attach and the first `connect()`, so a `new WebSocket` that throws cannot escape
+into a Svelte subscriber and wedge the store layer. It covers the first attempt only. The retry
+chain -- the connecting bound firing, then offline, then the reconnect timer, then `beginConnect`
+again -- runs the last of those inside a bare `setTimeout` callback with nothing above it, and a
+`createSocket` that throws there escapes into the timer, where the app has no handler at all. It
+is the same throw the first attempt is protected from, on the path taken hundreds of times more
+often. It records `source: 'local'` with `socket_failed`, and the retry schedule continues, since
+a browser that refused to open a socket once may not refuse the next one.
+
+**The state stays `connecting`, and the connecting bound is cleared.** `beginConnect` sets
+`connecting` and arms the bound before it asks for a socket, so a throw leaves both behind. The
+state is right and stays: a retry is scheduled, the client is trying, and `connecting` is what
+§4.3.1 calls trying -- dropping to `offline` would tell a screen the app has given up while a
+timer is pending. The bound is wrong and goes: it was armed to catch a socket that takes too long
+to open, and there is no socket. Left running it fires while the backoff is still waiting and
+records `connect_timeout` over the `socket_failed` the owner is meant to read, which is a
+diagnostic overwriting the diagnosis. Today the backoff caps below the bound so the retry clears
+it first; that is an accident of two constants, not a guarantee, and the next person to raise the
+cap would not know they were reading this paragraph.
+
+**Every `beginConnect` reached from a timer is guarded, not just the one this ticket found.** The
+reconnect schedule is one such caller and the pong timeout is another: it discards the dead socket
+and rebuilds immediately, from inside its own `setTimeout` callback, with the same nothing above
+it. Guarding the path that was reported and leaving its neighbour is how a defect gets fixed
+twice, six months apart, by two people who each read a ticket rather than the file. The rule is
+the shape, not the instance: a call that can throw, made from a timer, needs a handler in the
+timer.
+
+**Each of the three gets its own sentence, and the five-code table above does not govern them.**
 That table is about codes the wire carries, where the rule is to reuse the wording another screen
-already gives them. These two came from this client and no screen has ever worded them, so they
+already gives them. These three came from this client and no screen has ever worded them, so they
 are written here: `pong_timeout` says the connection stopped responding, `connect_timeout` says
-the unit did not answer while connecting. They must not collapse into each other or into the
-generic sentence, because they are two different failures -- a link that was working and went
-away, against one that never came up -- and the difference is most of what the reader is on this
-screen to learn. Neither shows its code: unlike a close code, these are names this app chose, and
+the unit did not answer while connecting, and `socket_failed` says the browser refused to open
+the connection -- which is the one of the three that is about the phone rather than the unit, and
+the sentence says so, because an owner told the unit is not answering will go and check the
+unit. They must not collapse into each other or into the
+generic sentence, because they are different failures -- a link that was working and went
+away, one that never came up, and one the phone itself refused -- and the difference is most of
+what the reader is on this screen to learn. Neither shows its code: unlike a close code, these
+are names this app chose, and
 printing an identifier the owner has no way to look up is not a diagnostic.
 
 **A close that follows an `error` frame does not overwrite it, and `unauthorized` is what that
@@ -3011,9 +3055,46 @@ before this section existed.
 carries a channel and `stats` carries one too, arriving up to 20 s apart. Writing the hop into
 the last `stats` object would produce a payload that never left the unit, whose `sessionAge`
 claims a freshness the patched field does not have, and staleness is read from that field
-(§4.3.1). So the hop goes to a `channel` store of its own: the `channel_hop` value when it arrived
-after the last `stats`, and `stats.channel` otherwise, whichever came later. A view that wants the current channel
+(§4.3.1). So the hop goes to a `channel` store of its own. A view that wants the current channel
 reads that store; a view that wants the unit's own snapshot reads `stats`.
+
+**"Whichever came later" is a timestamp, not an arrival order (issue #162).** Both messages carry
+the channel and both carry the unit's own `timestamp`. A plain writable set from each handler
+gives *last arrived*, and the two are not the same: `stats` is broadcast on a ticker while
+`channel_hop` is pushed when the hop happens, so a `stats` produced before a hop can be delivered
+after it and overwrite a newer channel with an older one. The app then shows a channel the unit
+has already left. That is why the app and the e-ink display disagreed **sometimes** rather than
+always: the sometimes is the window between the two.
+
+The store therefore keeps the timestamp it last wrote and ignores a message carrying an older
+one. **Both timestamps come from the same unit**, so this compares a clock against itself, which
+is the one comparison a remote clock can be trusted for -- §4.3.10 refuses to subtract the unit's
+clock from the phone's, and this does not. An equal timestamp is accepted: two messages can
+carry the same second, and the one that arrived second is the newer of them.
+
+**The `restarting` reason reaches the store, because two of its values mean opposite things
+(issue #131).** §4.3.1 made the reason a field rather than a state on the grounds that
+`mode_change`, `reboot` and `shutdown` differ in wording alone. That is true of the first two and
+false of the third: §4.3.1 makes `shutdown` terminal, suppresses reconnection and arms no
+patience timer, so it is the one case in the machine where nothing is going to happen next. A
+banner that says "the unit is restarting" to somebody who just tapped shut down tells them the
+opposite of what the app knows, and leaves them waiting for a screen that is not coming.
+
+So `ConnectionView` carries it as **`restartReason`**, beside the state, the same way it carries
+`unauthorizedReason` and for the same reason: a view subscribes to stores and never to the
+client, so a fact the adapter does not copy is a fact no screen can reach. It is null in every
+state but `restarting`,
+which is what the unauthorized reason already does in every state but `unauthorized`.
+
+**And the Dashboard banner renders it, in this change rather than a later one.** A field written
+by the adapter and read by no view is plumbing, and plumbing that nobody has connected looks
+identical to plumbing that works: the next reader assumes the fact is on screen because the store
+carries it. The banner already has the branch and a comment naming this issue as the reason both
+reasons share one line. The copy: `mode_change` and `reboot` keep **"The unit is restarting."**,
+and `shutdown` reads **"The unit is shutting down."** -- present tense, no promise of a return,
+because §4.3.1 makes that state terminal and the app is not waiting for anything. That is the
+whole of the defect this ticket describes: somebody taps shut down and is told the unit is coming
+back.
 
 **A `handshake` push does not write the list, it asks for it.** The push carries `{filename,
 ap, station, gps}` (§2.13); an entry in the list carries `ssid`, `bssid`, `mtime` and `size`,
@@ -5389,6 +5470,20 @@ connection would send unit A's token to unit B, which is the failure the whole p
 exists to prevent. An absent token fails authentication loudly and recoverably. A wrong one
 authenticates to the wrong unit.
 
+**A duplicate host id is dropped on the way in, keeping the first (issue #116).** The blob is
+treated as hostile because anything that can run script on this origin can write it, and the
+token lives in the same storage. Two hosts sharing an id is exactly the shape a hand-written or
+downgraded blob produces, and it is not benign: `updateHost` rewrites every entry with the id
+through a `map`, while `activeHost` and the other readers `find` the first. So editing the host
+on screen writes a second record the screen never showed, **including its token**. The parse
+refuses that rather than the writers defending against it one by one: an invariant enforced at
+one door beats the same invariant remembered at five, and a reader that used `find` was already
+assuming this was true.
+
+First wins because the readers already agree with it -- `find` returns the first, so keeping the
+first is the entry the app was already treating as real, and dropping it in favour of a later
+duplicate would change which host is active for a blob that merely repeated itself.
+
 **The module mints host ids**, from `crypto.randomUUID`, which exists because §3 makes the origin
 secure. The two prefilled hosts are the exception and carry the stable ids `bluetooth` and
 `usb`: they are the same two entries on every install, and a stable id is what lets a later
@@ -5533,10 +5628,37 @@ client exists and a second socket is opening, and the failure names the store la
 mistake made here. The same answer as §4.4.2, given in the same place the mistake is: calling
 it twice is a bug in the caller, and the caller is the app shell.
 
-**It is stopped when the shell unmounts**, which is what the app shell can actually observe.
-On a phone the app is backgrounded rather than closed, and backgrounding does not unmount
-anything, so releasing the socket then is a separate piece of work with its own lifecycle
-listener rather than something this sentence can claim.
+**It is stopped when the shell unmounts, and released when the page is hidden away (issue
+#120).** The unmount is what a Svelte component can observe, and on a phone it almost never
+happens: the app is backgrounded, not closed, and backgrounding unmounts nothing. So the session
+also listens for the page going away.
+
+**`pagehide` releases it and `pageshow` builds it again.** That pair is the one iOS actually
+fires for a standalone PWA being suspended and resumed, and it is symmetric, which matters more
+than it sounds: a listener that only tears down leaves an app that has been backgrounded once
+permanently disconnected, which is a worse bug than the one being fixed.
+
+**`pageshow` rebuilds only a session that is not running.** It fires on a cold load too, not just
+on a restore, and the listener is installed before the window finishes loading -- so a rule that
+rebuilds unconditionally makes every single app open build a client, connect, tear it down and
+build another, paying a TLS handshake and an auth round trip over Bluetooth to arrive where it
+already was. The guard is the same one `visibilitychange` uses, and it is stated as a condition on
+the session rather than as a test of the event's `persisted` flag: what matters is whether there
+is a live client, and a rule written against the app's own state stays true if the browser ever
+changes which events it fires.
+
+**`visibilitychange` alone does not release it.** Hiding is not leaving. The notification shade,
+the app switcher, a phone call and a glance at a message all hide the document for a few seconds,
+and a socket torn down and rebuilt on each of those costs a TLS handshake and an auth round trip
+on a Bluetooth link, to save nothing: the socket was idle. Only the transition the platform uses
+for suspension releases it. A `visibilitychange` back to visible **does** restart a session that
+is not running, because that is the cheap half and it catches the case where the release happened
+by some path this rule did not predict.
+
+**The socket may already be gone by the time the listener runs**, and that is not an error. iOS
+suspends the process; the connection dies with it or shortly after, and `pagehide` may fire after
+the fact. Releasing an already-dead session must be a no-op rather than a throw, for the reason
+the paragraph above gives about throwing out of a subscriber.
 
 ## 5. CI/CD (`.github/workflows/`)
 

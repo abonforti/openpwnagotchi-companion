@@ -20,7 +20,7 @@ import type {
 // body comes from the same dynamic `lib/ws` graph as everything else that
 // test mounts against -- see the comment on mountDashboard()'s WsModule.
 import { canSendCommand } from '../lib/ws'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.2 ("Controls: confirm, pending and where a
 // refusal appears", issue #184), plus 4.3.3 (queue vs. command, canSendCommand),
@@ -178,10 +178,10 @@ interface RecordedCommand {
   reject: (error: Error) => void
 }
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'connected'
   reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: Stats | null = null
+  private lastStatsValue: StatsSnapshot | null = null
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly commandCalls: RecordedCommand[] = []
@@ -196,7 +196,13 @@ class FakeWsClient {
   unauthorizedReason(): UnauthorizedReason | null {
     return this.reasonValue
   }
-  lastStats(): Stats | null {
+  // SPEC 4.4.1 (issue #131): not exercised by this file - no test here
+  // drives a restarting state, so this always answers null rather than
+  // gating on state like stores.spec.ts's own double does.
+  restartReason(): null {
+    return null
+  }
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
   onState(handler: (state: ConnectionState) => void): () => void {
@@ -232,7 +238,7 @@ class FakeWsClient {
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = message.data
+    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -266,7 +272,7 @@ class FakeWsClient {
 }
 
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 function frameFromCall(call: RecordedCommand): Record<string, unknown> {

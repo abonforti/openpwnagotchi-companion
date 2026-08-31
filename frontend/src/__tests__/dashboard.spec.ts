@@ -17,7 +17,7 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
 import {
   DASH,
   EMPTY_LABEL,
@@ -150,10 +150,15 @@ function restartingEnvelope(reason: RestartReason, mode: Mode | null = null): Ou
 // A hand-driven double for WsClient (same shape as stores.spec.ts's own).
 // ---------------------------------------------------------------------------
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'offline'
   reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: Stats | null = null
+  // SPEC 4.4.1 / issue #131: mirrors the real client's own restartReason()
+  // gate (ws.ts: "currentState === 'restarting' ? restartReasonValue :
+  // null") - non-null only while currentState is 'restarting', matching
+  // stores.spec.ts's own double.
+  private restartReasonValue: RestartReason | null = null
+  private lastStatsValue: StatsSnapshot | null = null
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
 
@@ -165,7 +170,10 @@ class FakeWsClient {
   unauthorizedReason(): UnauthorizedReason | null {
     return this.reasonValue
   }
-  lastStats(): Stats | null {
+  restartReason(): RestartReason | null {
+    return this.currentState === 'restarting' ? this.restartReasonValue : null
+  }
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
   onState(handler: (state: ConnectionState) => void): () => void {
@@ -199,13 +207,16 @@ class FakeWsClient {
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = message.data
+    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    // Mirrors ws.ts's own handleRestarting: the reason is captured off the
+    // wire frame itself, before the state transition that follows it.
+    if (message.type === 'restarting') this.restartReasonValue = message.data.reason
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 }
 
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,7 +1395,7 @@ describe('the connection banner', () => {
     )
   })
 
-  it('carries the restarting state with the exact pinned sentence', async () => {
+  it('carries the restarting state with the exact pinned sentence for reboot', async () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
@@ -1396,26 +1407,36 @@ describe('the connection banner', () => {
     expect((banner().textContent ?? '').trim()).toBe('The unit is restarting.')
   })
 
-  // SPEC.md 4.5.1.1 pins two distinct sentences for restarting's two reason
-  // groups (mode_change/reboot vs shutdown), and then immediately qualifies
-  // it: "The two restarting sentences are specified and not yet reachable,
-  // issue #131. `connection` mirrors the client's state and its unauthorized
-  // reason and nothing else (§4.4.1) ... So a view can tell restarting from
-  // connected and cannot tell a reboot from a shutdown, and the Dashboard
-  // renders one reason-agnostic line for both until the store carries the
-  // reason." The test below pins *that* current, specified state rather
-  // than the eventual one: both reasons render the same banner line today,
-  // by design, tracked as issue #131. A future change wiring the reason
-  // into `connection` should make the two sentences differ and this test
-  // should then flip to `.not.toBe`, matching the banner table's two rows.
-  it('renders the same reason-agnostic restarting line for reboot and shutdown today (issue #131)', async () => {
+  // SPEC.md 4.5.1.1/4.4.1 (resolved, issue #131): "the `restarting` reason
+  // reaches the store, because two of its values mean opposite things ...
+  // `ConnectionView` carries it as `restartReason`, beside the state ...
+  // And the Dashboard banner renders it, in this change rather than a later
+  // one." `mode_change` and `reboot` share "The unit is restarting.",
+  // `shutdown` reads "The unit is shutting down." - present tense, no
+  // promise of a return, because §4.3.1 makes that state terminal. This
+  // supersedes the old "reason-agnostic line" test that pinned the
+  // pre-#131 placeholder behaviour: the store now carries the reason, so
+  // the two sentences must differ.
+  it('renders the exact pinned sentence for mode_change - shares wording with reboot', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(restartingEnvelope('mode_change'))
+    client.emitState('restarting')
+    await settle()
+
+    expect(banner().getAttribute('data-banner')).toBe('restarting')
+    expect((banner().textContent ?? '').trim()).toBe('The unit is restarting.')
+  })
+
+  it('renders the exact pinned sentence for shutdown, distinct from mode_change/reboot (issue #131)', async () => {
     const rebootClient = new FakeWsClient()
     rebootClient.emitState('connected')
     await mountDashboard(rebootClient)
     rebootClient.emitMessage(restartingEnvelope('reboot'))
     rebootClient.emitState('restarting')
     await settle()
-    const rebootText = (banner().textContent ?? '').toLowerCase()
+    const rebootText = (banner().textContent ?? '').trim()
     expect(banner().getAttribute('data-banner')).toBe('restarting')
 
     if (instance && svelte) svelte.unmount(instance)
@@ -1434,13 +1455,14 @@ describe('the connection banner', () => {
     shutdownClient.emitMessage(restartingEnvelope('shutdown'))
     shutdownClient.emitState('restarting')
     await settle()
-    const shutdownText = (banner().textContent ?? '').toLowerCase()
+    const shutdownText = (banner().textContent ?? '').trim()
     expect(banner().getAttribute('data-banner')).toBe('restarting')
 
+    expect(shutdownText).toBe('The unit is shutting down.')
+    expect(rebootText).toBe('The unit is restarting.')
     expect(
       shutdownText,
-      'issue #131: the two restarting reasons share one banner line until connection carries the reason; ' +
-        'if this now fails, the store learned to distinguish them and this test should flip to .not.toBe',
-    ).toBe(rebootText)
+      'issue #131: the two restarting reasons must now differ - shutdown is terminal and the app is not waiting for anything',
+    ).not.toBe(rebootText)
   })
 })

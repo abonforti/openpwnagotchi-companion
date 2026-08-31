@@ -435,6 +435,80 @@ describe('a host with no usable id or address is dropped, everything else is rep
 })
 
 // ---------------------------------------------------------------------------
+// SPEC 4.7 (issue #116): "A duplicate host id is dropped on the way in,
+// keeping the first ... updateHost rewrites every entry with the id through
+// a map, while activeHost and the other readers find the first. So editing
+// the host on screen writes a second record the screen never showed,
+// including its token. The parse refuses that rather than the writers
+// defending against it one by one." Two assertions, not one: that the parse
+// itself drops the second entry (tidiness, on its own), and that an edit
+// afterwards cannot resurrect a second record carrying the dropped
+// duplicate's own token (the security property the ticket names as the
+// reason this is a fix and not a cosmetic dedup). The second is the one
+// that matters - a parser that deduplicates correctly but leaves updateHost
+// unchanged would still pass the first assertion alone, since by the time
+// updateHost runs the in-memory list already has one entry; only reading
+// back what was actually written to storage after the edit can catch a
+// `map`-based updateHost that (re-)writes a second record from a blob that
+// skipped loadSettings' own dedup, which is exactly the shape a corrupted
+// companion.settings key left on disk by an older, pre-#116 build has.
+// ---------------------------------------------------------------------------
+
+describe('a duplicate host id is dropped on the way in, keeping the first (4.7, issue #116)', () => {
+  it('loadSettings keeps only the first of two hosts sharing an id, dropping the second entirely', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          { id: 'dup-1', label: 'Primary entry', address: '172.20.10.9', wsPort: 8082, httpPort: 8443, token: 'token-primary' },
+          { id: 'dup-1', label: 'Shadow entry, never shown', address: '172.20.10.4', wsPort: 9001, httpPort: 9443, token: 'token-shadow' },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    assertWellFormedSettings(result)
+
+    const matches = result.hosts.filter((h) => h.id === 'dup-1')
+    expect(matches).toHaveLength(1)
+    expect(matches[0]?.label).toBe('Primary entry')
+    expect(matches[0]?.token).toBe('token-primary')
+  })
+
+  it('updateHost, after the dedup, never writes back a second record for that id - the shadow token stays gone, not just hidden', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          { id: 'dup-1', label: 'Primary entry', address: '172.20.10.9', wsPort: 8082, httpPort: 8443, token: 'token-primary' },
+          { id: 'dup-1', label: 'Shadow entry, never shown', address: '172.20.10.4', wsPort: 9001, httpPort: 9443, token: 'token-shadow' },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings, updateHost } = await loadModule()
+    loadSettings()
+
+    updateHost('dup-1', { label: 'Edited by the owner, who only ever saw the primary entry' })
+
+    // Read back what actually landed in storage, not the in-memory store:
+    // the failure this test exists to catch is a persisted blob carrying a
+    // second dup-1 record the Settings screen never displayed, so only the
+    // raw write proves the record is gone rather than merely unreachable
+    // through the store's own find()-based readers.
+    const persisted = JSON.parse(fakeStorage.getItem(SETTINGS_KEY) as string) as Settings
+    const matches = persisted.hosts.filter((h) => h.id === 'dup-1')
+    expect(matches).toHaveLength(1)
+    expect(matches[0]?.label).toBe('Edited by the owner, who only ever saw the primary entry')
+    // The property the ticket is actually about: the shadow entry's own
+    // token must not survive anywhere under this id, in any record.
+    expect(matches[0]?.token).toBe('token-primary')
+    expect(persisted.hosts.some((h) => h.token === 'token-shadow')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 4.7: "An empty host list is a state, not a corruption" - but only when it
 // is genuinely empty. A list emptied by every entry being dropped is a
 // different thing, and the defaults come back. This is the second of the

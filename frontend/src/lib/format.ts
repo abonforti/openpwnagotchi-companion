@@ -678,8 +678,20 @@ export function formatWifiEmptyMessage(segment: WifiSegment, fetched: boolean): 
   return segment === 'nearby' ? 'The unit reports no access points.' : 'The unit has no captures.'
 }
 
-/** Shown on the Captured segment only, while `truncated` is set (SPEC 4.5.2.3). */
-export function formatTruncationNotice(total: number): string {
+/**
+ * Shown on the Captured segment only, while `truncated` is set (SPEC
+ * 4.5.2.3). `total` is nullable (SPEC 2.7) because `handshakes_list.total`
+ * is, but the two cannot occur together: a list that was truncated was a
+ * list that was enumerated, so `total` is never null while `truncated` is
+ * set. The null branch below is written anyway, because "cannot happen"
+ * held by two independent facts is exactly the pairing that stops holding
+ * when one of them changes, and it says what SPEC 4.5.2.3 says: there is
+ * nothing to subtract from when the total is unknown.
+ */
+export function formatTruncationNotice(total: number | null): string {
+  if (total === null) {
+    return `Showing the newest 500 captures. Total ${EMPTY_LABEL}.`
+  }
   return `Showing the newest 500 captures of ${total}.`
 }
 
@@ -993,9 +1005,18 @@ export function formatMapEmptyMessage(fetched: boolean, hasCaptures: boolean): s
  * without a test counting Leaflet's own markers. Always plural, the same
  * convention `formatTruncationNotice` already follows for a count that is
  * routinely 0 or 1.
+ *
+ * `total` is nullable (SPEC 2.7, issue #153): null means the plugin has no
+ * directory to enumerate, not zero captures, and a manual-mode unit is
+ * exactly this case, not a corner of it. The first clause counts captures,
+ * so on a null it must not count -- it names the condition instead, in the
+ * shape SPEC 4.5.1.1 uses for the Dashboard's unknown values, rather than
+ * printing a number the plugin never had. The second clause stays a real
+ * count either way: there being none is not a guess.
  */
-export function formatMapCaption(total: number, withPosition: number): string {
-  return `${total} captures, ${withPosition} with a position.`
+export function formatMapCaption(total: number | null, withPosition: number): string {
+  const captureCount = total === null ? `Capture count ${EMPTY_LABEL}` : `${total} captures`
+  return `${captureCount}, ${withPosition} with a position.`
 }
 
 // ---------------------------------------------------------------------------

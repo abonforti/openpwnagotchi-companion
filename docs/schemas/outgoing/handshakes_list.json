@@ -22,8 +22,8 @@
           "description": "True when the 500-entry cap was hit. Entries are never dropped silently."
         },
         "total": {
-          "type": "integer",
-          "description": "Number of capture files found before the cap was applied."
+          "type": ["integer", "null"],
+          "description": "Number of capture files found before the cap was applied. Null means the handshake directory is unknown (neither `handshake_dir` nor the agent yielded one), not that it was found empty; `entries` stays an empty array in both cases."
         }
       },
       "required": [

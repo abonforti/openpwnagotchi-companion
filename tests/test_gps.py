@@ -391,6 +391,216 @@ def test_gpsd_is_polled_with_the_configured_endpoint_and_a_bounded_timeout(
 
 
 # ---------------------------------------------------------------------------
+# `gpsd_host` must be an address literal (SPEC 2.4/§gpsd source, issue #163)
+# ---------------------------------------------------------------------------
+#
+# `getaddrinfo` runs before the connect and honours no timeout the caller can
+# set, so a hostname behind an unresponsive resolver would block the poll -
+# in the same background thread that also refreshes the session cache - for
+# as long as the resolver takes. Refusing a hostname when the config is read
+# is the bounded answer; the plugin must still come up, and every other gps
+# source must keep working, which is the "degrades rather than takes the
+# unit down" rule SPEC 2.2.1 states as standing policy.
+
+
+def test_an_ipv6_literal_gpsd_host_is_polled_normally(options, harness, agent):
+    # 2001:db8::/32 is the IETF documentation range, RFC 3849: unrelated to
+    # any real network, unmistakably so.
+    options["gpsd_host"] = "2001:db8::1"
+    harness.gpsd_reply = GPSD_FIX
+    resolver = make_resolver(options, harness, agent)
+
+    resolver.refresh_gpsd()
+
+    host, _port, _timeout = harness.args_for("read_gpsd")[0]
+    assert host == "2001:db8::1"
+
+
+def test_a_hostname_gpsd_host_never_reaches_read_gpsd(options, harness, agent):
+    """The refusal itself: `read_gpsd` stands in for the connect *and* the
+    name resolution that must precede it (`getaddrinfo`), so "never called"
+    is the only observable proxy this suite has for "no resolver lookup was
+    attempted". A literal host, `192.0.2.10`, is polled freely
+    (`test_gpsd_is_polled_with_the_configured_endpoint_and_a_bounded_timeout`
+    above); a hostname must never get that far, on any refresh pass.
+    """
+    options["gpsd_host"] = "gpsd.example.invalid"
+    harness.gpsd_reply = GPSD_FIX
+    resolver = make_resolver(options, harness, agent)
+
+    resolver.refresh_gpsd()
+    resolver.refresh_gpsd()
+
+    assert "read_gpsd" not in harness.names()
+
+
+def test_constructing_the_resolver_over_a_hostname_does_not_raise(options, harness, agent):
+    """The refusal must not be an exception that could take the plugin down
+    with it - SPEC 2.2.1's standing rule, restated here for this specific
+    refusal. Building the resolver, and asking it for a reading, must both
+    complete normally.
+    """
+    options["gpsd_host"] = "gpsd.example.invalid"
+
+    resolver = make_resolver(options, harness, agent, {})
+    resolver.refresh_gpsd()
+
+    assert resolver.current() == companion.gps_unavailable()
+
+
+def test_a_hostname_gpsd_host_does_not_disable_other_gps_sources(options, harness, agent):
+    """The refusal costs only gpsd: with `gps_source` left at its default
+    `auto`, a bettercap fix must still surface exactly as it would with no
+    gpsd configured at all - one bad source degrades, the resolver as a
+    whole does not.
+    """
+    options["gpsd_host"] = "gpsd.example.invalid"
+    harness.gpsd_reply = GPSD_FIX
+    resolver = make_resolver(options, harness, agent, {"gps": BETTERCAP_FIX})
+
+    resolver.refresh_gpsd()
+    resolver.set_browser_position(1.0, 2.0, 5.0)
+
+    assert resolver.current()["source"] == "bettercap"
+    assert "read_gpsd" not in harness.names()
+
+
+def test_gps_source_forced_to_gpsd_with_a_hostname_is_unavailable_not_a_crash(
+    options, harness, agent
+):
+    """`gps_source = "gpsd"` restricts the resolver to gpsd alone
+    (`test_gps_source_gpsd_ignores_bettercap` above); paired with a refused
+    hostname there is nothing left to report, and the honest answer is the
+    same uniform "nothing available" shape every other empty case uses, not
+    an internal error.
+    """
+    options["gps_source"] = "gpsd"
+    options["gpsd_host"] = "gpsd.example.invalid"
+    harness.gpsd_reply = GPSD_FIX
+    resolver = make_resolver(options, harness, agent, {"gps": BETTERCAP_FIX})
+
+    resolver.refresh_gpsd()
+
+    assert resolver.current() == companion.gps_unavailable()
+    assert "read_gpsd" not in harness.names()
+
+
+def test_a_hostname_gpsd_host_does_not_stop_the_plugin_from_starting(
+    harness, tls_material, tmp_path
+):
+    """The whole-plugin half of the refusal: SPEC 2.2.1's standing rule is
+    that a bad value degrades the plugin, never takes it down. A unit whose
+    `config.toml` was handed a hostname for `gpsd_host` must still come up
+    with a working router and its listeners reconciled - the same "plugin
+    did not come up" failure `test_config_keys.py` guards against for an
+    unusable TLS pair must not happen here either.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **companion.DEFAULTS,
+        "enabled": True,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+        "gpsd_host": "gpsd.example.invalid",
+    }
+    try:
+        plugin.on_loaded()
+
+        assert plugin._router is not None
+        plugin._listeners.reconcile()
+    finally:
+        plugin.on_unload()
+
+
+# ---------------------------------------------------------------------------
+# The values a person actually types by hand, rather than the hostname every
+# #163 test above uses. "gpsd.example.invalid" is a string, and reaches the
+# validator's ValueError branch inside address-literal parsing; an empty
+# string and a bare int both have to be turned away before that parse is
+# even attempted, so neither exercises the same code path the hostname
+# tests do.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_host",
+    ["", 2947],
+    ids=["empty-string", "int-host-port-transposition"],
+)
+def test_an_unparsable_gpsd_host_never_reaches_read_gpsd(options, harness, agent, bad_host):
+    """An empty string is what clearing the field by hand produces; a bare
+    int (`gpsd_host = 2947`) is what typing the port number into the host
+    key produces. Both must be refused exactly as a hostname is
+    (`test_a_hostname_gpsd_host_never_reaches_read_gpsd` above) - `read_gpsd`
+    stands in for the resolver lookup and the connect together, so this is
+    the same "never called" proxy that test uses, for the two shapes it
+    does not cover.
+    """
+    options["gpsd_host"] = bad_host
+    harness.gpsd_reply = GPSD_FIX
+    resolver = make_resolver(options, harness, agent)
+
+    resolver.refresh_gpsd()
+    resolver.refresh_gpsd()
+
+    assert "read_gpsd" not in harness.names()
+
+
+@pytest.mark.parametrize(
+    "bad_host",
+    ["", 2947],
+    ids=["empty-string", "int-host-port-transposition"],
+)
+def test_constructing_the_resolver_over_an_unparsable_gpsd_host_does_not_raise(
+    options, harness, agent, bad_host
+):
+    """SPEC 2.2.1's standing rule again, for an empty string and a bare int
+    rather than for a hostname: neither may raise while the resolver is
+    built or while it is asked for a reading, and the honest answer for
+    both is the same uniform "nothing available" shape.
+    """
+    options["gpsd_host"] = bad_host
+
+    resolver = make_resolver(options, harness, agent, {})
+    resolver.refresh_gpsd()
+
+    assert resolver.current() == companion.gps_unavailable()
+
+
+@pytest.mark.parametrize(
+    "bad_host",
+    ["", 2947],
+    ids=["empty-string", "int-host-port-transposition"],
+)
+def test_an_unparsable_gpsd_host_does_not_stop_the_plugin_from_starting(
+    harness, tls_material, tmp_path, bad_host
+):
+    """The whole-plugin half of the refusal, for an empty string and a bare
+    int rather than for a hostname - mirrors
+    test_a_hostname_gpsd_host_does_not_stop_the_plugin_from_starting above.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **companion.DEFAULTS,
+        "enabled": True,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+        "gpsd_host": bad_host,
+    }
+    try:
+        plugin.on_loaded()
+
+        assert plugin._router is not None
+        plugin._listeners.reconcile()
+    finally:
+        plugin.on_unload()
+
+
+# ---------------------------------------------------------------------------
 # Sidecars on disk
 # ---------------------------------------------------------------------------
 

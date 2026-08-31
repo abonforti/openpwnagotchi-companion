@@ -186,3 +186,141 @@ def test_get_log_replies_with_lines_and_path(router, log_file):
     assert reply["type"] == "log_lines"
     assert reply["data"]["path"] == str(log_file)
     assert len(reply["data"]["lines"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# `log_path`, resolved before the agent (SPEC 2.6.0.1, issue #154)
+# ---------------------------------------------------------------------------
+#
+# The same asymmetry §2.5 closed for `handshake_dir`, closed the same way:
+# `log_path`, empty by default, wins when it is a non-empty string; otherwise
+# the path comes from `agent._config` (F17); otherwise the answer stays
+# `log_unavailable` rather than becoming an internal error. Every test here
+# goes through a real `Router.handle()` - not a hand-built reader over a path
+# the test chose - because resolving the path is production's job.
+
+
+def test_log_path_is_used_with_no_agent(router_factory, log_file):
+    """The middle case, and the one the ticket names as the one that
+    matters: a unit with no agent - manual mode, for the life of the process
+    (F31) - can still have its log read, once the operator has told the
+    plugin where to look.
+    """
+    router = router_factory(None, overrides={"log_path": str(log_file)})
+
+    reply = router.handle({"type": "get_log"}, authenticated=True)[-1]
+
+    assert reply["type"] == "log_lines"
+    assert reply["data"]["path"] == str(log_file)
+
+
+def test_no_agent_and_no_log_path_is_log_unavailable_not_a_crash(router_factory):
+    """No agent to fall back to and nothing configured: the honest answer is
+    the same `log_unavailable` a missing file gets (§2.6.0.1: "stays the
+    honest reply rather than becoming an internal error"), never an
+    unhandled exception reaching the transport.
+    """
+    router = router_factory(None)
+
+    replies = router.handle({"type": "get_log"}, authenticated=True)
+
+    assert replies[-1]["type"] == "error"
+    assert replies[-1]["data"]["code"] == "log_unavailable"
+
+
+def test_log_path_wins_over_the_agents_config_when_they_differ(
+    router_factory, agent_factory, tmp_path
+):
+    configured = tmp_path / "configured.log"
+    configured.write_text("configured line\n", "utf-8")
+
+    agents_own = tmp_path / "agents-own.log"
+    agents_own.write_text("agent's own line\n", "utf-8")
+    agent = agent_factory(
+        config={
+            "bettercap": {"handshakes": str(tmp_path)},
+            "main": {"log": {"path": str(agents_own)}},
+        }
+    )
+
+    router = router_factory(agent, overrides={"log_path": str(configured)})
+
+    reply = router.handle({"type": "get_log"}, authenticated=True)[-1]
+
+    assert reply["data"]["path"] == str(configured)
+
+
+def test_log_path_the_empty_string_falls_through_to_the_agent(
+    router_factory, agent_factory, log_file
+):
+    """Neither source may contribute an empty path (§2.5's reason, restated
+    for the log in §2.6.0.1): an empty path is nowhere to read. `log_path`
+    explicitly set to `""` must behave exactly like it being unset, not like
+    a path that fails to open.
+    """
+    agent = agent_factory()  # points at the shared `log_file` fixture
+
+    router = router_factory(agent, overrides={"log_path": ""})
+
+    reply = router.handle({"type": "get_log"}, authenticated=True)[-1]
+
+    assert reply["data"]["path"] == str(log_file)
+
+
+def test_an_empty_agent_log_path_is_unavailable_not_a_real_read(
+    router_factory, agent_factory, tmp_path
+):
+    """The symmetric half: an agent whose own configured path is `""`
+    contributes nothing either, and with no `log_path` override the answer
+    must be `log_unavailable`, not an attempt to open `""`.
+    """
+    agent = agent_factory(
+        config={
+            "bettercap": {"handshakes": str(tmp_path)},
+            "main": {"log": {"path": ""}},
+        }
+    )
+
+    router = router_factory(agent)
+
+    replies = router.handle({"type": "get_log"}, authenticated=True)
+
+    assert replies[-1]["type"] == "error"
+    assert replies[-1]["data"]["code"] == "log_unavailable"
+
+
+def test_get_log_never_honours_a_client_supplied_path(router, tmp_path):
+    """§2.6.0.1's security property, stated as plainly as SPEC states
+    anything: "`get_log` carries a line count and nothing else ... The only
+    two sources are the config the owner wrote and the agent's own
+    configuration." A message naming a path must not be honoured.
+
+    In practice this is not merely ignored: `incoming/get_log.json` sets
+    `additionalProperties: false` and `Router.handle` enforces that, so a
+    `path` field on the message makes the whole request `bad_request` rather
+    than being silently dropped and falling back to the real path. That is a
+    *stronger* guarantee than "not honoured" and this test pins it as
+    observed, rather than assuming the weaker one - the request never
+    reaches log resolution at all, and the smuggled path is never opened.
+
+    Read this test's title narrowly: it proves the *message layer* refuses a
+    `path` field, not that the log reader beneath the router would refuse
+    one if a caller reached it directly. The property lives one layer up
+    from where the title points - in `additionalProperties: false` on
+    `incoming/get_log.json`, enforced by `Router.handle` before dispatch.
+    If that schema constraint is ever relaxed to let `path` through, this is
+    the test that dies; it says nothing about whether the function that
+    actually opens the log file would still refuse a caller-supplied path on
+    its own. That would need a test that calls the log reader directly,
+    bypassing the router, and no such test exists in this suite today.
+    """
+    smuggled = tmp_path / "not-the-log.txt"
+    smuggled.write_text("this must never be read back\n", "utf-8")
+
+    reply = router.handle(
+        {"type": "get_log", "path": str(smuggled)}, authenticated=True
+    )[-1]
+
+    assert reply["type"] == "error"
+    assert reply["data"]["code"] == "bad_request"
+    assert reply["type"] != "log_lines"

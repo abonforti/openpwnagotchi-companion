@@ -68,7 +68,7 @@ function handshakeEntry(overrides: Partial<HandshakeEntry> = {}): HandshakeEntry
 function handshakesListEnvelope(
   entries: HandshakeEntry[],
   truncated = false,
-  total = entries.length,
+  total: number | null = entries.length,
 ): OutgoingHandshakesList {
   return { type: 'handshakes_list', timestamp: T, data: { entries, truncated, total } }
 }
@@ -623,6 +623,70 @@ describe('the caption counts only finite, non-null positions (issue #109)', () =
     client.settle('get_handshakes', handshakesListEnvelope(entries))
     await settle()
     expect(root().textContent).toContain('2 captures, 0 with a position.')
+  })
+})
+
+// =============================================================================
+// 3a. SPEC 4.5.2.7's own paragraph for issue #153: total:null (no directory
+//     to enumerate - a manual-mode unit) must render differently from
+//     total:0 (a directory that was read and found empty), and the caption's
+//     first clause "must not count" on a null. SPEC pins the literal caption
+//     for the null case directly ("Capture count unavailable, 0 with a
+//     position."), and says why §4.5.1.1's dash convention does not transfer:
+//     that section renders an unknown value as a dash in a cell, where the
+//     dash sits where a number would, and a caption is a sentence rather than
+//     a cell - "- captures, 0 with a position" is not one. The caption reuses
+//     the word "unavailable" that §4.5.1.1 already gives the screen reader,
+//     rather than inventing a second word for the same idea.
+// =============================================================================
+
+describe('the caption tells a null total (no directory) apart from a real zero (issue #153)', () => {
+  it('total:null with no entries does not render as "0 captures" - the app was never told a directory, it did not look and find nothing', async () => {
+    const { client } = await mountMap('connected')
+    client.settle('get_handshakes', handshakesListEnvelope([], false, null))
+    await settle()
+    expect(root().textContent).not.toContain('0 captures')
+  })
+
+  it('total:null and total:0 render different captions for the same (empty) entry list', async () => {
+    const { client: nullClient } = await mountMap('connected')
+    nullClient.settle('get_handshakes', handshakesListEnvelope([], false, null))
+    await settle()
+    const nullCaption = root().textContent
+
+    // The second mount needs the first session released, not just its markup
+    // removed: startSession refuses a second active session, and clearing the
+    // body leaves the first one running. The afterEach hook cannot help here,
+    // because both mounts happen inside one test.
+    if (stopSession) {
+      stopSession()
+      stopSession = null
+    }
+    document.body.innerHTML = ''
+    const { client: zeroClient } = await mountMap('connected')
+    zeroClient.settle('get_handshakes', handshakesListEnvelope([], false, 0))
+    await settle()
+    const zeroCaption = root().textContent
+
+    expect(zeroCaption).toContain('0 captures, 0 with a position.')
+    expect(nullCaption).not.toBe(zeroCaption)
+  })
+
+  it('total:null renders the pinned caption: "Capture count unavailable, 0 with a position."', async () => {
+    const { client } = await mountMap('connected')
+    client.settle('get_handshakes', handshakesListEnvelope([], false, null))
+    await settle()
+    expect(root().textContent).toContain('Capture count unavailable, 0 with a position.')
+  })
+
+  it('the second clause - how many carry a position - stays a real count even when total is null (SPEC: "that one is true either way")', async () => {
+    const { client } = await mountMap('connected')
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ gps: handshakeGps() }), handshakeEntry({ gps: null })], false, null),
+    )
+    await settle()
+    expect(root().textContent).toContain('1 with a position.')
   })
 })
 

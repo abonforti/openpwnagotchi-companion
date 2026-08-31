@@ -480,8 +480,8 @@ export interface OutgoingHandshakesList {
     "entries": HandshakeEntry[];
     /** True when the 500-entry cap was hit. Entries are never dropped silently. */
     "truncated": boolean;
-    /** Number of capture files found before the cap was applied. */
-    "total": number;
+    /** Number of capture files found before the cap was applied. Null means the handshake directory is unknown (neither `handshake_dir` nor the agent yielded one), not that it was found empty; `entries` stays an empty array in both cases. */
+    "total": number | null;
   };
   /** Epoch seconds at which the plugin produced the message. */
   "timestamp": number;
@@ -509,7 +509,7 @@ export interface OutgoingLogLines {
   "type": "log_lines";
   "data": {
     "lines": string[];
-    /** The log path actually read, taken from config['main']['log']['path']. */
+    /** The log path actually read: the plugin's `log_path` when it is set, otherwise config['main']['log']['path']. */
     "path": string;
   };
   /** Epoch seconds at which the plugin produced the message. */

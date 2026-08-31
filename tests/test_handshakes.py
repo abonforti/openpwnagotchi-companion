@@ -356,3 +356,73 @@ def test_get_handshakes_replies_with_the_listing(router):
     assert reply["data"]["total"] == 4
     assert reply["data"]["truncated"] is False
     assert len(reply["data"]["entries"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# An unknown directory is not an empty one (SPEC 2.7, issue #153)
+# ---------------------------------------------------------------------------
+#
+# `total: null` with an empty `entries` means the directory is unknown;
+# `total: 0` with an empty `entries` means it was found and holds nothing.
+# The two cases must be told apart, and the ticket asks for it proven with
+# the directory *unset* - not pointed at an empty temporary directory, which
+# is the other, "real zero" case and is already covered by
+# `test_handshakes.py`'s neighbour, `test_a_missing_directory_lists_nothing_rather_than_raising`
+# at the `HandshakeStore` level. Both are exercised here, side by side, so
+# the distinction is the assertion rather than an assumption about it.
+
+
+def test_no_directory_at_all_gives_a_null_total_and_an_empty_listing(
+    harness, tls_material, tmp_path
+):
+    """Deliberately not `router_factory`: its `_handshake_store` closure
+    (conftest.py) stands in for "unknown" with its own hand-built
+    `_UnknownHandshakeStore` double, which reports the right shape by
+    construction and so cannot tell a correct `HandshakeStore(None)` from a
+    broken one - the double would report `total: None` even if production's
+    `HandshakeStore.entries()` did not. Proving what production actually
+    does needs a real `Companion`, driven through `on_loaded` the way
+    `test_handshake_dir.py`'s `plugin_factory` does, with neither
+    `handshake_dir` set nor an agent supplied.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **companion.DEFAULTS,
+        "enabled": True,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+    }
+    try:
+        plugin.on_loaded()
+
+        reply = plugin._router.handle({"type": "get_handshakes"}, authenticated=True)[-1]
+
+        assert reply["type"] == "handshakes_list"
+        assert reply["data"]["total"] is None
+        assert reply["data"]["entries"] == []
+        assert reply["data"]["truncated"] is False
+    finally:
+        plugin.on_unload()
+
+
+def test_a_directory_that_exists_and_is_empty_gives_a_real_zero(
+    router_factory, agent_factory, tmp_path
+):
+    """The other half of the distinction: a directory the plugin was told
+    about, that happens to hold nothing, is a real, known `0` - never
+    `null`. Told via `handshake_dir` here, the same way `handle` on a fresh
+    `HandshakeStore` over an empty directory already reports `(0, 0)`
+    (`test_a_missing_directory_lists_nothing_rather_than_raising` covers the
+    even blanker "does not exist" case with the same real-zero answer).
+    """
+    empty = tmp_path / "empty-but-known"
+    empty.mkdir()
+
+    reply = router_factory(
+        None, overrides={"handshake_dir": str(empty)}
+    ).handle({"type": "get_handshakes"}, authenticated=True)[-1]
+
+    assert reply["data"]["total"] == 0
+    assert reply["data"]["entries"] == []

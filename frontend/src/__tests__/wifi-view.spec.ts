@@ -83,7 +83,7 @@ function accessPointsEnvelope(list: AccessPoint[]): OutgoingAccessPoints {
 function handshakesListEnvelope(
   entries: HandshakeEntry[],
   truncated = false,
-  total = entries.length,
+  total: number | null = entries.length,
 ): OutgoingHandshakesList {
   return { type: 'handshakes_list', timestamp: T, data: { entries, truncated, total } }
 }
@@ -1244,6 +1244,24 @@ describe('badges and the truncation notice', () => {
     client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()], false, 1))
     await settle()
     expect(truncationNotice()).toBeNull()
+  })
+
+  // SPEC 4.5.2.3: "a list that was truncated was a list that was enumerated,
+  // so `truncated` cannot be true while `total` is null - and the rule is
+  // written here anyway, because 'cannot happen' held by two independent
+  // facts is exactly the pairing that stops holding when one of them
+  // changes." Nothing in this plugin can send truncated:true with total:null
+  // today, and this test is pinned for the same reason SPEC gives for
+  // writing the rule down at all: the pairing is enforced by two separate
+  // facts staying true together, not by a schema constraint that couples
+  // them, so a future change to either fact reaches this state. The notice's
+  // signature has to accept a null total without producing nonsense.
+  it('truncated:true paired with total:null does not crash and never prints the total as the literal string "null"', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([]))
+    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()], true, null))
+    await expect(settle()).resolves.toBeUndefined()
+    expect(root().textContent).not.toContain('null')
   })
 
   it("the Captured badge is not required to agree with stats.handshakesTotal - a frame where they differ shows both, neither hidden by the other", async () => {

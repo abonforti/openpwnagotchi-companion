@@ -5655,6 +5655,17 @@ for suspension releases it. A `visibilitychange` back to visible **does** restar
 is not running, because that is the cheap half and it catches the case where the release happened
 by some path this rule did not predict.
 
+**Releasing is re-entrant-safe, and this is not hypothetical.** Tearing a session down closes its
+socket, and a close handler and a page-lifecycle event can land in the same tick -- so a
+`pagehide` can arrive while a release is already on the stack, which calls release again, which
+closes again. Without a guard that is unbounded recursion, and it is what a test written for the
+overlap actually produced: `RangeError: Maximum call stack size exceeded`, from inside an event
+listener, with every assertion in the suite still green because the throw was unhandled rather
+than failing a test. A release entered while a release is in progress returns immediately.
+
+The same holds for the resume side, for the same reason and with less drama: rebuilding tears the
+previous session down first, so the two share the path that can re-enter.
+
 **The socket may already be gone by the time the listener runs**, and that is not an error. iOS
 suspends the process; the connection dies with it or shortly after, and `pagehide` may fire after
 the fact. Releasing an already-dead session must be a no-op rather than a throw, for the reason

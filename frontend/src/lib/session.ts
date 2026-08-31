@@ -208,6 +208,22 @@ export function startSession(deps?: Partial<SessionDeps>): () => void {
       rebuild(host)
     })
 
+    // SPEC 4.8: "a release entered while a release is in progress returns
+    // immediately." Tearing a session down closes its socket, and a close
+    // handler and a page-lifecycle event can land in the same tick, so a
+    // `pagehide` can arrive while `release()` is already on the stack and
+    // call it again -- unbounded recursion without a guard, which is what
+    // an overlap test actually produced (`RangeError: Maximum call stack
+    // size exceeded`, thrown inside an event listener rather than failing
+    // an assertion). The same path is shared by `resume()`: rebuilding
+    // tears the previous session down first, so a re-entrant call arriving
+    // through either function is refused by the one flag below. Set and
+    // cleared with try/finally so a throw from `teardown()`, `resetStores()`
+    // or `rebuild()` cannot leave the flag latched -- that would turn this
+    // recursion guard into a session nothing can ever release again, which
+    // is worse than the bug it fixes.
+    let releasing = false
+
     /**
      * SPEC 4.8 (issue #120): `pagehide` releases the session. Idempotent
      * through `teardown()`'s own guards, which is what keeps this a no-op
@@ -217,10 +233,23 @@ export function startSession(deps?: Partial<SessionDeps>): () => void {
      * the same reason the module's own `stop` above is: this is the
      * caller of an explicit close, and SPEC 4.4.2 makes clearing the data
      * that caller's job.
+     *
+     * A call arriving while a release is already in progress returns
+     * immediately (SPEC 4.8) rather than joining the one already on the
+     * stack: the outer call still runs `teardown()` and `resetStores()` to
+     * completion once the nested call returns, so the session it owns ends
+     * up fully torn down either way -- the re-entrant call leaves nothing
+     * behind because there is nothing left for it to do.
      */
     function release(): void {
-      teardown()
-      resetStores()
+      if (releasing) return
+      releasing = true
+      try {
+        teardown()
+        resetStores()
+      } finally {
+        releasing = false
+      }
     }
 
     /**
@@ -242,10 +271,22 @@ export function startSession(deps?: Partial<SessionDeps>): () => void {
      * anyway would still run `teardown()` and `resetStores()` against
      * nothing on every such resume -- a schedule driven by the app
      * switcher rather than by anything that changed.
+     *
+     * Guarded by the same `releasing` flag as `release()` (SPEC 4.8):
+     * `rebuild()` tears the previous session down before it builds, so it
+     * shares the path that can re-enter, and a call arriving here while a
+     * release or another resume is already in progress returns immediately
+     * instead of racing it.
      */
     function resume(): void {
+      if (releasing) return
       if (client !== null || latestHost === null) return
-      rebuild(latestHost)
+      releasing = true
+      try {
+        rebuild(latestHost)
+      } finally {
+        releasing = false
+      }
     }
 
     function onPageHide(): void {

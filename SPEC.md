@@ -114,6 +114,8 @@ openpwnagotchi-companion/
 │   │   └── manifest.webmanifest
 │   ├── src/
 │   │   ├── __tests__/                # vitest specs, see §10.5
+│   │   │   ├── helpers/              # assertions shared by more than one spec
+│   │   │   │   └── ...
 │   │   │   └── ...
 │   │   ├── lib/
 │   │   │   ├── controls.ts           # the control messages and what may send one
@@ -4782,6 +4784,14 @@ this app displays names it did not choose. This section's own rule about a remot
 mangle one
 for a related reason, and deleting characters to make a layout behave is the same mistake with a
 security justification attached to it.
+
+**A separator between the two must be expressed so the compiler cannot drop it.** Taking a
+composed line apart puts the local text into its own block, and Svelte trims whitespace at a block
+boundary: `{#if hasTime} at {time}{/if}` renders `nameat 09:14`. This is the same compiler
+behaviour issue #188 recorded for the accessible label beside a dash, met again in a new place
+because the isolation rule creates exactly the shape that provokes it -- a remote piece and a
+local piece with a space between them, now separated by a tag or a block. Write the separator as
+an expression, `{' at '}`, which is a value rather than markup and survives.
 
 **Only the remote substring goes inside the element, never the composed line.** This is the part
 that decides whether the fix works at all: an override inside an isolate still reorders the text

@@ -383,7 +383,7 @@
   <div class="field">
     <span class="field-label">{row.label}</span>
     <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}
-      >{#if row.hasName}<bdi>{row.name}</bdi>{#if row.hasTime} at {row.time}{/if}{:else}{row.time}{/if}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
+      >{#if row.hasName}<bdi>{row.name}</bdi>{#if row.hasTime}{' at '}{row.time}{/if}{:else}{row.time}{/if}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
     >
   </div>
 {/snippet}

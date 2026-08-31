@@ -308,6 +308,7 @@ def test_parse_found_the_open_listed_directories(parsed: ParsedTree):
         "docs/schemas/incoming",
         "docs/schemas/outgoing",
         "frontend/src/__tests__",
+        "frontend/src/__tests__/helpers",
         "frontend/tests/e2e",
         "tests",
         "tests/fakes/fixtures",

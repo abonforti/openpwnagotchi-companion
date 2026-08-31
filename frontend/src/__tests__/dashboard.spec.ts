@@ -28,7 +28,6 @@ import {
   formatGpsFix,
   formatGpsSource,
   formatMode,
-  formatNamedEvent,
   formatTemperature,
   formatUnauthorizedCallToAction,
   formatUnauthorizedReason,
@@ -37,6 +36,8 @@ import {
   NEVER_REFRESHED,
 } from '../lib/format'
 import { connectStores, resetStores } from '../lib/stores'
+
+import { assertRemoteStringIsolated } from './helpers/remoteText'
 
 // Written from SPEC.md 4.5.1.1, 4.5.2 (Dashboard field list only, controls
 // out of scope), 4.3.1 (connection states) and 4.4.1 (which store each field
@@ -757,32 +758,13 @@ describe('lastHandshake', () => {
     expect(isEmpty('lastHandshake')).toBe(true)
   })
 
-  it('renders formatNamedEvent(ssid, mtime), named rather than merely timed', async () => {
-    const client = new FakeWsClient()
-    client.emitState('connected')
-    await mountDashboard(client)
-    const mtime = 1_700_000_460
-    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime }) }))
-    await settle()
-
+  it('renders a literal expected string against a faked clock: named, not merely timed', async () => {
     // SPEC.md 4.5.1.1: "lastHandshake renders its ssid beside its time of
     // day ... A bare time answers 'when' and leaves out the half of the row
-    // an operator is actually reading." formatNamedEvent is the pinned
-    // function for this combination (SPEC.md's function table); its own
-    // rules are asserted independently in format.spec.ts, this test only
-    // pins that Dashboard passes it stats.lastHandshake.ssid and .mtime.
-    expect(fieldText('lastHandshake')).toBe(formatNamedEvent('TestNet_001', mtime))
-    expect(fieldText('lastHandshake')).not.toBe(formatUnitTime(mtime))
-  })
-
-  it('renders a literal expected string against a faked clock, not one built from formatNamedEvent itself', async () => {
-    // The test above asserts the field matches whatever formatNamedEvent(ssid,
-    // mtime) returns, which cannot catch the formatter and the view
-    // drifting together -- if Dashboard stopped calling formatNamedEvent at
-    // all and hand-rolled something that happened to match its current
-    // output, that test would still pass. This one computes the expected
-    // string independently, from a faked "now" and SPEC.md 4.5.1.1's own
-    // worked example (5 Aug 09:14, this year, no year carried).
+    // an operator is actually reading." Computed independently from a faked
+    // "now" and SPEC.md 4.5.1.1's own worked example (5 Aug 09:14, this
+    // year, no year carried), rather than from a formatter this test would
+    // then only be checking against itself.
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date(2026, 7, 15, 12, 0, 0)) // "now": 15 Aug 2026
@@ -795,9 +777,49 @@ describe('lastHandshake', () => {
       await settle()
 
       expect(fieldText('lastHandshake')).toBe('TestNet_001 at 5 Aug 09:14')
+      expect(fieldText('lastHandshake')).not.toBe(formatUnitTime(mtime))
+      // SPEC 4.5.3: "Only the remote substring goes inside the element,
+      // never the composed line" -- the ssid alone is isolated, the "at 5
+      // Aug 09:14" half is this app's own text and stays outside it.
+      // assertRemoteStringIsolated proves both halves of that at once: it
+      // fails if the ssid is not isolated (no <bdi> whose textContent is
+      // exactly 'TestNet_001'), and it fails just as hard if the whole
+      // composed line were wrapped instead of the ssid alone -- that <bdi>'s
+      // textContent would be the full 'TestNet_001 at 5 Aug 09:14' line, not
+      // 'TestNet_001', so it would not count as a match either.
+      assertRemoteStringIsolated(field('lastHandshake'), 'TestNet_001')
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('renders the name alone when the timestamp is not known, not a leading " at" with nothing before it', async () => {
+    // The name-alone case is only reachable the same way the "neither half"
+    // case below is: LastHandshake.mtime is not nullable on the wire, so a
+    // non-finite value stands in for "the plugin didn't have a time",
+    // formatUnitTime already treating that the same as absent.
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime: NaN }) }))
+    await settle()
+
+    expect(fieldText('lastHandshake')).toBe('TestNet_001')
+    expect(isEmpty('lastHandshake')).toBe(false)
+    assertRemoteStringIsolated(field('lastHandshake'), 'TestNet_001')
+  })
+
+  it('renders the time alone when the ssid is empty, not " at 5 Aug 09:14" with a leading space', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    const mtime = 1_700_000_460
+    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: '', mtime }) }))
+    await settle()
+
+    expect(fieldText('lastHandshake')).toBe(formatUnitTime(mtime))
+    expect(fieldText('lastHandshake').startsWith(' ')).toBe(false)
+    expect(isEmpty('lastHandshake')).toBe(false)
   })
 
   it('is empty when the ssid is empty and the timestamp is not known either, neither half present', async () => {
@@ -807,10 +829,7 @@ describe('lastHandshake', () => {
     // is reached the same way the rest of this suite reaches an otherwise
     // unreachable-by-schema state: a non-finite value, which formatUnitTime
     // already treats the same as absent (format.spec.ts's own non-finite
-    // section). A `data-empty` decided by a string comparison would not
-    // catch this either, since formatNamedEvent('', NaN) is DASH, the same
-    // string a legal ssid of "-" produces -- which is exactly why the rule
-    // is decided from the value, not the string.
+    // section).
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
@@ -839,16 +858,55 @@ describe('lastPeer', () => {
     expect(isEmpty('lastPeer')).toBe(true)
   })
 
-  it('renders formatNamedEvent(name, lastSeen), named rather than merely timed, once a peer has been seen', async () => {
+  it('renders a literal expected string against a faked clock: named, not merely timed, once a peer has been seen', async () => {
+    // Computed independently from a faked "now", the same way the
+    // lastHandshake case above is, rather than against a formatter this
+    // test would then only be checking against itself.
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 7, 15, 12, 0, 0)) // "now": 15 Aug 2026
+      const lastSeen = Math.floor(new Date(2026, 7, 5, 9, 14, 0).getTime() / 1000) // 5 Aug 2026
+
+      const client = new FakeWsClient()
+      client.emitState('connected')
+      await mountDashboard(client)
+      client.emitMessage(statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen }) }))
+      await settle()
+
+      expect(fieldText('lastPeer')).toBe('unit-bravo at 5 Aug 09:14')
+      expect(isEmpty('lastPeer')).toBe(false)
+      // SPEC 4.5.3: only the remote name is isolated, not the composed
+      // line - assertRemoteStringIsolated fails either way a wrapper could
+      // get this wrong (the name left unwrapped, or the whole "unit-bravo
+      // at 5 Aug 09:14" line wrapped as one unit instead of the name alone).
+      assertRemoteStringIsolated(field('lastPeer'), 'unit-bravo')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders the name alone when lastSeen is not known, not a leading " at" with nothing before it', async () => {
+    const client = new FakeWsClient()
+    client.emitState('connected')
+    await mountDashboard(client)
+    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen: null }) }))
+    await settle()
+
+    expect(fieldText('lastPeer')).toBe('unit-bravo')
+    expect(isEmpty('lastPeer')).toBe(false)
+    assertRemoteStringIsolated(field('lastPeer'), 'unit-bravo')
+  })
+
+  it('renders the time alone when the name is empty, not " at 5 Aug 09:14" with a leading space', async () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
     const lastSeen = 1_700_000_460
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen }) }))
+    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: '', lastSeen }) }))
     await settle()
 
-    expect(fieldText('lastPeer')).toBe(formatNamedEvent('unit-bravo', lastSeen))
-    expect(fieldText('lastPeer')).toContain('unit-bravo')
+    expect(fieldText('lastPeer')).toBe(formatUnitTime(lastSeen))
+    expect(fieldText('lastPeer').startsWith(' ')).toBe(false)
     expect(isEmpty('lastPeer')).toBe(false)
   })
 
@@ -1057,7 +1115,10 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 
     const el = field('face')
     expect(el.textContent).toBe(HOSTILE_SCRIPT)
-    expect(el.children.length).toBe(0)
+    // `face` is a remote value rendered on its own, and SPEC 4.5.3 isolates it
+    // like every other one: the field carries a <bdi> the app put there, so the
+    // property is "no element came from the string", not "no elements at all".
+    assertRemoteStringIsolated(el, HOSTILE_SCRIPT)
     expect(root().querySelector('script')).toBeNull()
     expect((window as unknown as { __pwned?: boolean }).__pwned).not.toBe(true)
   })
@@ -1071,12 +1132,12 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 
     const el = field('status')
     expect(el.textContent).toBe(HOSTILE_QUOTES)
-    expect(el.children.length).toBe(0)
+    assertRemoteStringIsolated(el, HOSTILE_QUOTES)
     expect(root().querySelector('img')).toBeNull()
     expect((window as unknown as { __pwned?: boolean }).__pwned).not.toBe(true)
   })
 
-  it("renders a hostile lastPeer.name verbatim, with no element created", async () => {
+  it("renders a hostile lastPeer.name verbatim, isolated inside a <bdi>, with no other element created", async () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
@@ -1085,16 +1146,19 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 
     const el = field('lastPeer')
     expect(el.textContent).toContain(HOSTILE_SCRIPT)
-    expect(el.children.length).toBe(0)
     expect(root().querySelector('script')).toBeNull()
     expect((window as unknown as { __pwned?: boolean }).__pwned).not.toBe(true)
+    // SPEC 4.5.3: the string's own characters present as text inside the
+    // isolation boundary -- a <script> tag among them is still just text.
+    // assertRemoteStringIsolated subsumes the plain "no script/img anywhere"
+    // check above: it fails on any injected element, not only those two tags.
+    assertRemoteStringIsolated(el, HOSTILE_SCRIPT)
   })
 
-  it('renders a hostile lastHandshake.ssid verbatim, with no element created', async () => {
+  it('renders a hostile lastHandshake.ssid verbatim, isolated inside a <bdi>, with no other element created', async () => {
     // §4.5.3 names an SSID directly: "an SSID is 32 bytes chosen by a
-    // stranger". lastHandshake reaches the DOM through formatNamedEvent,
-    // the same function lastPeer does, so this is the same rule on the
-    // fixture SPEC.md itself calls out and was missing from this block.
+    // stranger". This is the same rule on the fixture SPEC.md itself calls
+    // out and was missing from this block.
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
@@ -1103,9 +1167,9 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 
     const el = field('lastHandshake')
     expect(el.textContent).toContain(HOSTILE_SCRIPT)
-    expect(el.children.length).toBe(0)
     expect(root().querySelector('script')).toBeNull()
     expect((window as unknown as { __pwned?: boolean }).__pwned).not.toBe(true)
+    assertRemoteStringIsolated(el, HOSTILE_SCRIPT)
   })
 })
 
@@ -1116,10 +1180,10 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 // that basis alone, report itself empty or carry the accessible label.
 //
 // lastHandshake is not exercised here: its `mtime` is not nullable on the
-// wire (LastHandshake.mtime: number), so formatNamedEvent always appends
-// " at <time>" and the rendered text can never collide with a bare DASH for
-// that field. face, status and lastPeer (whose lastSeen *is* nullable) are
-// where the collision is actually reachable.
+// wire (LastHandshake.mtime: number), so a real, schema-reachable ssid
+// always renders with " at <time>" appended and the rendered text can never
+// collide with a bare DASH for that field. face, status and lastPeer (whose
+// lastSeen *is* nullable) are where the collision is actually reachable.
 // ---------------------------------------------------------------------------
 
 describe('data-empty is decided by the value, not by the rendered string', () => {
@@ -1146,7 +1210,7 @@ describe('data-empty is decided by the value, not by the rendered string', () =>
   })
 
   it('a peer named exactly "-" with no lastSeen still reports a real reading, not an absent one', async () => {
-    // formatNamedEvent('-', null) is the name alone: literally "-", the
+    // The name alone, with no lastSeen, renders as literally "-", the
     // same string DASH itself is. A `data-empty` decided by comparing the
     // rendered string to DASH would flag this row empty; SPEC.md is
     // explicit that a remote party must not get to make that call.

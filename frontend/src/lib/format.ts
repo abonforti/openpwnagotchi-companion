@@ -185,12 +185,11 @@ export function formatGpsFix(gps: Gps): string {
  * name, and the absence of a name is the absence of a name (SPEC 4.5.1.1).
  *
  * The `''` arm is not reachable from a conformant payload -- `common.json`
- * types `GpsSource` as a closed enum with no empty member, the same way the
- * `null`-name arm of `formatNamedEvent` is not -- but `lib/stores.ts` writes
- * `message.data` into the store with no runtime validation (issue #109), so
- * that type is a compile-time claim about a remote payload, not a fact
- * about one. Pinned anyway rather than left as defence in depth
- * (SPEC 4.5.1.1, issue #142).
+ * types `GpsSource` as a closed enum with no empty member -- but
+ * `lib/stores.ts` writes `message.data` into the store with no runtime
+ * validation (issue #109), so that type is a compile-time claim about a
+ * remote payload, not a fact about one. Pinned anyway rather than left as
+ * defence in depth (SPEC 4.5.1.1, issue #142).
  */
 export function formatGpsSource(gps: Gps): string {
   const source = gps.source as string | null
@@ -273,47 +272,6 @@ export function formatUnitTime(epochSeconds: number | null): string {
     return `${day} ${month} ${time}`
   }
   return `${day} ${month} ${date.getFullYear()} ${time}`
-}
-
-/**
- * `<name> at <time>` for the last handshake and the last peer: the name
- * alone when the timestamp is missing, the time alone when the name is
- * absent or empty, `DASH` when both are (SPEC 4.5.1.1).
- *
- * An empty name is a real capture, not a malformed one -- a hidden network
- * broadcasts no SSID -- and must not render as `` at 12:04`` with a
- * leading space where a name should be, so it is treated the same as an
- * absent one.
- *
- * `common.json` makes `LastHandshake.ssid` and `Peer.name` required
- * strings, so the `null`-name arm is unreachable from a conformant
- * payload; it exists because this function takes the two fields off an
- * object (`stats.lastHandshake`, `stats.lastPeer`) that may itself be
- * `null`, and the caller passes that absence straight through rather than
- * inventing a name.
- *
- * The name passes through unchanged, hostile or not. An SSID is 32 bytes
- * chosen by whoever the unit just saw, and a peer name arrives over the
- * mesh from somebody else's unit (SPEC 4.5.3); escaping a value like that
- * is the renderer's job, and mangling it here -- truncating it, stripping
- * characters, anything -- would be a second, quieter answer to a rule that
- * already has one.
- */
-export function formatNamedEvent(name: string | null, epochSeconds: number | null): string {
-  const hasName = name !== null && name !== ''
-  const time = formatUnitTime(epochSeconds)
-  const hasTime = time !== DASH
-  if (hasName && hasTime) {
-    return `${name} at ${time}`
-  }
-  if (hasName) {
-    // hasName narrows name to a non-null, non-empty string here.
-    return name as string
-  }
-  if (hasTime) {
-    return time
-  }
-  return DASH
 }
 
 /**

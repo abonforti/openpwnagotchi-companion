@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Capabilities, OutgoingMessage, OutgoingStats } from '../lib/protocol'
 import type { ConnectionState, Diagnostics, LastError, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
 
+import { assertRemoteStringIsolated } from './helpers/remoteText'
+
 // Written wholesale from SPEC.md 4.5.2.1 ("Settings presentation and DOM
 // hooks", issue #134), the Settings bullet of 4.5.2, 4.5.1's ports-are-
 // diagnostics and IPv4-only rules, 4.7 (lib/settings.ts's own contract), and
@@ -1047,6 +1049,43 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       delete (window as unknown as { __pwned_settings_lasterror?: boolean }).__pwned_settings_lasterror
     })
 
+    // Bidi isolation (SPEC 4.5.3, "A string rendered as text can still lie
+    // about its neighbours", issue #219): `message` "came off the wire, so
+    // 4.5.3 applies to it in full" (SPEC 4.3.10). The diagnostics line
+    // assembles a fixed sentence, the remote message, and a time (SPEC
+    // 4.3.10), so the isolation boundary is looked for around the message
+    // text specifically, not around the whole assembled line - the sentence
+    // and the time are this app's own words and are not remote strings.
+    it('a lastError message carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+      const BIDI_OVERRIDE = '‮'
+      const HOSTILE_MESSAGE = `unit went ${BIDI_OVERRIDE}gnorw`
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: sampleLastError({ message: HOSTILE_MESSAGE }), latencyMs: null })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.textContent ?? '').toContain(HOSTILE_MESSAGE)
+      assertRemoteStringIsolated(el, HOSTILE_MESSAGE)
+    })
+
+    // The distinguishing assertion: a genuine right-to-left message renders
+    // exactly as it arrived - isolation, not stripping (SPEC 4.5.3).
+    it('a legitimate right-to-left lastError message renders unmangled, not stripped or reordered', async () => {
+      const RTL_MESSAGE = 'الوحدة لم تستجب'
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: sampleLastError({ message: RTL_MESSAGE }), latencyMs: null })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.textContent ?? '').toContain(RTL_MESSAGE)
+    })
+
     // SPEC 4.3.10 (amended, issue #176): "A message that is not a string has
     // no message ... Coercing it prints null, undefined or [object Object]
     // on the line, attributed to the unit ... So a non-string is treated as
@@ -1638,10 +1677,9 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// SPEC 4.5.3, applied to this screen's two remote strings: pluginVersion
-// and unauthorizedReason both come off the wire (4.5.2.1's own closing
-// line) and must render as text, never as markup, regardless of what
-// TypeScript's UnauthorizedReason union claims the wire will only ever send.
+// SPEC 4.5.3, applied to this screen's one remote string: pluginVersion.
+// unauthorizedReason is not a remote string (SPEC.md 4.5.2.1) -- lib/ws.ts
+// mints it locally from a close code, so §4.5.3 does not apply to it.
 // ---------------------------------------------------------------------------
 
 describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
@@ -1651,7 +1689,7 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     delete (window as unknown as { __pwned_settings?: boolean }).__pwned_settings
   })
 
-  it('renders a hostile plugin version verbatim, with no element created from it', async () => {
+  it('renders a hostile plugin version verbatim, isolated inside a <bdi>, with no other element created', async () => {
     const client = new FakeWsClient()
     const { settings: api, stores } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
@@ -1661,32 +1699,18 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
 
     const el = diagnosticField('pluginVersion')
     expect(el.textContent).toBe(HOSTILE_SCRIPT)
-    expect(el.children.length).toBe(0)
     expect(root().querySelector('script')).toBeNull()
     expect((window as unknown as { __pwned_settings?: boolean }).__pwned_settings).not.toBe(true)
+    assertRemoteStringIsolated(el, HOSTILE_SCRIPT)
   })
 
-  it('never turns a hostile unauthorizedReason into markup, whether reflected verbatim or mapped to fixed copy', async () => {
-    // UnauthorizedReason is typed as 'rejected' | 'required', but the value
-    // reaches the view off the wire through WsClient.unauthorizedReason(),
-    // which nothing in this test file's reach enforces at runtime -- the
-    // same cast dashboard.spec.ts uses for a closed-enum field (gpsSource).
-    //
-    // The shipped view maps the reason through fixed copy per branch
-    // (mirroring SPEC 4.5.1.1's banner sentences) rather than reflecting the
-    // raw string, so an unrecognised value never reaches the DOM at all --
-    // this test does not assume which of the two designs is in force, only
-    // that neither ever produces an element or lets the payload execute.
-    const client = new FakeWsClient()
-    const { settings: api, stores } = await mountSettings()
-    api.loadSettings(() => 'not-an-ip-address')
-    teardownStores = stores.connectStores(asClient(client))
-    client.emitState('unauthorized', HOSTILE_SCRIPT as unknown as UnauthorizedReason)
-    await settle()
-
-    const el = diagnosticField('unauthorizedReason')
-    expect(el.children.length).toBe(0)
-    expect(root().querySelector('script')).toBeNull()
-    expect((window as unknown as { __pwned_settings?: boolean }).__pwned_settings).not.toBe(true)
-  })
+  // No equivalent test exists for unauthorizedReason: SPEC.md 4.5.2.1 (the
+  // ledger for this screen's own remote strings) is explicit that
+  // unauthorizedReason is *not* one -- lib/ws.ts mints it locally from a
+  // close code, from a closed set of values this codebase chose, so a
+  // hostile value cannot reach this field from the wire. A test that casts
+  // a script tag into UnauthorizedReason to exercise this path defends
+  // against something that cannot happen, which SPEC.md 4.5.2.1 names as a
+  // mistake in its own right ("A defence against something that cannot
+  // happen is not free: it reads as evidence that it can").
 })

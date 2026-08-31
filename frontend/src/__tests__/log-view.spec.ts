@@ -5,6 +5,8 @@ import getLogSchema from '../../../docs/schemas/incoming/get_log.json'
 import type { OutgoingLogLines, OutgoingMessage } from '../lib/protocol'
 import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
+import { assertRemoteStringIsolated } from './helpers/remoteText'
+
 // Written from SPEC.md 4.5.2.5 ("The Log, and the one timer this client is
 // allowed", issue #193), which now explicitly adopts 4.5.2.3's refresh
 // reasoning (the three occasions, no timer anywhere else, being connected is
@@ -1310,23 +1312,26 @@ describe('the filter filters the rendered lines and never the request (SPEC 4.5.
 
 // =============================================================================
 // 6. A matched substring is not highlighted (SPEC 4.5.2.5, via 4.5.3): a
-//    filtered line is one text node, never split into elements.
+//    filtered line creates no highlighting element around the match, inside
+//    its <bdi> isolation boundary (SPEC 4.5.3).
 // =============================================================================
 
-describe('a matched substring is not highlighted: one text node, no element created (SPEC 4.5.2.5/4.5.3)', () => {
-  it('an unfiltered line renders as a single text node', async () => {
+describe('a matched substring is not highlighted: no highlighting element created (SPEC 4.5.2.5/4.5.3)', () => {
+  it('an unfiltered line renders as text inside its <bdi>, with no other element created', async () => {
     const { client } = await mountLog()
     const line = 'associated with TestNet_001'
     client.settle(GET_LOG_TYPE, logLinesEnvelope([line]))
     await settle()
     const el = lineElements()[0] as HTMLElement
-    expect(el.children.length).toBe(0)
-    expect(el.childNodes.length).toBe(1)
-    expect(el.childNodes[0]?.nodeType).toBe(Node.TEXT_NODE)
     expect(el.textContent).toBe(line)
+    // assertRemoteStringIsolated subsumes the separate "bdi has no children"
+    // and "no other injected element" checks this used to run one after the
+    // other: it fails on either an unwrapped line or an extra element
+    // anywhere in the field, including one nested inside the <bdi> itself.
+    assertRemoteStringIsolated(el, line)
   })
 
-  it('a line with an active filter match still renders as a single, unsplit text node', async () => {
+  it('a line with an active filter match still renders as text inside its <bdi>, with no highlighting element created', async () => {
     const { client } = await mountLog()
     const line = 'associated with TestNet_001'
     client.settle(GET_LOG_TYPE, logLinesEnvelope([line]))
@@ -1336,10 +1341,8 @@ describe('a matched substring is not highlighted: one text node, no element crea
     await settle()
 
     const el = lineElements()[0] as HTMLElement
-    expect(el.children.length).toBe(0)
-    expect(el.childNodes.length).toBe(1)
-    expect(el.childNodes[0]?.nodeType).toBe(Node.TEXT_NODE)
     expect(el.textContent).toBe(line)
+    assertRemoteStringIsolated(el, line)
   })
 })
 
@@ -1362,7 +1365,7 @@ describe('every log line renders as text, no element created (SPEC 4.5.3)', () =
     await settle()
     const el = lineElements()[0] as HTMLElement
     expect(el.textContent).toBe(HOSTILE_LINE)
-    expect(el.children.length).toBe(0)
+    assertRemoteStringIsolated(el, HOSTILE_LINE)
     expect(root().querySelector('script')).toBeNull()
     expect(root().querySelector('[onerror]')).toBeNull()
     expect((window as unknown as { __logViewPwned?: boolean }).__logViewPwned).toBeUndefined()
@@ -1378,11 +1381,44 @@ describe('every log line renders as text, no element created (SPEC 4.5.3)', () =
 
     const el = lineElements()[0] as HTMLElement
     expect(el.textContent).toBe(HOSTILE_LINE)
-    expect(el.children.length).toBe(0)
+    assertRemoteStringIsolated(el, HOSTILE_LINE)
     expect(root().querySelector('script')).toBeNull()
     expect(root().querySelector('[onerror]')).toBeNull()
     expect((window as unknown as { __logViewPwned?: boolean }).__logViewPwned).toBeUndefined()
   })
+})
+
+// =============================================================================
+// 7a. Bidi isolation (SPEC 4.5.3, "a pwnagotchi logs the SSIDs it just saw",
+//     issue #219): a log line is a stranger's string with a timestamp in
+//     front, so it is exactly the case the isolation rule exists for.
+// =============================================================================
+
+const BIDI_OVERRIDE = '‮'
+const HOSTILE_BIDI_LINE = `2026-08-21 12:00:00 [INFO] associated with TestNet_${BIDI_OVERRIDE}lave.exe`
+const RTL_LINE_ARABIC = '2026-08-21 12:00:00 [INFO] associated with شبكة_اختبار'
+const RTL_LINE_HEBREW = '2026-08-21 12:00:00 [INFO] associated with רשת_בדיקה'
+
+describe('bidi isolation for a log line (SPEC 4.5.3, issue #219)', () => {
+  it('a line carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountLog()
+    client.settle(GET_LOG_TYPE, logLinesEnvelope([HOSTILE_BIDI_LINE]))
+    await settle()
+    const el = lineElements()[0] as HTMLElement
+    expect(el.textContent).toBe(HOSTILE_BIDI_LINE)
+    expect(el.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(el, HOSTILE_BIDI_LINE)
+  })
+
+  for (const rtlLine of [RTL_LINE_ARABIC, RTL_LINE_HEBREW]) {
+    it(`a legitimate right-to-left line "${rtlLine}" renders unmangled, not stripped or reordered`, async () => {
+      const { client } = await mountLog()
+      client.settle(GET_LOG_TYPE, logLinesEnvelope([rtlLine]))
+      await settle()
+      const el = lineElements()[0] as HTMLElement
+      expect(el.textContent).toBe(rtlLine)
+    })
+  }
 })
 
 // =============================================================================

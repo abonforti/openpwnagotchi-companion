@@ -171,9 +171,13 @@
            else, and never split to highlight a filter match, which would
            mean building markup out of a hostile string. The list index is
            the {#each} key: a log line has no identity of its own and two
-           units can legitimately log the same line twice. -->
+           units can legitimately log the same line twice. The whole line
+           sits inside a <bdi> (issue #219): it is one opaque remote
+           string with no local text sharing the element, so isolating it
+           whole is enough to stop a bidi override from reordering it
+           against its neighbours. -->
       {#each filteredLines as line, i (i)}
-        <div class="log-line" data-log-line>{line}</div>
+        <div class="log-line" data-log-line><bdi>{line}</bdi></div>
       {/each}
     {/if}
   </div>

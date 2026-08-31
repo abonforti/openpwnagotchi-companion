@@ -19,6 +19,8 @@ import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, W
 // SPEC 4.5.2.3 ("every remote string on a row follows 4.5.1.1").
 import { DASH, EMPTY_LABEL, formatUnitTime } from '../lib/format'
 
+import { assertRemoteStringIsolated } from './helpers/remoteText'
+
 // Written from SPEC.md 4.5.2.3 ("Wi-Fi: two segments, and the data behind
 // them", issue #187), plus 4.5 (the segmented control's own mechanics,
 // restated nowhere by 4.5.2.3), 4.5.1.1 and 4.5.2.1 (the DOM-hook and
@@ -1301,8 +1303,15 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
     ;(window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned = undefined
   })
 
+  // Every field here is isolated inside a <bdi> (6a below pins bssid,
+  // encryption, vendor and the captured bssid directly, alongside hostname
+  // and ssid), so "no element created" stopped being literally true once
+  // the template started wrapping these fields on purpose (SPEC 4.5.3).
+  // assertRemoteStringIsolated is what this test's own title always meant:
+  // the string's own characters present as text inside that one wrapper,
+  // and no script, img or other element anywhere in the field beyond it.
   for (const hostile of HOSTILE_STRINGS) {
-    it(`Nearby hostname "${hostile}" renders as text, no element created`, async () => {
+    it(`Nearby hostname "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
       client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: hostile })]))
       client.settle('get_handshakes', handshakesListEnvelope([]))
@@ -1312,9 +1321,22 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       expect(root().querySelector('script')).toBeNull()
       expect(root().querySelector('[onerror]')).toBeNull()
       expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
     })
 
-    it(`Nearby vendor "${hostile}" renders as text, no element created`, async () => {
+    it(`Nearby bssid "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
+      const { client } = await mountWifi()
+      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ bssid: hostile })]))
+      client.settle('get_handshakes', handshakesListEnvelope([]))
+      await settle()
+      const field = fieldIn(rows('nearby')[0] as HTMLElement, 'bssid')
+      expect(field.textContent).toBe(hostile)
+      expect(root().querySelector('script')).toBeNull()
+      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
+    })
+
+    it(`Nearby vendor "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
       client.settle('get_access_points', accessPointsEnvelope([accessPoint({ vendor: hostile })]))
       client.settle('get_handshakes', handshakesListEnvelope([]))
@@ -1323,9 +1345,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
       expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
     })
 
-    it(`Nearby encryption "${hostile}" renders as text, no element created`, async () => {
+    it(`Nearby encryption "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
       client.settle('get_access_points', accessPointsEnvelope([accessPoint({ encryption: hostile })]))
       client.settle('get_handshakes', handshakesListEnvelope([]))
@@ -1334,9 +1357,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
       expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
     })
 
-    it(`Captured ssid "${hostile}" renders as text, no element created`, async () => {
+    it(`Captured ssid "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
       client.settle('get_access_points', accessPointsEnvelope([]))
       client.settle(
@@ -1348,6 +1372,22 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
       expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
+    })
+
+    it(`Captured bssid "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
+      const { client } = await mountWifi()
+      client.settle('get_access_points', accessPointsEnvelope([]))
+      client.settle(
+        'get_handshakes',
+        handshakesListEnvelope([handshakeEntry({ bssid: hostile })]),
+      )
+      await settle()
+      const field = fieldIn(rows('captured')[0] as HTMLElement, 'bssid')
+      expect(field.textContent).toBe(hostile)
+      expect(root().querySelector('script')).toBeNull()
+      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      assertRemoteStringIsolated(field, hostile)
     })
   }
 
@@ -1459,6 +1499,139 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
     expect(field.textContent).toBe('Pinned')
     expect(field.getAttribute('data-empty')).not.toBe('true')
   })
+})
+
+// =============================================================================
+// 6a. Bidi isolation (SPEC 4.5.3, "A string rendered as text can still lie
+//     about its neighbours", issue #219): a remote string is rendered inside
+//     a <bdi>, which isolates it without touching a single character. The
+//     rule is isolation rather than stripping, so the pair that matters is
+//     both directions at once - a hostile override character is contained,
+//     and a legitimate right-to-left name is untouched.
+//
+// What DOM shape the isolation takes is not pinned by SPEC beyond "inside a
+// <bdi>", so assertRemoteStringIsolated (helpers/remoteText.ts) accepts
+// either the field element itself being a <bdi>, or a <bdi> nested inside
+// it - deliberately tolerant of either reading of "rendered inside a <bdi>"
+// rather than one guessed shape.
+// =============================================================================
+
+const BIDI_OVERRIDE = '‮'
+// A classic RLO extension-spoof shape: reversed, "TestNet_exe.evael" reads
+// as a filename with a swapped extension. The point is not that this is a
+// filename here, only that it is exactly the character the isolation rule
+// exists for, carried inside an otherwise ordinary-looking SSID.
+const HOSTILE_BIDI_SSID = `TestNet_${BIDI_OVERRIDE}lave.exe`
+// Synthetic Arabic and Hebrew network names - real right-to-left script,
+// not a real SSID - each meaning roughly "test network" in its language.
+const RTL_SSID_ARABIC = 'شبكة_اختبار'
+const RTL_SSID_HEBREW = 'רשת_בדיקה'
+
+describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
+  it('a Nearby hostname carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: HOSTILE_BIDI_SSID })]))
+    client.settle('get_handshakes', handshakesListEnvelope([]))
+    await settle()
+    const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  // Left uncovered until review found the gap: bssid, encryption and vendor
+  // sit right beside hostname on the same Nearby row and are wrapped the
+  // same way - a wrapper deleted from any one of the three left this suite
+  // green, since only hostname's own wrapper was ever exercised.
+  it('a Nearby bssid carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ bssid: HOSTILE_BIDI_SSID })]))
+    client.settle('get_handshakes', handshakesListEnvelope([]))
+    await settle()
+    const field = fieldIn(rows('nearby')[0] as HTMLElement, 'bssid')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  it('a Nearby encryption carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ encryption: HOSTILE_BIDI_SSID })]))
+    client.settle('get_handshakes', handshakesListEnvelope([]))
+    await settle()
+    const field = fieldIn(rows('nearby')[0] as HTMLElement, 'encryption')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  it('a Nearby vendor carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ vendor: HOSTILE_BIDI_SSID })]))
+    client.settle('get_handshakes', handshakesListEnvelope([]))
+    await settle()
+    const field = fieldIn(rows('nearby')[0] as HTMLElement, 'vendor')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  it('a Captured ssid carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([]))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ ssid: HOSTILE_BIDI_SSID, bssid: null })]),
+    )
+    await settle()
+    const field = fieldIn(rows('captured')[0] as HTMLElement, 'ssid')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  // The other half of "captured bssid" (the null-filename-parse case is
+  // already pinned above, in the empty/dash block): a captures's own bssid
+  // is a remote-derived string too - `bssid` in a HandshakeEntry comes from
+  // parsing the capture filename (SPEC 2.7), and the isolation rule applies
+  // to it the same as any other field on this row.
+  it('a Captured bssid carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
+    const { client } = await mountWifi()
+    client.settle('get_access_points', accessPointsEnvelope([]))
+    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ bssid: HOSTILE_BIDI_SSID })]))
+    await settle()
+    const field = fieldIn(rows('captured')[0] as HTMLElement, 'bssid')
+    expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
+    expect(field.textContent).toContain(BIDI_OVERRIDE)
+    assertRemoteStringIsolated(field, HOSTILE_BIDI_SSID)
+  })
+
+  // The distinguishing assertion: isolation is not a filter, so a genuine
+  // right-to-left name must render exactly as it arrived, with no character
+  // dropped or reordered by this app - "an Arabic or Hebrew SSID is a name,
+  // not an attack" (SPEC 4.5.3).
+  for (const rtlSsid of [RTL_SSID_ARABIC, RTL_SSID_HEBREW]) {
+    it(`a legitimate right-to-left hostname "${rtlSsid}" renders unmangled, not stripped or reordered`, async () => {
+      const { client } = await mountWifi()
+      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: rtlSsid })]))
+      client.settle('get_handshakes', handshakesListEnvelope([]))
+      await settle()
+      const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
+      expect(field.textContent).toBe(rtlSsid)
+    })
+
+    it(`a legitimate right-to-left Captured ssid "${rtlSsid}" renders unmangled, not stripped or reordered`, async () => {
+      const { client } = await mountWifi()
+      client.settle('get_access_points', accessPointsEnvelope([]))
+      client.settle(
+        'get_handshakes',
+        handshakesListEnvelope([handshakeEntry({ ssid: rtlSsid, bssid: null })]),
+      )
+      await settle()
+      const field = fieldIn(rows('captured')[0] as HTMLElement, 'ssid')
+      expect(field.textContent).toBe(rtlSsid)
+    })
+  }
 })
 
 // SPEC 4.5.2.3: "channel, rssi and clients are non-nullable by schema, so a

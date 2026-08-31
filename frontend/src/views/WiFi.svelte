@@ -93,9 +93,12 @@
   {@const vendorEmpty = isRemoteStringUnknown(ap.vendor)}
   <li class="row" data-row="nearby" data-row-key={ap.bssid}>
     <span class="row-field" data-field="hostname" data-empty={hostnameEmpty ? 'true' : undefined}>
-      {formatRemoteString(ap.hostname)}{#if hostnameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(ap.hostname)}</bdi>{#if hostnameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
-    <span class="row-field" data-field="bssid">{ap.bssid}</span>
+    <!-- SPEC 4.5.3 (issue #219): the BSSID is attacker-chosen like every
+         other field on this row and is isolated the same way, even though
+         it carries no dash rule of its own. -->
+    <span class="row-field" data-field="bssid"><bdi>{ap.bssid}</bdi></span>
     <span class="row-field" data-field="channel">{ap.channel}</span>
     <span class="row-field" data-field="rssi">{ap.rssi}</span>
     <!-- SPEC 4.5.2.3: every remote string on a row follows §4.5.1.1 -- vendor
@@ -107,10 +110,10 @@
       data-field="encryption"
       data-empty={encryptionEmpty ? 'true' : undefined}
     >
-      {formatRemoteString(ap.encryption)}{#if encryptionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(ap.encryption)}</bdi>{#if encryptionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="vendor" data-empty={vendorEmpty ? 'true' : undefined}>
-      {formatRemoteString(ap.vendor)}{#if vendorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(ap.vendor)}</bdi>{#if vendorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="clients">{ap.clients}</span>
   </li>
@@ -120,9 +123,9 @@
   {@const bssidEmpty = isRemoteStringUnknown(entry.bssid)}
   {@const gpsEmpty = formatGpsPin(entry.gps) === DASH}
   <li class="row" data-row="captured" data-row-key={entry.filename}>
-    <span class="row-field" data-field="ssid">{entry.ssid}</span>
+    <span class="row-field" data-field="ssid"><bdi>{entry.ssid}</bdi></span>
     <span class="row-field" data-field="bssid" data-empty={bssidEmpty ? 'true' : undefined}>
-      {formatRemoteString(entry.bssid)}{#if bssidEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(entry.bssid)}</bdi>{#if bssidEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="time">{formatUnitTime(entry.mtime)}</span>
     <span class="row-field" data-field="size">{formatByteSize(entry.size)}</span>

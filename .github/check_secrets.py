@@ -104,6 +104,61 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"(?i)^\s*(?:(?://|@)[^\s=]*:)?_(?:authToken|auth|password)\s*=\s*\S", re.M
         ),
     ),
+    # A credential is not always at the start of a line (issue #211). The
+    # anchor above spares `_authToken=<your token>` written mid-sentence, and
+    # widening it was tried and rejected during #199: it catches a list
+    # literal but still misses `x = "_authToken=..."`, which is the likelier
+    # paste, and turns a documentation line starting with a backtick into a
+    # false positive. So the position stays a concession and this second
+    # pattern gives up the anchor entirely, qualifying on the value instead.
+    #
+    # The key can sit anywhere on the line, with no boundary in front of it -
+    # `_` is a word character, so a leading quote never reaches it either,
+    # the same reason the anchored pattern above matches by key and not by
+    # `\b`. What follows the `=` or `:` has to look like a credential rather
+    # than a placeholder: at least sixteen characters from the alphabet real
+    # tokens use (letters, digits, `_`, `-`), which by construction admits no
+    # space and no angle bracket, so `<your token>` never reaches the run at
+    # all. `:` is accepted alongside `=` because that is how JSON, YAML and a
+    # JavaScript object literal write the same assignment -
+    # `{"_authToken": "..."}`, `_authToken: Ab3x...` - and a token most often
+    # arrives in exactly that shape, from a config file or a paste out of a
+    # lockfile. An optional quote is accepted on either side of the `=` or
+    # `:` for the same reason: in every one of those formats the value itself
+    # is quoted, and in JSON the key is quoted too, so `"_authToken": "..."`
+    # puts one quote before the colon and another after it. A first version
+    # allowed only the quote after the separator and still missed the JSON
+    # form - the very shape this comment describes - found by running the
+    # pattern against the shapes rather than by reading it.
+    # `credential assignment` below does not cover this gap either - it opens
+    # with `\b`, and a leading underscore is not a word boundary, so
+    # `_authToken` defeats it before the value is ever considered. That is
+    # pre-existing and it is not this pattern's job to compensate for: two
+    # patterns covering for each other's blind spots is how both end up
+    # untested.
+    #
+    # A value containing any of the placeholder words anywhere in it, not
+    # only at its start, is refused. The first version anchored the excluded
+    # words with `\b`, which holds against a hyphen and not against an
+    # underscore - `_` is inside the token alphabet, so
+    # `YOUR_TOKEN_HERE_XXXX` fired while `your-token-here-xxxx` did not, and
+    # `YOUR_TOKEN_HERE` is the commonest documentation placeholder there is.
+    # A real token is random and will not contain `changeme`; the false
+    # negative that buys - a genuine secret that happens to spell one of
+    # these words inside itself - is the cheaper mistake, because the other
+    # one turns the scanner off. The optional quote sits ahead of this
+    # exclusion, not inside it, so a quoted placeholder such as
+    # `_authToken: "YOUR_TOKEN_HERE_XXXXXXXX"` is still refused: the
+    # exclusion looks at the value characters that follow the quote, exactly
+    # as it already does for the unquoted form.
+    (
+        "npm registry credential value",
+        re.compile(
+            r"(?i)_(?:authToken|auth|password)[\"']?\s*[=:]\s*[\"']?"
+            r"(?![A-Za-z0-9_-]*(?:your|example|changeme|redacted|placeholder)[A-Za-z0-9_-]*)"
+            r"[A-Za-z0-9_-]{16,}"
+        ),
+    ),
     ("private key in a URL", re.compile(r"://[^/\s:@]+:[^/\s:@]{6,}@")),
     (
         "credential assignment",

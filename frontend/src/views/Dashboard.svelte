@@ -15,11 +15,11 @@
     formatGpsFix,
     formatGpsSource,
     formatMode,
-    formatNamedEvent,
     formatRestartReason,
     formatTemperature,
     formatUnauthorizedCallToAction,
     formatUnauthorizedReason,
+    formatUnitTime,
     formatUptime,
     type ControlId,
   } from '../lib/format'
@@ -74,6 +74,24 @@
     id: string
     label: string
     value: string
+    empty: boolean
+  }
+
+  // SPEC 4.5.3 (issue #219): lastHandshake and lastPeer render a name next
+  // to a time the client itself formatted (formatUnitTime), not two halves
+  // of one remote string. Isolating the whole composed sentence in a single
+  // <bdi> would still let a bidi override inside the name reorder the "at
+  // <time>" that follows it, inside that same isolate -- the exact failure
+  // the issue names. So the name is carried on its own here and only it is
+  // wrapped, in the markup below, leaving the local "at" and the time
+  // outside the isolate.
+  interface NamedEventRow {
+    id: string
+    label: string
+    name: string | null
+    hasName: boolean
+    time: string
+    hasTime: boolean
     empty: boolean
   }
 
@@ -154,8 +172,9 @@
 
   // SPEC 4.5.1.1: named, not merely timed -- the ssid and the peer name are
   // the two hostile strings on this card (SPEC 4.5.3), next to face and
-  // status, and formatNamedEvent passes them through unchanged rather than
-  // dropping them in favour of a bare, safer-looking time of day.
+  // status. The name passes through unchanged rather than being dropped in
+  // favour of a bare, safer-looking time of day; formatUnitTime formats the
+  // time half, the one piece of this row the client itself produced.
   //
   // These two, like face, status and gpsSource below, decide emptiness
   // from the value behind them rather than from the formatted string
@@ -163,22 +182,22 @@
   // comparing text would let a remote party decide that a real reading
   // renders as unavailable. The row is empty when the whole object is
   // null, and also when the object carries neither half -- an empty name
-  // and no timestamp -- which is the second case formatNamedEvent itself
-  // answers DASH for and this predicate has to match without falling back
-  // to a string comparison.
-  const lastHandshakeValue = $derived(
-    s === null
-      ? DASH
-      : formatNamedEvent(s.lastHandshake?.ssid ?? null, s.lastHandshake?.mtime ?? null),
+  // and no timestamp.
+  const lastHandshakeName = $derived(s?.lastHandshake?.ssid ?? null)
+  const lastHandshakeHasName = $derived(
+    lastHandshakeName !== null && lastHandshakeName !== '',
   )
+  const lastHandshakeTimeText = $derived(formatUnitTime(s?.lastHandshake?.mtime ?? null))
+  const lastHandshakeHasTime = $derived(lastHandshakeTimeText !== DASH)
   const lastHandshakeEmpty = $derived(
     s === null ||
       s.lastHandshake === null ||
       (s.lastHandshake.ssid === '' && !Number.isFinite(s.lastHandshake.mtime)),
   )
-  const lastPeerValue = $derived(
-    s === null ? DASH : formatNamedEvent(s.lastPeer?.name ?? null, s.lastPeer?.lastSeen ?? null),
-  )
+  const lastPeerName = $derived(s?.lastPeer?.name ?? null)
+  const lastPeerHasName = $derived(lastPeerName !== null && lastPeerName !== '')
+  const lastPeerTimeText = $derived(formatUnitTime(s?.lastPeer?.lastSeen ?? null))
+  const lastPeerHasTime = $derived(lastPeerTimeText !== DASH)
   const lastPeerEmpty = $derived(
     s === null ||
       s.lastPeer === null ||
@@ -242,24 +261,48 @@
       },
       { id: 'handshakes', label: 'Handshakes', value: handshakesValue, empty: handshakesEmpty },
       { id: 'peers', label: 'Peers', value: peersValue, empty: peersEmpty },
+    ],
+  )
+
+  // SPEC 4.5.3 (issue #219): rendered by the namedEventField snippet below,
+  // not by field/counterFields, because only the name half of each is
+  // wrapped in <bdi>.
+  const namedEventFields = $derived.by(
+    (): NamedEventRow[] => [
       {
         id: 'lastHandshake',
         label: 'Last handshake',
-        value: lastHandshakeValue,
+        name: lastHandshakeName,
+        hasName: lastHandshakeHasName,
+        time: lastHandshakeTimeText,
+        hasTime: lastHandshakeHasTime,
         empty: lastHandshakeEmpty,
       },
-      { id: 'lastPeer', label: 'Last peer', value: lastPeerValue, empty: lastPeerEmpty },
+      {
+        id: 'lastPeer',
+        label: 'Last peer',
+        name: lastPeerName,
+        hasName: lastPeerHasName,
+        time: lastPeerTimeText,
+        hasTime: lastPeerHasTime,
+        empty: lastPeerEmpty,
+      },
     ],
   )
 
   // SPEC 4.5.1.1: gpsSource and gpsFix are two fields, not one -- which
   // provider resolved the position, and whether there is currently a
   // position at all.
+  //
+  // SPEC 4.5.3: gpsSource is rendered on its own with remoteField rather
+  // than folded into this array, because formatGpsSource's own docstring
+  // pins it as a remote value ("a compile-time claim about a remote
+  // payload, not a fact about one") -- the same reasoning face and status
+  // are rendered with remoteField for. gpsFix never echoes anything the
+  // unit sent; formatGpsFix returns one of its own literal strings, so it
+  // stays in this array and is rendered plain.
   const gpsFields = $derived.by(
-    (): FieldRow[] => [
-      { id: 'gpsSource', label: 'GPS source', value: gpsSourceValue, empty: gpsSourceEmpty },
-      { id: 'gpsFix', label: 'GPS fix', value: gpsFixValue, empty: gpsFixEmpty },
-    ],
+    (): FieldRow[] => [{ id: 'gpsFix', label: 'GPS fix', value: gpsFixValue, empty: gpsFixEmpty }],
   )
 
   // SPEC 4.5.1.1: the banner is one element that always exists and carries
@@ -317,6 +360,31 @@
     <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}>
       {row.value}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
+  </div>
+{/snippet}
+
+<!-- SPEC 4.5.3 (issue #219): the whole value is a remote string (face,
+     status), so the whole value is isolated -- unlike namedEventField
+     below, there is no local text sharing this element for an override to
+     reach. -->
+{#snippet remoteField(row: FieldRow)}
+  <div class="field">
+    <span class="field-label">{row.label}</span>
+    <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}
+      ><bdi>{row.value}</bdi>{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
+    >
+  </div>
+{/snippet}
+
+<!-- SPEC 4.5.3 (issue #219): only the name is remote; the "at" and the
+     time are this client's own text and stay outside the <bdi>, so a bidi
+     override carried in the name cannot reorder them. -->
+{#snippet namedEventField(row: NamedEventRow)}
+  <div class="field">
+    <span class="field-label">{row.label}</span>
+    <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}
+      >{#if row.hasName}<bdi>{row.name}</bdi>{#if row.hasTime} at {row.time}{/if}{:else}{row.time}{/if}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
+    >
   </div>
 {/snippet}
 
@@ -387,8 +455,13 @@
     </span>
 
     <div class="face-card">
-      {@render field({ id: 'face', label: 'Face', value: faceValue, empty: faceEmpty })}
-      {@render field({ id: 'status', label: 'Status', value: statusValue, empty: statusEmpty })}
+      {@render remoteField({ id: 'face', label: 'Face', value: faceValue, empty: faceEmpty })}
+      {@render remoteField({
+        id: 'status',
+        label: 'Status',
+        value: statusValue,
+        empty: statusEmpty,
+      })}
     </div>
   </div>
 
@@ -402,6 +475,9 @@
     {#each counterFields as row (row.id)}
       {@render field(row)}
     {/each}
+    {#each namedEventFields as row (row.id)}
+      {@render namedEventField(row)}
+    {/each}
     {#if showHandshakesOnUnit}
       {@render field({
         id: 'handshakesOnUnit',
@@ -413,6 +489,12 @@
   </div>
 
   <div class="fields">
+    {@render remoteField({
+      id: 'gpsSource',
+      label: 'GPS source',
+      value: gpsSourceValue,
+      empty: gpsSourceEmpty,
+    })}
     {#each gpsFields as row (row.id)}
       {@render field(row)}
     {/each}

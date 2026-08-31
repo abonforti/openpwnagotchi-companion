@@ -654,6 +654,14 @@ describe('the caption tells a null total (no directory) apart from a real zero (
     await settle()
     const nullCaption = root().textContent
 
+    // The second mount needs the first session released, not just its markup
+    // removed: startSession refuses a second active session, and clearing the
+    // body leaves the first one running. The afterEach hook cannot help here,
+    // because both mounts happen inside one test.
+    if (stopSession) {
+      stopSession()
+      stopSession = null
+    }
     document.body.innerHTML = ''
     const { client: zeroClient } = await mountMap('connected')
     zeroClient.settle('get_handshakes', handshakesListEnvelope([], false, 0))

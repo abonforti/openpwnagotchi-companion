@@ -54,6 +54,7 @@ as the reason (SPEC 2.15.1, issue #144).
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import sys
@@ -132,10 +133,57 @@ def check_file(path: Path) -> int | None:
     # A missing or unreadable file is a failure, not a clean result: this step
     # runs after the build, so its absence means the build did not produce
     # what CI thinks it did, not that there is nothing to check (SPEC 13).
+    #
+    # A read that fails on a file is the one ambiguous case this gate has: the
+    # call really was made on `path`, so `path`'s own mode is a candidate, but
+    # so is its parent's - a directory made unreadable makes every open()
+    # beneath it fail the same way, and naming only the file points the
+    # reader at the wrong inode to fix (issue #160). Both are named, but only
+    # where a parent's mode can actually have caused the failure, which is
+    # EACCES and nothing else: path-resolution denial is EACCES, while EPERM
+    # from open() is about a property of the file itself - an immutable or
+    # append-only attribute, O_NOATIME without ownership, sealing - and never
+    # about a parent directory's mode, so appending the clause there points
+    # the reader at an inode that cannot be implicated (issue #160, inverted).
+    #
+    # ENOTDIR is excluded for a different reason than mode: it is reachable
+    # here only by a race after os.walk already listed the parent as a
+    # directory - a parent path component replaced by a non-directory between
+    # the listing and this open(). The inode to fix there is the replaced
+    # component itself, which the reader already has from `rel`, not the
+    # parent's mode.
+    #
+    # The reachable errno set for this call is small: ENOENT from a dangling
+    # symlink, ELOOP from a symlink loop (html.parser sees it as a file and
+    # gets no clause, correctly), ENOTDIR as above, and EACCES, the one
+    # genuinely ambiguous case. EISDIR is not merely hard to fixture here: it
+    # is essentially unreachable, because os.walk puts a real directory in
+    # dirnames rather than filenames, and a symlinked one is caught and
+    # removed by find_html_files() before check_file() ever sees it - the
+    # only route left is the DT_UNKNOWN/failed-classification hole this file
+    # already names as open, above.
     try:
         html = path.read_text(encoding="utf-8")
     except OSError as exc:
-        print(f"::error file={rel}::could not read {rel}: {exc.strerror or exc.errno}")
+        parent_rel = _rel_or_raw(path.parent)
+        reason = f"could not read {rel}: {exc.strerror or exc.errno}"
+        if exc.errno == errno.EACCES:
+            reason += f". {parent_rel} may be the directory whose mode is actually the cause."
+        print(f"::error file={rel}::{reason}")
+        return None
+    except UnicodeDecodeError as exc:
+        # A page that opened but is not valid UTF-8 is a different failure
+        # from one that would not open at all: this one wants a wrong or
+        # corrupt build artifact investigated, not a permission or mode
+        # (issue #159). Handled here, separately from OSError, because
+        # UnicodeDecodeError is a ValueError and would otherwise escape this
+        # function entirely and end the run in a traceback with no
+        # `::error file=` annotation for the reader.
+        print(
+            f"::error file={rel}::{rel} could not be decoded as UTF-8: {exc.reason} at byte "
+            f"offset {exc.start}. This is a wrong or corrupt build artifact, not a permission "
+            "problem - the file opened, its bytes just are not valid UTF-8."
+        )
         return None
 
     parser = ScriptTagFinder()

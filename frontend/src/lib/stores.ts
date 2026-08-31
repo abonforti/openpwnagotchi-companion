@@ -5,7 +5,13 @@
 
 import { derived, type Readable, writable } from 'svelte/store'
 
-import { RemoteError, type ConnectionState, type UnauthorizedReason, type WsClient } from './ws'
+import {
+  RemoteError,
+  type ConnectionState,
+  type LastError,
+  type UnauthorizedReason,
+  type WsClient,
+} from './ws'
 import type {
   AccessPoint,
   Capabilities,
@@ -18,10 +24,17 @@ import type {
   Stats,
 } from './protocol'
 
-/** SPEC 4.3.1 owns the state machine; this is a mirror of it, not a second opinion. */
+/**
+ * SPEC 4.3.1 owns the state machine; this is a mirror of it, not a second
+ * opinion. `lastError` and `latencyMs` are SPEC 4.3.10's diagnostics pair,
+ * mirrored the same way: written from `client.diagnostics()`, never
+ * computed here.
+ */
 export interface ConnectionView {
   state: ConnectionState
   unauthorizedReason: UnauthorizedReason | null
+  lastError: LastError | null
+  latencyMs: number | null
 }
 
 /**
@@ -37,7 +50,12 @@ const EMPTY_HANDSHAKES: HandshakesList = { entries: [], truncated: false, total:
 /** SPEC 4.4.1's `screen` row: the `screen_image` reply's `data`, `png` and `mtime` both. */
 export type ScreenFrame = OutgoingScreenImage['data']
 
-const connectionWritable = writable<ConnectionView>({ state: 'offline', unauthorizedReason: null })
+const connectionWritable = writable<ConnectionView>({
+  state: 'offline',
+  unauthorizedReason: null,
+  lastError: null,
+  latencyMs: null,
+})
 const statsWritable = writable<Stats | null>(null)
 const accessPointsWritable = writable<AccessPoint[]>([])
 const handshakesWritable = writable<HandshakesList>(EMPTY_HANDSHAKES)
@@ -405,7 +423,7 @@ let attachedClient: WsClient | null = null
  * Throws if a client is already attached: switching hosts, or anything
  * else that wants a second client, is teardown (call the returned
  * function), then resetStores(), then attach again (SPEC 4.4.2). The
- * returned teardown unsubscribes both listeners it registered and sets
+ * returned teardown unsubscribes every listener it registered and sets
  * `connection` to `offline`, since a mirror with no client behind it shows
  * nothing connected (SPEC 4.4.1). It registers no duplicate handler on the
  * underlying client, which lives for the whole session and outlives any
@@ -435,8 +453,16 @@ export function connectStores(client: WsClient): () => void {
 
   // Seed from whatever the client already knows, in case connect() ran
   // before this adapter subscribed (a remount, or a view mounted after
-  // startup already established a connection).
-  connectionWritable.set({ state: client.state(), unauthorizedReason: client.unauthorizedReason() })
+  // startup already established a connection). SPEC 4.3.10: diagnostics()
+  // seeded the same way, beside the state and unauthorized reason it
+  // already was.
+  const seededDiagnostics = client.diagnostics()
+  connectionWritable.set({
+    state: client.state(),
+    unauthorizedReason: client.unauthorizedReason(),
+    lastError: seededDiagnostics.lastError,
+    latencyMs: seededDiagnostics.latencyMs,
+  })
   const seededStats = client.lastStats()
   if (seededStats !== null) {
     statsWritable.set(seededStats)
@@ -445,7 +471,14 @@ export function connectStores(client: WsClient): () => void {
   }
 
   const unsubscribeState = client.onState((state) => {
-    connectionWritable.set({ state, unauthorizedReason: client.unauthorizedReason() })
+    // SPEC 4.3.10: read through client.diagnostics() rather than carried
+    // from the previous store value, the same reason unauthorizedReason is
+    // read through the client here rather than assumed unchanged --
+    // lib/ws.ts may have cleared lastError as part of this very state
+    // change (entering 'connected'/'degraded'), and by the time this
+    // handler runs that clearing has already happened.
+    const { lastError, latencyMs } = client.diagnostics()
+    connectionWritable.set({ state, unauthorizedReason: client.unauthorizedReason(), lastError, latencyMs })
     if (state === 'unauthorized') {
       // SPEC 4.4.2: the data belongs to a session the unit refused; leaving
       // it on screen behind a token prompt would show it to whoever is
@@ -454,6 +487,11 @@ export function connectStores(client: WsClient): () => void {
     }
   })
   const unsubscribeMessage = client.onMessage((message) => handleMessage(message, client))
+  // SPEC 4.3.10: a second callback, not folded into onState -- latency
+  // changes without the state changing, once per ping interval.
+  const unsubscribeDiagnostics = client.onDiagnostics(({ lastError, latencyMs }) => {
+    connectionWritable.update((current) => ({ ...current, lastError, latencyMs }))
+  })
 
   let torndown = false
   return () => {
@@ -461,6 +499,7 @@ export function connectStores(client: WsClient): () => void {
     torndown = true
     unsubscribeState()
     unsubscribeMessage()
+    unsubscribeDiagnostics()
     if (attachedClient === client) {
       attachedClient = null
     }
@@ -474,6 +513,6 @@ export function connectStores(client: WsClient): () => void {
     // detach, not only that failure path -- an explicit stop (SPEC 4.4.2)
     // leaves `connection` honest the same way it leaves the data stores
     // empty.
-    connectionWritable.set({ state: 'offline', unauthorizedReason: null })
+    connectionWritable.set({ state: 'offline', unauthorizedReason: null, lastError: null, latencyMs: null })
   }
 }

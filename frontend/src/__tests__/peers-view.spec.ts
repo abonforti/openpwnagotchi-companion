@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import getPeersSchema from '../../../docs/schemas/incoming/get_peers.json'
 
 import type { OutgoingMessage, OutgoingPeersList, Peer } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 // DASH and EMPTY_LABEL are the pre-existing SPEC 4.5.1.1 surface. formatUnitTime
 // is also pre-existing (named, with its return shape, in 4.5.1.1's own function
 // table) and is reused here only to pin the wiring of the lastSeen field, the
@@ -150,6 +150,12 @@ class FakeWsClient {
     return Promise.reject(new Error('the peers view must never send a command, only a read'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

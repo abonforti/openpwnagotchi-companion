@@ -20,7 +20,7 @@ import type {
 // body comes from the same dynamic `lib/ws` graph as everything else that
 // test mounts against -- see the comment on mountDashboard()'s WsModule.
 import { canSendCommand } from '../lib/ws'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.2 ("Controls: confirm, pending and where a
 // refusal appears", issue #184), plus 4.3.3 (queue vs. command, canSendCommand),
@@ -218,6 +218,12 @@ class FakeWsClient {
     })
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

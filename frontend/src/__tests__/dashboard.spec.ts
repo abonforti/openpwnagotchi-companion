@@ -17,7 +17,7 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient } from '../lib/ws'
 import {
   DASH,
   EMPTY_LABEL,
@@ -185,6 +185,12 @@ class FakeWsClient {
     return Promise.reject(new Error('Dashboard read-only tests never issue a command'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

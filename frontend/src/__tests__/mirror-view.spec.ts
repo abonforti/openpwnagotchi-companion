@@ -5,7 +5,7 @@ import screenImageSchema from '../../../docs/schemas/outgoing/screen_image.json'
 
 import { DASH, EMPTY_LABEL, formatUnitTime } from '../lib/format'
 import type { OutgoingMessage, OutgoingScreenImage } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.6 ("The Mirror, the second timer, and a string
 // that becomes a URL", issue #196), which explicitly adopts 4.5.2.5's
@@ -175,6 +175,12 @@ class FakeWsClient {
     return Promise.reject(new Error('the mirror view must never send a command, only a read'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

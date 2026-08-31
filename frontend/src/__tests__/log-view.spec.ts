@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import getLogSchema from '../../../docs/schemas/incoming/get_log.json'
 
 import type { OutgoingLogLines, OutgoingMessage } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.5 ("The Log, and the one timer this client is
 // allowed", issue #193), which now explicitly adopts 4.5.2.3's refresh
@@ -161,6 +161,12 @@ class FakeWsClient {
     return Promise.reject(new Error('the log view must never send a command, only a read'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

@@ -10,7 +10,7 @@ import type {
   OutgoingHandshakesList,
   OutgoingMessage,
 } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC 4.5.2.7 ("The Map, the one external origin, and a
 // viewport that has to survive", issue #198), plus 4.5.2.3/4.5.2.4 (the
@@ -205,6 +205,12 @@ class FakeWsClient {
     return Promise.reject(new Error('the map view must never send a command, only a read'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

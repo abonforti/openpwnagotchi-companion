@@ -4346,6 +4346,219 @@ them: a hostile-name fixture asserted to render as text, with an SSID containing
 that is nothing but quotes, a peer name carrying markup, and a log line carrying an SSID that
 does.
 
+#### 4.5.2.7 The Map, the one external origin, and a viewport that has to survive (issue #198)
+
+§4.5.2 asks for Leaflet plotting handshake sidecar positions plus the current location marker.
+Nothing new goes on the wire for it: `handshakes_list` entries already carry
+`gps: HandshakeGps | null`, and §4.4.1's `gps` store already holds the unit's position. This is a
+presentation section, and if building it turns out to need a protocol change, that is a finding
+worth its own issue rather than a quiet schema edit.
+
+##### The refresh rule is claimed a third time, and claimed rather than restated
+
+§4.5.2.3 settled when a list is asked for and §4.5.2.4 settled that the rule is shared rather
+than copied. The Map wants the same three occasions and the same coalescing owner: it is the
+**second caller of `refreshHandshakes`**, the one the Wi-Fi view already uses, and it reaches it
+through `watchViewRefresh` like every other view whose data nothing pushes. Nothing here is new,
+which is the point of writing it down: a third screen deriving the rule again is the failure
+§4.5.2.4 was written to stop, and the reasoning lives in §4.5.2.3 for anyone who wants it.
+
+##### An empty map and a map nobody has asked for are different screens
+
+`hasListDataArrived` already tells the two apart from the connection state, and the Map uses it
+rather than a "have we ever received one" flag of its own -- §4.5.2.3 argued that out and accepted
+the one-frame window where it is wrong. There are **three** states here rather than the lists'
+two, because a unit can have captures and none of them located: no reply yet, a reply with no
+captures at all, and a reply whose captures all carry `gps: null`. The third is the interesting
+one, since it is the ordinary state of a unit whose GPS has never had a fix, and a screen that
+renders it identically to "nothing captured" would say the wrong thing about a night's work.
+
+##### What may be plotted, and what a number from the wire is worth
+
+A capture is plotted when its `gps` is not null **and** both coordinates are finite numbers.
+The schema says they are numbers, and `lib/stores.ts` writes the wire payload with no runtime
+validation (issue #109), which is the same reasoning `compareKnownFirst` and `formatPeerNumber`
+are already built on. A `NaN` reaching Leaflet is not a rejected marker, it is a marker at an
+unspecified place or a thrown error inside a library's own render, and neither is a thing this
+view can report. A reading that is not finite is treated as a reading that is not there.
+
+`accuracy` is carried on the wire and is **not** drawn as a circle in this change. That is a
+scope decision rather than an oversight: the radius would be the first thing on this screen
+whose size claims a precision nobody has checked against a real sidecar.
+
+##### The current location marker is the unit's location, not the phone's
+
+Worth stating because §4.6 makes the distinction easy to lose: `lib/geo.ts` acquires the
+**browser's** position, and it does so in order to push it to the unit as the lowest-priority
+source. What comes back in the `gps` store is the unit's position whatever produced it, and that
+is what the marker shows. A second marker for the phone is not in this change; if it is ever
+wanted it is a different fact about the world and needs its own argument.
+
+##### The map is created once, and told its size when it becomes visible
+
+§4.5 keeps views mounted so the Map keeps its viewport and zoom across navigation, and this view
+is the reason that sentence is in §4.5. It follows that the Leaflet instance is created once and
+never torn down on navigation. It also follows that the map is sized while its view is hidden,
+where a hidden element measures zero, so **becoming current has to tell Leaflet to measure again**
+or the map renders into a box of no size and stays there. This is the one piece of Leaflet
+lifecycle this specification names, because it is the one that fails silently and only after a
+navigation rather than on first load.
+
+##### The hooks and the copy, so a test pins a sentence rather than a paraphrase
+
+The root carries `data-view="map"`, like every other view. The map's own element carries
+`data-map-surface`, which is what the geometry assertion measures and what tells a test the map
+was built at all without reaching into Leaflet's class names -- those are a library's private
+vocabulary and a test written against them breaks on a Leaflet upgrade that changed nothing this
+app cares about.
+
+The three states of the paragraph above get three sentences, and two of them already exist:
+
+| State | Sentence |
+| --- | --- |
+| No reply yet | `Not connected, so this list has not been read.` |
+| A reply with no captures | `The unit has no captures.` |
+| A reply whose captures carry no position | `None of the unit's captures has a position.` |
+
+The first two are `lib/format.ts`'s existing strings, taken unchanged. The first is the shared
+one §4.5.2.4 already refused to duplicate, and it says nothing about which list it is under
+because the reason it appears has nothing to do with the list. The second is the Captured
+segment's, and it is the same fact about the same list, so a second wording would be a second
+answer to one question. Only the third is new, and it is new because no other view has ever had
+to say it. All three appear in a `[data-empty-message]` element, as they do elsewhere.
+
+**A caption says how many captures have a position**, in the form `12 captures, 3 with a
+position.` It is there because state three is a spectrum rather than a switch: a unit with
+twelve captures and one located reads as a working map, and the thing the owner wants to know is
+that eleven are missing. It also makes the finite-coordinate rule observable without a test
+having to count Leaflet markers, which is the same argument as `data-map-surface` above.
+
+##### Geometry, and where the assertion lives
+
+§4.5.1's rule applies here and this is the view it was written for: the map is narrower **and**
+shorter than the views area, in both orientations, and the leftover strip is where a drag that
+means "scroll the page" can begin. It is asserted as geometry in
+`frontend/tests/e2e/geometry.spec.ts`
+across all four projects, the same way the rule is asserted for every other view, rather than as
+pixels (§10.5).
+
+##### The tile origin is the only external thing on screen
+
+§2.15.1 admits `https://*.tile.openstreetmap.org` in `img-src` and says plainly that this is a
+real weakening of the policy rather than a formality: it is the only external origin in it. What
+follows for this view is narrow and absolute in the way §4.5.3 is: **a tile URL is built from the
+template and integers, and nothing that arrived on the wire is interpolated into it.** No SSID,
+no filename, no `source`, no subdomain chosen from a payload. The coordinates decide which tiles
+are fetched, which is unavoidable and is why they are checked for finiteness above, but they
+reach the URL as numbers Leaflet computed and not as strings this app pasted.
+
+##### The inline-style gate moves to the built page, and that is not a weakening
+
+§2.15.1 forbids an inline `style` attribute because `style-src 'self'` refuses one, and the Mirror
+shipped with a test asserting no element in its mounted tree carries one. **That assertion cannot
+be kept for this view, and copying it would be worse than not having it.** Leaflet positions its
+own layers by writing `element.style.*` through the CSSOM, CSP does not intercept that, and the
+reflection into a `style` attribute is not something this repository authored. A mounted-tree
+assertion would therefore fail on a correct build, and the way it would be made to pass is by
+being narrowed until it stops asking anything -- this session's own vacuity rule (§11.3) arriving
+in a test.
+
+So the gate is on the **built page**, where every attribute present was authored here, and it is
+the inline-script scan's neighbour rather than a per-view test. It is tracked on issue #91, whose
+subject is the `style-src` twin of the hole #144 closed for `script-src`.
+
+##### A pin's popup is a string from the air, and Leaflet will treat it as markup
+
+`bindPopup` given a string parses it as HTML. `HandshakeEntry.ssid` is chosen by whoever named
+the access point, which makes the naive `bindPopup(entry.ssid)` the one place in this view where
+a remote string becomes DOM -- §4.5.3's subject exactly, and the reason that section exists.
+**The popup content is built as an element with its text assigned, never as a string handed to
+Leaflet.** Every other screen in this app renders a hostile string through Svelte's own escaping;
+this is the same rule reaching the one place Svelte is not in the path, because Leaflet builds
+that node itself.
+
+##### The marker images are bundled, and this is where a CDN would sneak back in
+
+Leaflet resolves its default marker icons by guessing a path from the URL its own script was
+loaded from, and that guess is wrong under a bundler: the icons 404. The failure is cosmetic and
+therefore dangerous, because the obvious repair -- pointing the icon path at unpkg -- puts an
+external origin back into a policy that admits exactly one, and §2.15.1 spent an argument on
+admitting that one. The three default images are imported from the package and the default icon
+is pointed at them, so the paths the bundler emits are this origin's.
+
+##### Where the map starts, and the one time it moves on its own
+
+Not a rule so much as a decision that had to be made and is better written down than rediscovered.
+The map opens on a world view. It centres itself **once**, on the unit's position if there is one
+and otherwise on the first located capture, and never again on its own -- a map that re-centres
+whenever a position arrives fights the reader who panned away from it, and this view keeps its
+viewport across navigation precisely so that panning means something.
+
+**The caption** renders only once `hasListDataArrived` is true. A caption reading
+`0 captures, 0 with a position.` while disconnected is a claim about data that never arrived,
+which is §4.3.1's rule and not a new one. The empty sentence is the opposite case and the table
+above already covers it: the not-connected state has a sentence precisely because that is the
+state worth naming.
+
+**An empty sentence never appears over a map that is still showing pins.** Losing the connection
+does not erase what was already plotted, and a screen that plots twelve captures while saying the
+list has not been read is telling the reader two things that cannot both be true. The sentence
+appears when there is nothing on the map; the caption disappearing is what marks the readings as
+no longer current. `views/WiFi.svelte` already behaves this way for the same reason -- a
+disconnect leaves its rows visible and adds no contradicting sentence.
+
+**The caption counts what the unit has, not what arrived.** `handshakes_list` carries `total` and
+`truncated`, and a truncated reply that made the caption read `50 captures` when the unit holds
+four hundred would understate the thing the caption exists to report. It counts `total`, and a
+truncated reply carries the same notice the Captured segment already shows.
+
+**Which source centres the map is decided by what is available, not by which arrived first.** The
+unit's position wins when there is one; the first located capture is the fallback. An
+implementation where two effects race and whichever ran with data first wins would centre on a
+capture whenever `handshakes_list` beat the first `stats`, and then lock the unit's own position
+out for good.
+
+##### The attribution keeps the credit and loses the decoration
+
+Leaflet's attribution control ships a default prefix containing a small flag drawn as SVG, and it
+fails this project's contrast floor: measured on the built page, `rgb(255, 213, 0)` on
+`rgb(248, 248, 248)` is **1.34:1 against a floor of 3:1** for a non-text indicator, and a second
+path in the same mark measures 1.74:1. Two of three hundred and thirty pairs, in both palettes.
+
+It is removed rather than waived. §4.5.1 rejects a level that gets waived case by case until it
+means nothing, and the first waiver being for a decoration is how that starts. **What is kept is
+the credit**: OpenStreetMap's tile policy requires attribution to its contributors, that string is
+this repository's own, and it stays. Leaflet's own credit stays too. Only the decorative mark
+goes, through the attribution control's documented `prefix` option, which is a supported setting
+and not a patch of the library.
+
+Worth saying because it is the shape of the next argument: a contrast gate that scans everything
+on the page will find things a dependency drew, and the answer is to configure the dependency or
+to drop it, never to narrow the gate until the dependency passes.
+
+##### Leaflet is a dependency, and D2 naming it does not pre-approve it
+
+D2 locked the choice years ago. It did not approve a version, a bundle size, or a transitive tree,
+and `CONTRIBUTING.md` names a new dependency as one of the three things read closely. §4.1's
+position stands -- Leaflet is bundled locally and only the tiles come from the internet -- so
+nothing here loads a script from a CDN, which `script-src 'self'` would refuse anyway.
+
+What was checked, on 2026-08-30 and stated as an observation of that day rather than as a
+standing claim: **`leaflet@1.9.4`, BSD-2-Clause, with no runtime dependencies at all.** `1.9.4`
+is the `latest` tag; `2.0.0` exists only as an alpha and is not a candidate. The types come from
+`@types/leaflet`, which pulls `@types/geojson` and is a development dependency, so neither
+reaches the bundle. A transitive tree of zero is the reason this dependency is cheap to accept,
+and it is the fact most likely to stop being true at the next major, which is why the version it
+was true of is written next to it.
+
+**`leaflet` is pinned exactly and `@types/leaflet` is not**, which is a deliberate asymmetry and
+not an oversight. The first reaches the bundle the owner installs on a unit, so an unreviewed
+version arriving on a fresh install is a change to what ships. The second is types only: it
+affects what the type-checker believes and never what runs, a wrong version fails `tsc` rather
+than reaching a device, and it carries the same caret as the eleven other development
+dependencies in that file. One line pinned differently from its neighbours is an anomaly somebody
+eventually tidies away without knowing what it was for, so the reason is here instead.
+
 ### 4.6 Geolocation (`lib/geo.ts`)
 
 When `stats.gps.piFix` is false, request browser Geolocation (with permission) and push

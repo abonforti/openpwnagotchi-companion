@@ -187,11 +187,17 @@ function createCoalescedRefresh(
   }
 }
 
-// SPEC 4.4.1: not fatal here: the reply, when it does arrive, still writes
-// the list through the handshakes_list case below like any other. A failed
-// or timed-out attempt just means this particular capture is not reflected
-// until the next push or a manual reload of the view asks again.
-const refreshHandshakes = createCoalescedRefresh((client) => client.request('get_handshakes'))
+// SPEC 4.4.1/4.5.2.7: not fatal here: the reply, when it does arrive, still
+// writes the list through the handshakes_list case below like any other. A
+// failed or timed-out attempt just means this particular capture is not
+// reflected until the next push or a manual reload of the view asks again.
+// Exported: the Map view's own refresh (SPEC 4.5.2.7) is this same function
+// through lib/viewRefresh.ts's watchViewRefresh, its second caller alongside
+// refreshWifiLists below, rather than a second coalesced read wrapping the
+// same request.
+export const refreshHandshakes = createCoalescedRefresh((client) =>
+  client.request('get_handshakes'),
+)
 
 // SPEC 4.5.2.3: not fatal here either: access_points is also pushed on
 // wifi_update and once at the start of every session (initial_burst), so a

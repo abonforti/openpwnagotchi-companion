@@ -195,11 +195,127 @@ export function startSession(deps?: Partial<SessionDeps>): () => void {
 
     loadSettings()
 
+    // SPEC 4.8 (issue #120): the pair below needs the active host outside
+    // the subscriber, to rebuild against on `pageshow` -- a transition that
+    // does not change which host is active, so the subscriber's own
+    // identity comparison would otherwise never fire for it.
+    let latestHost: Host | null = null
+
     const unsubscribe = activeHost.subscribe((host) => {
+      latestHost = host
       const nextIdentity = host === null ? null : identityOf(host)
       if (sameIdentity(identity, nextIdentity)) return
       rebuild(host)
     })
+
+    // SPEC 4.8: "a release entered while a release is in progress returns
+    // immediately." Tearing a session down closes its socket, and a close
+    // handler and a page-lifecycle event can land in the same tick, so a
+    // `pagehide` can arrive while `release()` is already on the stack and
+    // call it again -- unbounded recursion without a guard, which is what
+    // an overlap test actually produced (`RangeError: Maximum call stack
+    // size exceeded`, thrown inside an event listener rather than failing
+    // an assertion). The same path is shared by `resume()`: rebuilding
+    // tears the previous session down first, so a re-entrant call arriving
+    // through either function is refused by the one flag below. Set and
+    // cleared with try/finally so a throw from `teardown()`, `resetStores()`
+    // or `rebuild()` cannot leave the flag latched -- that would turn this
+    // recursion guard into a session nothing can ever release again, which
+    // is worse than the bug it fixes.
+    let releasing = false
+
+    /**
+     * SPEC 4.8 (issue #120): `pagehide` releases the session. Idempotent
+     * through `teardown()`'s own guards, which is what keeps this a no-op
+     * rather than a throw when the socket is already gone -- iOS suspends
+     * the process, the connection dies with it or shortly after, and
+     * `pagehide` may fire after the fact. Followed by `resetStores()` for
+     * the same reason the module's own `stop` above is: this is the
+     * caller of an explicit close, and SPEC 4.4.2 makes clearing the data
+     * that caller's job.
+     *
+     * A call arriving while a release is already in progress returns
+     * immediately (SPEC 4.8) rather than joining the one already on the
+     * stack: the outer call still runs `teardown()` and `resetStores()` to
+     * completion once the nested call returns, so the session it owns ends
+     * up fully torn down either way -- the re-entrant call leaves nothing
+     * behind because there is nothing left for it to do.
+     */
+    function release(): void {
+      if (releasing) return
+      releasing = true
+      try {
+        teardown()
+        resetStores()
+      } finally {
+        releasing = false
+      }
+    }
+
+    /**
+     * SPEC 4.8 (issue #120): rebuilds against `latestHost` rather than
+     * waiting on the `activeHost` subscription -- the host has not changed,
+     * only whether it is connected, so nothing else would call `rebuild()`
+     * here. Guarded on `client === null`: `pageshow` is not only a bfcache
+     * restore, it also fires on ordinary initial navigation, after `load`,
+     * which is after the shell has already called `startSession` and built
+     * a client. The guard is stated as a condition on the session -- is a
+     * client live -- rather than as a test of the event's `persisted` flag,
+     * because that is what actually distinguishes a resume from a start,
+     * and a rule written against the app's own state survives the browser
+     * changing which events it fires. Without it, every cold start would
+     * connect, tear down and reconnect: the exact TLS handshake and auth
+     * round trip over Bluetooth §4.8 refuses to spend on a mere
+     * `visibilitychange`. Also guarded on `latestHost !== null`: with no
+     * active host there is nothing to rebuild, and calling `rebuild(null)`
+     * anyway would still run `teardown()` and `resetStores()` against
+     * nothing on every such resume -- a schedule driven by the app
+     * switcher rather than by anything that changed.
+     *
+     * Guarded by the same `releasing` flag as `release()` (SPEC 4.8):
+     * `rebuild()` tears the previous session down before it builds, so it
+     * shares the path that can re-enter, and a call arriving here while a
+     * release or another resume is already in progress returns immediately
+     * instead of racing it.
+     */
+    function resume(): void {
+      if (releasing) return
+      if (client !== null || latestHost === null) return
+      releasing = true
+      try {
+        rebuild(latestHost)
+      } finally {
+        releasing = false
+      }
+    }
+
+    function onPageHide(): void {
+      release()
+    }
+
+    function onPageShow(): void {
+      resume()
+    }
+
+    /**
+     * SPEC 4.8 (issue #120): hiding alone does not release the session --
+     * the notification shade, the app switcher, a phone call and a glance
+     * at a message all hide the document for a few seconds, and tearing the
+     * socket down for each of those would cost a TLS handshake and an auth
+     * round trip to save an idle socket nothing. Only becoming visible
+     * again acts, and only when nothing is running: the cheap half of the
+     * pair, catching the case where the release happened by a path
+     * `pagehide`/`pageshow` did not predict.
+     */
+    function onVisibilityChange(): void {
+      if (document.visibilityState === 'visible' && client === null) {
+        resume()
+      }
+    }
+
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('pageshow', onPageShow)
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     // Local to this call, not `sessionActive` itself: a second startSession()
     // is only reachable once this stop has already cleared the module flag,
@@ -218,6 +334,9 @@ export function startSession(deps?: Partial<SessionDeps>): () => void {
       // all, since the stop that could have retried is the very one that
       // just threw.
       sessionActive = false
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       unsubscribe()
       teardown()
       // SPEC 4.4.2: the caller resets the stores after an explicit close,

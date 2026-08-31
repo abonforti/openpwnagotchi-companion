@@ -241,10 +241,21 @@ function parseSettings(raw: string): Settings | null {
   if (!isRecord(parsed) || !Array.isArray(parsed.hosts)) {
     return null
   }
+  // SPEC 4.7 (issue #116): a duplicate id is dropped here, keeping the
+  // first, so every later reader that finds the id owns the record it
+  // writes to. This is the one door the blob comes through, which is why
+  // the invariant belongs here rather than in each writer: `updateHost`'s
+  // `map` and every `.find` elsewhere in this module trust the list has no
+  // two entries answering to the same id, and a caller-supplied id can
+  // never manufacture one (`addHost` mints its own with `crypto.randomUUID`),
+  // so the only way two can collide is a blob nothing here wrote by hand.
   const hosts: Host[] = []
+  const seenIds = new Set<string>()
   for (const entry of parsed.hosts) {
     const host = parseHost(entry)
-    if (host !== null) hosts.push(host)
+    if (host === null || seenIds.has(host.id)) continue
+    seenIds.add(host.id)
+    hosts.push(host)
   }
   // SPEC 4.7: an empty list is a state, not a corruption -- deleting the
   // last host is reachable from the Settings screen, so a stored `hosts`

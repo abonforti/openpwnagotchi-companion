@@ -63,12 +63,14 @@ export interface WsClientOptions {
 // of its own.
 export type UnauthorizedReason = 'rejected' | 'required'
 
-// SPEC 4.3.10: the only two codes recordLocalError() ever writes. `LastError`
+// SPEC 4.3.10: the only three codes recordLocalError() ever writes. `LastError`
 // carries this type, not `string`, for `source: 'local'`, so
 // formatLastErrorCode's `source === 'local'` switch is checked total by the
 // compiler instead of carrying a default arm no runtime value could ever
-// reach.
-export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+// reach. `socket_failed` (issue #122) is the third: `createSocket` throwing
+// from inside the reconnect chain's bare `setTimeout` callback, where a
+// `new WebSocket` that fails to open has nothing above it to catch it.
+export type LocalErrorCode = 'pong_timeout' | 'connect_timeout' | 'socket_failed'
 
 /**
  * SPEC 4.3.10: what the client keeps of the last thing that went wrong,
@@ -80,9 +82,9 @@ export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
  * frame's `code` is remote-chosen and never trusted (SPEC 4.3.10), so it
  * stays `string`; a close's `code` is the browser's close code rendered in
  * digits, also `string`; `'local'` names the detection this client made
- * itself (`pong_timeout`, `connect_timeout`) rather than a number, so it is
- * typed to `LocalErrorCode`, and its `message` is always empty, there being
- * no remote to have said anything.
+ * itself (`pong_timeout`, `connect_timeout`, `socket_failed`) rather than a
+ * number, so it is typed to `LocalErrorCode`, and its `message` is always
+ * empty, there being no remote to have said anything.
  *
  * `at` is a local timestamp (SPEC 4.3.10's clock, `WsDeps.now`), so a view
  * can say when this happened rather than leaving the reader to assume it
@@ -102,6 +104,20 @@ export type LastError =
 export interface Diagnostics {
   lastError: LastError | null
   latencyMs: number | null
+}
+
+/**
+ * SPEC 4.3.10: what `lastStats()` hands over -- the payload beside the
+ * envelope's own `timestamp`, not the payload alone. `Stats` carries no
+ * timestamp of its own; it lives on `OutgoingStats`, and a store adapter
+ * seeding a channel from this at mount (§4.4.2) needs that stamp for the
+ * same ordering rule §4.4.1 already applies to a live `stats`/`channel_hop`
+ * push, or the seeded channel is written unguarded and the rule only starts
+ * working from the next thing that arrives.
+ */
+export interface StatsSnapshot {
+  stats: Stats
+  timestamp: number
 }
 
 /**
@@ -166,7 +182,10 @@ export interface WsClient {
   close(): void
   state(): ConnectionState
   unauthorizedReason(): UnauthorizedReason | null
-  lastStats(): Stats | null
+  // SPEC 4.4.1 (issue #131): null in every state but `restarting`, the same
+  // rule unauthorizedReason above already follows for `unauthorized`.
+  restartReason(): RestartReason | null
+  lastStats(): StatsSnapshot | null
   diagnostics(): Diagnostics
   onState(handler: (state: ConnectionState) => void): () => void
   onMessage(handler: (message: OutgoingMessage) => void): () => void
@@ -362,9 +381,13 @@ export function createWsClient(options: WsClientOptions): WsClient {
   // counter that outlives what it counts.
   let closesBeforeAnyStats = 0
 
-  let restartReason: RestartReason | null = null
+  let restartReasonValue: RestartReason | null = null
   let unauthorizedReasonValue: UnauthorizedReason | null = null
+  // SPEC 4.3.10: the payload and the envelope stamp it arrived under, kept
+  // side by side so lastStats() can hand both to a store adapter seeding a
+  // channel at mount (§4.4.2) -- `Stats` alone has nowhere to carry it.
   let lastStatsValue: Stats | null = null
+  let lastStatsTimestampValue: number | null = null
   let lastErrorValue: LastError | null = null
   let latencyMsValue: number | null = null
   // SPEC 4.3.10: the local send stamp for the outstanding ping, cleared the
@@ -546,7 +569,21 @@ export function createWsClient(options: WsClientOptions): WsClient {
     requeueUnresolvedReads()
     connectionReady = false
     currentSocket = null
-    beginConnect(true)
+    try {
+      beginConnect(true)
+    } catch {
+      // SPEC 4.3.10 (issue #122): the same `new WebSocket` throw guarded in
+      // scheduleReconnectAttempt's callback, reached here too -- this timer
+      // calls beginConnect directly, immediately, rather than through the
+      // backoff schedule (SPEC 4.3.1/4.3.2), and has nothing above it either.
+      // This one is a one-shot: the pong timeout fires once and has already
+      // discarded its socket, so doing nothing on a throw would leave the
+      // client stopped with no timer pending and nothing to restart it.
+      // Recording the failure and falling back into the ordinary backoff
+      // schedule keeps that from being a dead end.
+      recordLocalError('socket_failed')
+      scheduleReconnectAttempt(true)
+    }
   }
 
   function discardSocketSilently(): void {
@@ -593,7 +630,18 @@ export function createWsClient(options: WsClientOptions): WsClient {
     backoffAttempt = Math.min(backoffAttempt + 1, BACKOFF_CAPS_S.length - 1)
     backoffTimer = setTimeout(() => {
       backoffTimer = null
-      beginConnect(enterConnectingState)
+      try {
+        beginConnect(enterConnectingState)
+      } catch {
+        // SPEC 4.3.10 (issue #122): the same `new WebSocket` throw §4.8
+        // protects the first attempt from, here on the path taken hundreds
+        // of times more often -- this callback has nothing above it either.
+        // Recorded as `socket_failed` rather than left to escape into the
+        // event loop, and the backoff loop tries again: a browser that
+        // refused to open a socket once may not refuse the next one.
+        recordLocalError('socket_failed')
+        scheduleReconnectAttempt(enterConnectingState)
+      }
     }, delay)
   }
 
@@ -611,7 +659,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
   }
 
   function handleRestartingClose(): void {
-    if (restartReason === 'shutdown') {
+    if (restartReasonValue === 'shutdown') {
       // SPEC 4.3.1: terminal by guard, not by event, there is nothing to be
       // patient for and nothing to reconnect to.
       return
@@ -635,7 +683,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
   }
 
   function handleRestarting(data: { reason: RestartReason; mode: unknown }): void {
-    restartReason = data.reason
+    restartReasonValue = data.reason
     clearConnectingBoundTimer()
     setState('restarting')
     clearPatienceTimer()
@@ -645,8 +693,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
     }
   }
 
-  function handleStats(stats: Stats): void {
+  function handleStats(stats: Stats, timestamp: number): void {
     lastStatsValue = stats
+    lastStatsTimestampValue = timestamp
     const fresh = stats.sessionAge !== null && stats.sessionAge < STALENESS_THRESHOLD_S
     if (!firstStatsReceivedThisConnection) {
       firstStatsReceivedThisConnection = true
@@ -771,7 +820,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
 
     switch (message.type) {
       case 'stats':
-        handleStats(message.data)
+        handleStats(message.data, message.timestamp)
         break
       case 'restarting':
         handleRestarting(message.data)
@@ -908,7 +957,19 @@ export function createWsClient(options: WsClientOptions): WsClient {
       }, CONNECTING_BOUND_MS)
     }
 
-    const socket = deps.createSocket(options.url)
+    let socket: SocketLike
+    try {
+      socket = deps.createSocket(options.url)
+    } catch (err) {
+      // SPEC 4.3.10 (issue #122): a throw here leaves the state exactly as
+      // set above -- `connecting`, because a retry is scheduled and that is
+      // what §4.3.1 calls trying -- but the bound armed a few lines up was
+      // armed for a socket that does not exist. Left running, it fires
+      // `connect_timeout` over the `socket_failed` every caller of this
+      // function already records, hiding the real cause from the owner.
+      clearConnectingBoundTimer()
+      throw err
+    }
     currentSocket = socket
     socket.onopen = () => {
       socketOpenedThisConnection = true
@@ -975,8 +1036,24 @@ export function createWsClient(options: WsClientOptions): WsClient {
     return unauthorizedReasonValue
   }
 
-  function lastStats(): Stats | null {
-    return lastStatsValue
+  // SPEC 4.4.1 (issue #131): gated on the current state rather than reset at
+  // every beginConnect(), the way unauthorizedReasonValue is -- the restart
+  // that begun in `restarting` calls beginConnect(false) itself, from the
+  // same `restarting` state, to reconnect the socket the close just took
+  // down (the `mode_change`/`reboot` row), and resetting the reason there
+  // would blank it while the state it describes is still current. Reading it
+  // through the state instead needs no such call site to remember to clear
+  // it, and stays correct however this client leaves `restarting`.
+  function restartReason(): RestartReason | null {
+    return currentState === 'restarting' ? restartReasonValue : null
+  }
+
+  function lastStats(): StatsSnapshot | null {
+    // lastStatsValue and lastStatsTimestampValue are only ever written
+    // together, in handleStats, so a non-null payload always has a stamp
+    // beside it.
+    if (lastStatsValue === null || lastStatsTimestampValue === null) return null
+    return { stats: lastStatsValue, timestamp: lastStatsTimestampValue }
   }
 
   function diagnostics(): Diagnostics {
@@ -1103,6 +1180,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     close,
     state,
     unauthorizedReason,
+    restartReason,
     lastStats,
     diagnostics,
     onState,

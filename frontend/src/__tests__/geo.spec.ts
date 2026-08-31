@@ -135,7 +135,7 @@ let fakeStorage: FakeStorage
 // discarded it" -- the delegation 4.6.2 states explicitly.
 // ---------------------------------------------------------------------------
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'connected'
   reasonValue: UnauthorizedReason | null = null
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
@@ -151,6 +151,12 @@ class FakeWsClient {
   }
   unauthorizedReason(): UnauthorizedReason | null {
     return this.reasonValue
+  }
+  // SPEC 4.4.1 (issue #131): not exercised by this file - no test here
+  // drives a restarting state, so this always answers null rather than
+  // gating on state like stores.spec.ts's own double does.
+  restartReason(): null {
+    return null
   }
   lastStats(): null {
     return null
@@ -191,7 +197,7 @@ class FakeWsClient {
 }
 
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 // ---------------------------------------------------------------------------

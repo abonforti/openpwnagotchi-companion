@@ -1,8 +1,8 @@
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Capabilities, OutgoingMessage, OutgoingStats, Stats } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, LastError, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { Capabilities, OutgoingMessage, OutgoingStats } from '../lib/protocol'
+import type { ConnectionState, Diagnostics, LastError, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
 
 // Written wholesale from SPEC.md 4.5.2.1 ("Settings presentation and DOM
 // hooks", issue #134), the Settings bullet of 4.5.2, 4.5.1's ports-are-
@@ -215,10 +215,10 @@ function diagnosticFieldOrNull(name: string): HTMLElement | null {
 // the diagnostics block.
 // ---------------------------------------------------------------------------
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'connected'
   reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: Stats | null = null
+  private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
   private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
@@ -233,7 +233,13 @@ class FakeWsClient {
   unauthorizedReason(): UnauthorizedReason | null {
     return this.reasonValue
   }
-  lastStats(): Stats | null {
+  // SPEC 4.4.1 (issue #131): not exercised by this file - no test here
+  // drives a restarting state, so this always answers null rather than
+  // gating on state like stores.spec.ts's own double does.
+  restartReason(): null {
+    return null
+  }
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
   onState(handler: (state: ConnectionState) => void): () => void {
@@ -266,7 +272,7 @@ class FakeWsClient {
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = message.data
+    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -277,7 +283,7 @@ class FakeWsClient {
 }
 
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {

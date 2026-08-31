@@ -997,6 +997,34 @@ describe('formatLastErrorCode', () => {
     expect(pongTimeout).not.toBe(generic)
     expect(connectTimeout).not.toBe(generic)
   })
+
+  // SPEC 4.3.10 (issue #122): `socket_failed` is the third local code, and
+  // the one about the phone rather than the unit - the browser refused to
+  // open the connection before there was anything on the other end to fail
+  // to answer. §4.3.10's comment on this pins the exact sentence: "an owner
+  // told the unit is not answering will go and check the unit instead",
+  // which is why this case gets its own wording rather than sharing
+  // connect_timeout's. Pinned verbatim, not just by substring, because a
+  // review found this sentence untested against the whole suite: deleting
+  // the case arm and falling through to the generic sentence was caught by
+  // nothing before this test existed.
+  it('socket_failed (source "local") renders the exact pinned sentence, distinct from the other two local codes', () => {
+    const socketFailed = formatLastErrorCode({ source: 'local', code: 'socket_failed', message: '', at: 1_700_000_000_000 })
+    expect(socketFailed).toBe('The browser refused to open the connection.')
+    expect(socketFailed).not.toContain('socket_failed')
+
+    const pongTimeout = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    const connectTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'connect_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_four'))
+    expect(socketFailed).not.toBe(pongTimeout)
+    expect(socketFailed).not.toBe(connectTimeout)
+    expect(socketFailed).not.toBe(generic)
+  })
 })
 
 describe('formatLastErrorMessage', () => {

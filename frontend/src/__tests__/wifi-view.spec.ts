@@ -12,7 +12,7 @@ import type {
   OutgoingStats,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 // DASH and EMPTY_LABEL are the pre-existing SPEC 4.5.1.1 surface, not part
 // of this change: the row-level empty rule this file exercises on Nearby
 // and Captured fields is that section's own rule, restated for this view by
@@ -175,10 +175,10 @@ interface PendingRequest {
   reject: (error: Error) => void
 }
 
-class FakeWsClient {
+class FakeWsClient implements WsClient {
   currentState: ConnectionState = 'connected'
   reasonValue: UnauthorizedReason | null = null
-  private lastStatsValue: Stats | null = null
+  private lastStatsValue: StatsSnapshot | null = null
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly requestCalls: string[] = []
@@ -194,7 +194,13 @@ class FakeWsClient {
   unauthorizedReason(): UnauthorizedReason | null {
     return this.reasonValue
   }
-  lastStats(): Stats | null {
+  // SPEC 4.4.1 (issue #131): not exercised by this file - no test here
+  // drives a restarting state, so this always answers null rather than
+  // gating on state like stores.spec.ts's own double does.
+  restartReason(): null {
+    return null
+  }
+  lastStats(): StatsSnapshot | null {
     return this.lastStatsValue
   }
   onState(handler: (state: ConnectionState) => void): () => void {
@@ -205,7 +211,7 @@ class FakeWsClient {
     this.messageHandlers.add(handler)
     return () => this.messageHandlers.delete(handler)
   }
-  request(type: string): Promise<OutgoingMessage> {
+  request(type: string, ..._rest: unknown[]): Promise<OutgoingMessage> {
     this.requestCalls.push(type)
     return new Promise((resolve, reject) => {
       this.pending.push({ type, resolve, reject })
@@ -229,7 +235,7 @@ class FakeWsClient {
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = message.data
+    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -256,7 +262,7 @@ class FakeWsClient {
 }
 
 function asClient(fake: FakeWsClient): WsClient {
-  return fake as unknown as WsClient
+  return fake
 }
 
 // ---------------------------------------------------------------------------

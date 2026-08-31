@@ -7,7 +7,7 @@
 // Type-only, same direction as every other formatter's own import of what
 // it renders: lib/geo.ts does not import this file.
 import type { GeoState } from './geo'
-import type { Gps, HandshakeGps, Mode } from './protocol'
+import type { Gps, HandshakeGps, Mode, RestartReason } from './protocol'
 // Type-only, and cycle-free: lib/wifi.ts does not import this file, so
 // importing its NearbySortOrder here is the same direction of dependency
 // every other formatter in this section already has on the module that
@@ -378,6 +378,23 @@ export function formatUnauthorizedCallToAction(reason: UnauthorizedReason): stri
   }
 }
 
+/**
+ * The Dashboard's `restarting` banner sentence (SPEC 4.4.1/4.5.1.1, issue
+ * #131). `mode_change` and `reboot` share one sentence; `shutdown` reads
+ * differently on purpose, present tense and with no promise of a return,
+ * because §4.3.1 makes that state terminal -- the app is not waiting for
+ * anything and the copy must not say otherwise.
+ */
+export function formatRestartReason(reason: RestartReason): string {
+  switch (reason) {
+    case 'mode_change':
+    case 'reboot':
+      return 'The unit is restarting.'
+    case 'shutdown':
+      return 'The unit is shutting down.'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The diagnostics pair (SPEC 4.3.10, 4.5.2.1): the last error and the
 // latency. Both live on lib/ws.ts's Diagnostics, mirrored onto the
@@ -436,9 +453,13 @@ export function formatLastErrorMessage(message: string): string {
  * it is the diagnosis.
  *
  * For `source: 'local'`, `code` names a drop this client detected itself --
- * `pong_timeout`, `connect_timeout` -- rather than anything a remote said,
- * so there is no message and no code shown beside the sentence, unlike the
- * close case above.
+ * `pong_timeout`, `connect_timeout`, `socket_failed` -- rather than anything
+ * a remote said, so there is no message and no code shown beside the
+ * sentence, unlike the close case above. `socket_failed` (issue #122) is
+ * the one of the three that is about the phone rather than the unit -- the
+ * browser refused to open the connection, before there was anything on the
+ * other end to fail to answer -- and its sentence says so, because an
+ * owner told the unit is not answering will go and check the unit instead.
  */
 export function formatLastErrorCode(lastError: LastError): string {
   if (lastError.source === 'frame') {
@@ -459,7 +480,7 @@ export function formatLastErrorCode(lastError: LastError): string {
   }
   if (lastError.source === 'local') {
     // `LastError`'s `'local'` arm types `code` to `LocalErrorCode` (SPEC
-    // 4.3.10), so the switch below is total over the two codes it can
+    // 4.3.10), so the switch below is total over the three codes it can
     // actually carry without needing a default arm no runtime value could
     // ever reach.
     switch (lastError.code) {
@@ -467,6 +488,8 @@ export function formatLastErrorCode(lastError: LastError): string {
         return 'The connection stopped responding.'
       case 'connect_timeout':
         return 'The unit did not answer while connecting.'
+      case 'socket_failed':
+        return 'The browser refused to open the connection.'
     }
   }
   return `The connection closed (code ${lastError.code}).`

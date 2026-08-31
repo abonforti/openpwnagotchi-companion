@@ -46,8 +46,8 @@ grep -rn "pragma:\s*no cover" plugin/ tests/
 # generated types in sync with the schemas
 node tools/gen-protocol-types.mjs --check
 
-# plugin parses and has valid metadata, without importing pwnagotchi
-python .github/check_plugin.py
+# lint and byte-compile the Python that ships
+python -m ruff check plugin/ tools/ tests/ .github/*.py
 python -m compileall -q plugin/
 
 # frontend, when the diff touches it

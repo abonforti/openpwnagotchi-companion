@@ -120,6 +120,17 @@ See [`docs/SETUP.md`](docs/SETUP.md).
 Each user builds and serves their own copy. Nothing here phones home, and there is no shared
 instance to sign up for.
 
+## Roadmap
+
+What is planned and what is being worked on is the
+[milestones](https://github.com/abonforti/openpwnagotchi-companion/milestones), each with its
+issues. There is no `ROADMAP.md`: a second copy of that list updates when somebody remembers
+rather than when an issue closes, and a roadmap that disagrees with the tracker is read as the
+tracker being wrong.
+
+Web push is **not planned**. It is only useful while tethered with the app open, which is the
+case where the app is already showing what it would notify about.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). The short version: the repository is English-only,

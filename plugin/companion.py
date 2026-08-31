@@ -101,11 +101,9 @@ DEFAULTS: dict[str, Any] = {
     "gpsd_port": 2947,
     "session_poll_interval": 5,
     "rebind_interval": 30,
-    "save_gps_log": False,
-    "gps_log_path": "/var/tmp/pwnagotchi_gps.log",
-    "mirror_auto_interval": 5,
     "keepalive_interval": 20,
     "handshake_dir": "",
+    "log_path": "",
 }
 
 # The set of config keys the plugin accepts under [main.plugins.companion]:
@@ -116,6 +114,11 @@ DEFAULTS: dict[str, Any] = {
 # advertises (SPEC 2.2.1); the two must never be expressed separately, or
 # they can drift apart.
 ACCEPTED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {"enabled"}
+
+# The withdrawn `interfaces` key (SPEC 2.3.1, issue #173). Named once and
+# referenced by both on_loaded's unknown-key scan and Listeners.__init__'s
+# warning, so the two can never drift apart by having the string typed twice.
+WITHDRAWN_INTERFACES_KEY = "interfaces"
 
 HANDSHAKE_LIMIT = 500
 # How often an unauthenticated connection wakes up to re-check its deadline
@@ -1064,6 +1067,25 @@ class SessionCache:
             return max(0.0, self._deps.now() - self._fetched_at)
 
 
+def is_gpsd_host_literal(value: Any) -> bool:
+    """True when `value` is an IPv4 or IPv6 address literal, never a hostname (issue #163).
+
+    `socket.create_connection`'s timeout covers the connect only; the
+    `getaddrinfo` that resolves a hostname runs first and honours no timeout
+    the caller can set, so a hostname behind a dead resolver would block
+    `default_read_gpsd` for as long as the resolver takes, in the thread that
+    also refreshes the session cache. Restricting `gpsd_host` to a literal
+    keeps that call bounded by construction.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
 class GpsResolver:
     """Resolves a position from the best available source.
 
@@ -1080,6 +1102,27 @@ class GpsResolver:
         self._browser: dict | None = None
         self._browser_at: float = 0.0
         self._gpsd: dict | None = None
+        # Refused when the config is read (SPEC 2.12, issue #163), not when
+        # first polled: this disables the gpsd source alone, the same way an
+        # unusable bind_addresses entry is dropped rather than taking the
+        # plugin down (SPEC 2.2.1).
+        host = option(self._options, "gpsd_host")
+        gpsd_host_valid = is_gpsd_host_literal(host)
+        # Logged only when the refusal has an effect: with gps_source "none"
+        # or "bettercap" the gpsd source is never polled anyway, and an
+        # error about a setting that changes nothing teaches the reader to
+        # skim the log the next time it fires for something that matters.
+        if not gpsd_host_valid and option(self._options, "gps_source") in ("auto", "gpsd"):
+            # The key is named and the value is not. This log is served to a
+            # client by `get_log` (SPEC 2.9), so anything written here is
+            # readable content, and echoing a config value would put the
+            # owner's configuration on the wire to explain a typo. The
+            # unknown-key scan (SPEC 2.2.1) names keys only for the same
+            # reason, and the reader has the value in front of them already.
+            log.error(
+                "[companion] gpsd_host is not an IPv4 or IPv6 address literal; "
+                "the gpsd source is disabled"
+            )
 
     def set_browser_position(
         self, latitude: float, longitude: float, accuracy: float | None
@@ -1094,13 +1137,20 @@ class GpsResolver:
         if option(self._options, "gps_source") not in ("auto", "gpsd"):
             self._gpsd = None
             return
+        # Read and validate together (SPEC 2.12, issue #163): every other
+        # read in this class is live, per call, so the value the guard
+        # checks and the value handed to read_gpsd must be the same read
+        # rather than one taken at construction and the other taken here --
+        # a config dict mutated in place between the two would otherwise let
+        # a hostname reach the unbounded getaddrinfo the guard exists to
+        # keep off the poll.
+        host = option(self._options, "gpsd_host")
+        if not is_gpsd_host_literal(host):
+            self._gpsd = None
+            return
         tpv = None
         try:
-            tpv = self._deps.read_gpsd(
-                option(self._options, "gpsd_host"),
-                int(option(self._options, "gpsd_port")),
-                2.0,
-            )
+            tpv = self._deps.read_gpsd(host, int(option(self._options, "gpsd_port")), 2.0)
         except Exception as err:
             log.debug("[companion] gpsd poll failed: %s", err)
         self._gpsd = gps_from_gpsd(tpv, self._deps.now())
@@ -1382,12 +1432,17 @@ class HandshakeStore:
                 pcapng += 1
         return pcapng, total
 
-    def entries(self) -> tuple[list[dict], bool, int]:
+    def entries(self) -> tuple[list[dict], bool, int | None]:
         """Returns (entries, truncated, total), newest first.
 
         Caps at `limit` and reports truncation rather than dropping silently. An
-        unreadable file is skipped, not fatal.
+        unreadable file is skipped, not fatal. `total` is `None` when the
+        directory is unknown (SPEC 2.7, issue #153): an empty `entries` with a
+        `total` of zero would claim a unit with no captures, which is a claim
+        this store has no basis for when it was never told where to look.
         """
+        if self._directory is None:
+            return [], False, None
         records = []
         for name in self._names():
             path = os.path.join(self._directory, name)
@@ -1824,25 +1879,40 @@ class Router:
         return out
 
     def log_lines(self, count: int | None) -> dict:
-        """Tails the configured log. Path comes from config, never hardcoded (SPEC F17)."""
+        """Tails the configured log. Path comes from config, never hardcoded (SPEC F17).
+
+        `log_path` wins when set to a non-empty string (SPEC 2.6.0.1), exactly
+        as `handshake_dir` does for the capture directory: it is the one an
+        operator can set on a unit whose agent never arrives. Otherwise fall
+        back to the agent's own log config (F17), and only when that too
+        yields a non-empty string. Neither source may contribute an empty
+        path, for the reason `_handshake_store` gives: an empty path is
+        nowhere to read.
+        """
         try:
             requested = LOG_LINES_DEFAULT if count is None else int(count)
         except (TypeError, ValueError):
             requested = LOG_LINES_DEFAULT
         requested = max(1, min(requested, LOG_LINES_MAX))
 
-        # The log path lives on agent._config (SPEC F17). With no agent the
-        # attribute access below raises and the except already answers
-        # log_unavailable, so this guard names the case rather than handling
-        # it - it exists for clarity, not because the except would not reach
-        # it too.
-        agent = self._agent()
-        if agent is None:
-            raise ProtocolError("log_unavailable", "agent is not available")
-        try:
-            path = agent._config["main"]["log"]["path"]
-        except Exception:
-            raise ProtocolError("log_unavailable", "no log path in configuration")
+        configured = option(self._options, "log_path")
+        if isinstance(configured, str) and configured:
+            path = configured
+        else:
+            # The log path lives on agent._config (SPEC F17). With no agent
+            # the attribute access below raises and the except already
+            # answers log_unavailable, so this guard names the case rather
+            # than handling it - it exists for clarity, not because the
+            # except would not reach it too.
+            agent = self._agent()
+            if agent is None:
+                raise ProtocolError("log_unavailable", "agent is not available")
+            try:
+                path = agent._config["main"]["log"]["path"]
+            except Exception:
+                raise ProtocolError("log_unavailable", "no log path in configuration")
+            if not isinstance(path, str) or not path:
+                raise ProtocolError("log_unavailable", "no log path in configuration")
 
         try:
             lines = tail_lines(path, requested)
@@ -2268,7 +2338,7 @@ class Listeners:
         self._deps = deps
         self._ssl = ssl_context
         self._client_handler = client_handler
-        if options is not None and "interfaces" in options:
+        if options is not None and WITHDRAWN_INTERFACES_KEY in options:
             # Honouring it would keep the exposure D5.1 closes: an interface
             # name says which device, not which network, and bnep numbering
             # follows the order peers connected rather than the owner's intent.
@@ -2970,7 +3040,7 @@ class Companion(plugins.Plugin):
         # accepted, it already has its own, more specific warning (SPEC 2.3.1)
         # and must not be named twice.
         unknown = sorted(
-            (set(self.options or {}) - ACCEPTED_CONFIG_KEYS) - {"interfaces"}
+            (set(self.options or {}) - ACCEPTED_CONFIG_KEYS) - {WITHDRAWN_INTERFACES_KEY}
         )
         if unknown:
             log.warning(

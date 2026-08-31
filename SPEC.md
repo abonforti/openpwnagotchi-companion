@@ -274,15 +274,22 @@ gpsd_host = "127.0.0.1"
 gpsd_port = 2947
 session_poll_interval = 5          # bettercap session refresh, clamped 1-5 (SPEC 2.4)
 rebind_interval = 30               # re-enumeration, clamped 5-300, 0 means the floor (SPEC 2.4)
-save_gps_log = false
-gps_log_path = "/var/tmp/pwnagotchi_gps.log"
-mirror_auto_interval = 5           # seconds for the mirror auto-refresh option (client-driven)
 keepalive_interval = 20            # stats and keepalive broadcast, clamped 5-20, 0 means default (SPEC 2.4)
 handshake_dir = ""                 # optional; where the captures are. Empty = ask the agent (SPEC 2.5)
+log_path = ""                      # optional; the log to read. Empty = ask the agent (SPEC 2.6.0.1)
 ```
 
 Every value has a hardcoded default in the plugin matching the table above. Missing keys must
 never raise; use `self.options.get(key, default)`.
+
+**Three keys were removed rather than implemented (issue #156).** `save_gps_log`, `gps_log_path`
+and `mirror_auto_interval` were accepted, defaulted, listed in this table, and read by no code in
+`plugin/` or `frontend/src/`. A key that is advertised and does nothing is worse than a missing
+one: the owner who sets it has been answered, and the answer is false. `mirror_auto_interval` was
+the clearest case, a plugin setting for an interval the client owns (§4.5.2.6) and which the
+plugin has no way to enforce. They are gone from the defaults and from this table, so §2.2.1 now
+names them as unknown keys, which is the true statement: a config carrying one of these is a
+config asking for something this plugin does not do.
 
 #### 2.2.1 An unknown key is named, not ignored (issue #137)
 
@@ -313,6 +320,14 @@ and why; the refusal alone sends the reader to look at a certificate that is fin
 **The accepted set is the `DEFAULTS` table above, plus `enabled`** (F32). `interfaces` is excluded
 from this warning because it already has a more specific one naming its replacement (§2.3.1);
 saying it twice, once by name and once as "unknown", would read as two problems.
+
+**And it is spelled once (issue #173).** Two sites decide independently that `interfaces` is the
+withdrawn key: this scan subtracts it from the accepted set, and the transport emits §2.3.1's
+warning when it appears. The comment above the first says the two "must never be expressed
+separately, or they can drift apart" -- and then expressed them separately, in two string
+literals in one file. Rename the key in one and the other silently changes meaning: the scan
+would start calling it unknown while the warning still fired, which is the two-problems reading
+this rule exists to prevent, arrived at from the opposite direction. One name, referenced twice.
 
 **No near-match is suggested.** `bind_address` to `bind_addresses` is the obvious case and it is
 tempting to print it, but a guess is friendly exactly when it is right and misleading when it is
@@ -1001,7 +1016,29 @@ that cannot change without a restart.
 |---|---|---|
 | `set_mode` | reading the current mode, to refuse a restart into the mode already in effect | the current mode **is** manual (F31). A request for `manual` is the no-op it always was; a request for `auto` restarts, which is the whole point |
 | `set_pasv` | checking that the mode is auto | it is not auto, so the answer is the one the contract already has: `pasv_requires_auto` |
-| `log_lines` | the log path, which comes from `agent._config` (F17) | genuinely unavailable, and answered as `log_unavailable` rather than as an internal error. The same class of problem as the handshake counts (§2.5), and the same fix would close it: a configured path the plugin can read with no agent, issue #154 |
+| `log_lines` | the log path, which comes from `agent._config` (F17) | readable when `log_path` is set, and `log_unavailable` when it is not (§2.6.0.1). The same shape as the handshake counts (§2.5): a key the operator can set on a unit whose agent never arrives, and an honest refusal when neither source yields a path |
+
+#### 2.6.0.1 The log has a configured path too, for the same reason the captures do (issue #154)
+
+§2.5 gave the handshake directory a `handshake_dir` key because a unit with no agent could not be
+told where its captures were. The log was left with the same problem and no key, and the
+asymmetry is hard to defend: a unit in manual mode never gets an agent (F31), so the log is
+unavailable for the life of the process on exactly the units somebody is most likely to be
+debugging. §2.6.0 already says the boot-window case "is the one that stings, because a stuck boot
+is exactly when somebody wants the log".
+
+**`log_path`, empty by default, resolved before the agent**, exactly as `handshake_dir` is. When
+it is a non-empty string the plugin reads that file; otherwise the path comes from
+`agent._config` (F17); otherwise the answer is `log_unavailable`, which stays the honest reply
+rather than becoming an internal error. Neither source may contribute an empty path, for §2.5's
+reason: an empty path is nowhere to read, and a reader over one returns nothing and calls it a
+log.
+
+**The path is never influenced by a client.** `get_log` carries a line count and nothing else
+(§2.9), and it must stay that way. A message that could name a file would make this plugin an
+arbitrary-file reader on the owner's unit, reachable over a socket, which is a different program
+from the one this document specifies. The only two sources are the config the owner wrote and the
+agent's own configuration.
 
 **The inference "no agent means manual" has a window, and it is named rather than hidden.** In
 auto mode the agent arrives when `agent.start()` fires `ready`, and that is the **last** statement
@@ -1100,7 +1137,30 @@ command arrives — the confirm is a client-side affordance, not a protocol hand
 
 ### 2.7 Handshake list (`handshakes_list`)
 
-Enumerate `agent._config['bettercap']['handshakes']` (F14; default `/etc/pwnagotchi/handshakes`).
+Enumerate the directory §2.5 resolves: `handshake_dir` when it is a non-empty string, otherwise
+`agent._config['bettercap']['handshakes']` (F14; default `/etc/pwnagotchi/handshakes`).
+
+**When neither source yields a directory, `total` is null and the list is empty (issue #153).**
+§2.5 made the counts nullable so the wire could say "not known" where it used to say zero, and
+this reply had the same confident zero at a different field: `entries: []` with `total: 0` reads
+as a unit with no captures, which is a claim, and the plugin has not looked anywhere to support
+it. A client cannot tell that from a unit whose directory the plugin was never told.
+
+So `total` is nullable here for the reason it is nullable there, and `entries` stays an array
+because an empty list is what the plugin actually has to offer. **`total: null` with an empty
+`entries` means the directory is unknown; `total: 0` with an empty `entries` means it was found
+and holds nothing.** No new error code is needed: this is a fact about a
+field, not a failure of the request, and `get_handshakes` succeeded at everything it was able to
+attempt. **What the client renders for a null total is §4.5.2.3's and §4.5.2.7's business, and
+both say so there.** An earlier draft of this paragraph pointed at §4.5.1.1 instead, which is the
+Dashboard's `stats` rows and has nothing to say about this field; the citation was wrong and it
+is what let the client half of this change go unwritten, because a rule that is already covered
+somewhere else needs nobody to write it.
+
+A new error code was the alternative and was rejected. `log_unavailable` exists because the log
+is one thing that is either readable or not; a handshake listing is a count and a set of entries,
+and half of it is still true when the directory is unknown -- there are no entries, and that is
+not a guess.
 
 - Match `*.pcapng` **and** `*.pcap`. The stock counter only globs `*.pcapng` (F15), but older
   captures and other tools produce `.pcap`; count and list both, and report the stock-compatible
@@ -1466,7 +1526,43 @@ not a comparison against a source name.
 2. **gpsd** — connect to `gpsd_host:gpsd_port`, send `?WATCH={"enable":true,"json":true}`, read
    TPV objects with `mode >= 2` and finite lat/lon. Use `gpsd-py3`/`gps` if importable, else a
    minimal raw JSON poll. Bounded: socket timeout ≤ 2 s, refreshed from the same background
-   thread as the session cache, never from the request path. Emit `source: "gpsd"`,
+   thread as the session cache, never from the request path. **`gpsd_host` must be an IPv4 or
+   IPv6 address literal, and a hostname is refused when the config is read** (issue #163). A
+   socket timeout applies to the connect, not to the name resolution that precedes it:
+   `getaddrinfo` runs first and honours no timeout the caller can set, so a hostname behind a
+   DNS server that does not answer blocks the poll for as long as the resolver takes, in the
+   thread that also refreshes the session cache. Refusing at load rather than resolving at poll
+   is the bounded answer and costs nothing real: gpsd on a pwnagotchi runs on the unit itself,
+   the default is `127.0.0.1`, and a companion talking to somebody else's gpsd over a name is
+   not a configuration this project supports.
+
+   **What the refusal does**, because "refused" on its own leaves the important half unsaid: it
+   disables the gpsd source and nothing else. The plugin starts, `gps_source = "auto"` falls
+   through to bettercap and to the browser as it always did, and a forced `gps_source = "gpsd"`
+   over a refused host reports no fix rather than raising. §2.2.1's rule governs this as it
+   governs a bad `bind_addresses` entry: a pwnagotchi that will not boot because of a
+   misconfiguration is a worse outcome than the misconfiguration.
+
+   **The check happens at the poll, on the value the poll is about to use.** An earlier reading
+   of this rule validated once when the plugin loaded and cached the answer, and the value
+   handed to the socket was read again later, live. Everything else in the resolver reads its
+   options live per call, so the two could disagree -- and a poll that dispatches a host the
+   guard never saw is the unbounded `getaddrinfo` this rule exists to prevent, arrived at
+   through the guard rather than around it. One read, validated and used.
+
+   **The refusal is logged where it has an effect, and not before.** It fires when the gpsd
+   source would actually have been polled -- `gps_source` of `auto` or `gpsd` -- and stays quiet
+   on a unit configured for `bettercap` or `none`, where a stale hostname in `gpsd_host` changes
+   nothing. An error about a setting that has no effect is how a log teaches its reader to skim,
+   and this project has made that argument once already for the unknown-key scan. The cost is
+   named rather than hidden: an owner who later switches `gps_source` back to `auto` gets the
+   error then, at the moment it starts being true, rather than having seen it at a boot where it
+   was not.
+
+   **The message names the key and never the value.** This log is served to a client by
+   `get_log` (§2.9), so a config value written into it is a config value on the wire. The
+   unknown-key scan (§2.2.1) already holds to this, and the reader has their own configuration
+   in front of them. Emit `source: "gpsd"`,
    `piFix: true`. The zero-coordinate rule applies here too, for the same reason it applies to
    bettercap: a receiver reporting exactly `0.0` on either axis has not locked.
 3. **browser** — the last `gps_data` pushed by the client. `source: "browser"`, `piFix: false`,
@@ -3913,6 +4009,15 @@ by walking the markup will break when it is.
 §4.5 settles what the segmented control is and §4.5.2 settles what the two lists hold. This
 section is the rest: where the data comes from, what an empty list means, and the hooks.
 
+**A null `total` is not a count, and the truncation notice is not shown for one (issue #153).**
+§2.7 makes `handshakes_list.total` nullable to distinguish a directory the plugin was never told
+about from one it found and read. The notice exists to say how many entries were left out of a
+capped list, which is a subtraction, and there is nothing to subtract from when the total is
+unknown. The two cannot occur together today -- a list that was truncated was a list that was
+enumerated, so `truncated` cannot be true while `total` is null -- and the rule is written here
+anyway, because "cannot happen" held by two independent facts is exactly the pairing that stops
+holding when one of them changes.
+
 ##### The segment lives in `src/shell/`, not in the view
 
 `Segmented.svelte` is shell furniture, beside `Nav.svelte`. The reason is not reuse -- one view
@@ -4597,6 +4702,23 @@ Nothing new goes on the wire for it: `handshakes_list` entries already carry
 `gps: HandshakeGps | null`, and §4.4.1's `gps` store already holds the unit's position. This is a
 presentation section, and if building it turns out to need a protocol change, that is a finding
 worth its own issue rather than a quiet schema edit.
+
+**The caption says how many captures there are, and says it differently when it does not know
+(issue #153).** `handshakes_list.total` is nullable: null means the plugin has no directory to
+enumerate -- no agent and no `handshake_dir`, which is a manual-mode unit -- and zero means it
+looked and found nothing. The caption's first clause counts captures, so on a null it must not
+count: it names the condition instead. The second clause, how many carry a position, stays a real
+count of the entries in hand, because that one is true either way -- there are none, and that is
+not a guess.
+
+**The wording is pinned here, because §4.5.1.1's convention does not transfer.** That section
+renders an unknown *value* as a dash with an accessible label beside it, which works in a cell
+where the dash sits where a number would. This is a sentence, and "- captures, 0 with a position"
+is not one. So the caption reads **`Capture count unavailable, 0 with a position.`**, reusing the
+same `unavailable` word §4.5.1.1 gives to the screen reader rather than inventing a second one for
+the same idea. An earlier draft of this paragraph said only "the shape §4.5.1.1 uses", which is
+the kind of instruction that produces two different answers from two people who both followed it:
+one read it as the dash and one as the word.
 
 ##### The refresh rule is claimed a third time, and claimed rather than restated
 

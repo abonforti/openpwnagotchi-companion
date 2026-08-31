@@ -19,7 +19,7 @@
         },
         "path": {
           "type": "string",
-          "description": "The log path actually read, taken from config['main']['log']['path']."
+          "description": "The log path actually read: the plugin's `log_path` when it is set, otherwise config['main']['log']['path']."
         }
       },
       "required": [

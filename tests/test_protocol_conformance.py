@@ -407,6 +407,45 @@ def test_face_status_with_no_agent_validates_with_a_null_mode(router_factory, va
     validator_for("outgoing", "face_status").validate(message)
 
 
+def test_handshakes_list_with_no_directory_validates_with_a_null_total(
+    harness, tls_material, tmp_path, validator_for
+):
+    """The same gap as the two tests above, for `handshakes_list.total`
+    (SPEC 2.7, issue #153): `produced` always builds its router over the
+    fixture handshake directory, so its `total` is always a real integer and
+    the `["integer", "null"]` schema addition is never driven down its
+    `null` branch by the parity check.
+
+    Not `router_factory`: its `_handshake_store` closure (conftest.py)
+    stands in for "unknown" with its own `_UnknownHandshakeStore` double,
+    which would report `total: None` by construction even if production's
+    `HandshakeStore.entries()` did not - `test_handshakes.py`'s
+    `test_no_directory_at_all_gives_a_null_total_and_an_empty_listing` says
+    why at more length. A real `Companion`, with neither `handshake_dir` set
+    nor an agent supplied, is the one path that actually exercises
+    production's own resolution.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin.options = {
+        **companion.DEFAULTS,
+        "enabled": True,
+        "tls_cert": str(tls_material["cert"]),
+        "tls_key": str(tls_material["key"]),
+        "web_root": str(tmp_path),
+    }
+    try:
+        plugin.on_loaded()
+
+        reply = plugin._router.handle({"type": "get_handshakes"}, authenticated=True)[-1]
+
+        assert reply["data"]["total"] is None
+        assert reply["data"]["entries"] == []
+        validator_for("outgoing", "handshakes_list").validate(reply)
+    finally:
+        plugin.on_unload()
+
+
 def test_no_face_status_leaves_here_empty(produced):
     """Schema conformance cannot see this: `""` is a perfectly valid string.
 

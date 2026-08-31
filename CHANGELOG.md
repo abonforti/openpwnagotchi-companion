@@ -15,9 +15,8 @@ against real hardware.
 ### Added
 
 - **The PWA is an app.** It began as a navigation shell around seven routes, six of which were
-  nine-line placeholders. Six of the seven views now exist, and each arrived with the rule it
-  needed decided before it was drawn. The Map is the one still to come (issue #198), and the
-  browser does not yet supply a position to draw on it (issue #175).
+  nine-line placeholders. All seven views now exist, and each arrived with the rule it needed
+  decided before it was drawn.
   - **The navigation shell**: five slots for seven views, the seventh and the two spare ones
     reached through a More sheet, a rail instead of a bottom bar in short landscape, and views
     that stay mounted when navigated away from so a screen does not lose its place (issue #40).
@@ -38,6 +37,15 @@ against real hardware.
     to look like one (issue #187).
   - **Peers**, and with it the refresh rule stopped being the Wi-Fi view's private business and
     became shared (issue #190).
+  - **The Map**, the seventh view and the last placeholder: captures plotted where they were
+    taken, the track drawn client-side from successive positions because the wire carries no
+    track, and the one external origin this app talks to (issue #198).
+  - **The Settings diagnostics**, which asked for three readings and could render one. The client
+    now keeps the last error - a frame's code and message, the code of a close it did not ask
+    for, or the drop it detected itself when neither ever arrives - and measures the round trip
+    on the ping it was already sending. It never reads the unit's own timestamp: a pwnagotchi
+    with no RTC boots days wrong, and a duration across two clocks measures their disagreement as
+    well as the link (issue #176).
   - **The Log**, live-following on the one timer this client is allowed, with the exception
     argued rather than assumed, and a font-size control for reading it outdoors. Its filter
     narrows what is on the screen and never what is asked for. The level filter §4.5.1 asks for
@@ -90,7 +98,29 @@ against real hardware.
 - Project agent definitions in `.claude/agents/` for implementation, test authoring, review, QA
   and security auditing.
 
+- **A `log_path` config key**, so a unit with no agent can be told where its log is instead of
+  only being able to say it cannot find one. A unit in manual mode never gets an agent, so the
+  log was unavailable for the life of the process on exactly the units somebody is most likely to
+  be debugging. `get_log` still carries a line count and nothing else: a message that could name
+  a file would make this an arbitrary-file reader reachable over a socket (issue #154).
+
 ### Changed
+
+- **`handshakes_list.total` is nullable.** An empty list with a total of zero read as a unit with
+  no captures, which is a claim, and the plugin had not looked anywhere to support it. `null` now
+  means the directory is unknown - no agent and no `handshake_dir` - and `0` means it was found
+  and holds nothing. The same honesty the counts got, at the field that still had the confident
+  zero (issue #153).
+- **Three config keys were removed rather than implemented.** `save_gps_log`, `gps_log_path` and
+  `mirror_auto_interval` were accepted, defaulted, documented and read by nothing. A key that is
+  advertised and does nothing is worse than a missing one: whoever sets it has been answered, and
+  the answer is false. A config carrying one of them is now named by the unknown-key scan, which
+  is the true statement (issue #156).
+- **`gpsd_host` must be an address literal.** The poll promised to be bounded by construction and
+  was bounded only when the host was an address: a socket timeout covers the connect, not the
+  `getaddrinfo` before it, so a hostname behind a dead resolver blocked the thread that also
+  refreshes the session cache. A hostname is refused when the config is read and disables the
+  gpsd source alone; the plugin degrades rather than taking the unit down (issue #163).
 
 - **`rebind_interval` is clamped to 5-300 seconds**, and a configured `0` now takes the floor of
   5 rather than running the reconcile on every pass. Unlike `keepalive_interval = 0`, which means
@@ -170,6 +200,21 @@ against real hardware.
   usable.
 
 ### Security
+
+- **The generic leak scan runs before the commit exists, not after the push.** It lived only in
+  CI, where the earliest it can speak is after the content is on a remote and in that remote's
+  reflog; a scanner that reports a published secret has reported an incident rather than
+  prevented one. It now runs in `.githooks/pre-commit` over the staged content, read from the
+  index rather than the working tree so what is scanned is what would be committed. Fixing the
+  gate exposed that both leak gates were blind to a file renamed and modified in the same commit:
+  they filtered for added, copied and modified paths, and a rename returned nothing, so the
+  denylist gate did not run at all (issue #203).
+- **The secret scanner has tests, and two of its ten patterns were the only ones ever exercised.**
+  A dead pattern and a live one read identically from the outside: both produce no hits. Every
+  pattern is now probed in both directions by a test that enumerates the pattern table itself, so
+  a pattern added without a probe fails rather than passing quietly. The scan also stopped
+  reporting a clean tree for files it never opened, and now exits 2 for a run that considered
+  nothing (issue #199).
 
 - Binding by interface name was unsound. `bnep` devices are numbered in the order PAN links come
   up, so `bnep0` is whichever Bluetooth peer connected first - on a unit paired with more than

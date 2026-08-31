@@ -260,6 +260,64 @@ def test_a_fully_valid_configuration_logs_no_warning(load_plugin, full_options, 
 
 
 # ---------------------------------------------------------------------------
+# Three keys withdrawn rather than implemented (issue #156)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("save_gps_log", False),
+        ("gps_log_path", "/tmp/gps.log"),
+        ("mirror_auto_interval", 5),
+    ],
+)
+def test_a_withdrawn_key_is_named_as_unknown(load_plugin, full_options, caplog, key, value):
+    """SPEC 2.2's own words: a config carrying one of these three keys "is a
+    config asking for something this plugin does not do", and §2.2.1 now
+    names it as unknown - the same generic warning a misspelling gets, not a
+    silent no-op and not a dedicated message of its own (unlike `interfaces`,
+    which SPEC 2.2.1 explicitly keeps out of this path because it already has
+    a more specific warning). `full_options` is built from `companion.DEFAULTS`
+    itself (see its docstring above), so this key is genuinely absent from it
+    before being added here - the same guarantee that lets
+    `test_a_fully_valid_configuration_logs_no_warning` assert silence.
+    """
+    config = dict(full_options)
+    config[key] = value
+
+    with caplog.at_level("WARNING"):
+        plugin = load_plugin(config)
+
+    matches = warnings_mentioning(caplog, key)
+    assert len(matches) == 1, (
+        f"a config carrying the withdrawn key {key!r} must be named as an "
+        f"unknown key exactly once (SPEC 2.2.1); got {matches}"
+    )
+    assert plugin._router is not None
+
+
+@pytest.mark.parametrize(
+    "key", ["save_gps_log", "gps_log_path", "mirror_auto_interval"]
+)
+def test_a_withdrawn_key_is_absent_from_the_accepted_set(key):
+    """Checking `DEFAULTS` alone would pass for the wrong reason: an
+    implementation that deleted the key from `DEFAULTS` but left it (or a
+    private copy of it) in the accepted set used by the §2.2.1 scan would
+    still warn nobody and this suite would never notice. Rebuilding
+    `set(companion.DEFAULTS) | {"enabled"}` here is the same mistake by
+    another name: given the `key not in companion.DEFAULTS` assertion above,
+    a set built from `DEFAULTS` itself cannot contain `key` either, so that
+    second assertion could not fail for the reason this test names - it is
+    checked against `companion.ACCEPTED_CONFIG_KEYS`, the set the §2.2.1
+    scan actually consults, so a private copy of the withdrawn key kept
+    there (and nowhere near `DEFAULTS`) is exactly what this test catches.
+    """
+    assert key not in companion.DEFAULTS
+    assert key not in companion.ACCEPTED_CONFIG_KEYS
+
+
+# ---------------------------------------------------------------------------
 # The scan runs even when the plugin then refuses to start
 # ---------------------------------------------------------------------------
 

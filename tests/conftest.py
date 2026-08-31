@@ -375,9 +375,6 @@ def options(handshake_dir, tmp_path) -> dict[str, Any]:
         "gpsd_port": 2947,
         "session_poll_interval": 5,
         "rebind_interval": 30,
-        "save_gps_log": False,
-        "gps_log_path": str(tmp_path / "gps.log"),
-        "mirror_auto_interval": 5,
         "keepalive_interval": 20,
     }
 
@@ -395,8 +392,9 @@ class _UnknownHandshakeStore:
     class represents "unknown" internally, and guessing its constructor would
     make a wrong guess look like a passing test instead of a naming mismatch.
     What SPEC 2.5 actually promises is the *shape* a caller sees - both counts
-    `None`, an empty listing, no newest entry - and that shape is all this
-    double provides. The real resolution logic (`handshake_dir` config wins,
+    `None`, an empty listing whose own `total` is also `None` rather than a
+    confident `0` (SPEC 2.7, issue #153), no newest entry - and that shape is
+    all this double provides. The real resolution logic (`handshake_dir` config wins,
     then `agent._config['bettercap']['handshakes']`, then unknown) is
     `Companion`'s own job and is exercised for real, through `Companion`
     itself, in `test_handshake_dir.py` - never reimplemented here.
@@ -414,8 +412,8 @@ class _UnknownHandshakeStore:
     def counts(self) -> tuple[None, None]:
         return (None, None)
 
-    def entries(self) -> tuple[list, bool, int]:
-        return ([], False, 0)
+    def entries(self) -> tuple[list, bool, None]:
+        return ([], False, None)
 
     def newest(self):
         return None

@@ -850,6 +850,277 @@ def _all_registered_probe_values():
     return values
 
 
+# ---------------------------------------------------------------------------
+# `--staged` (SPEC.md 13.3, issue #203): the scanner reads staged blobs out
+# of the git index rather than off the filesystem, an empty staging area is
+# a genuine clean result rather than the vacuity fail-open, and the
+# `tests/fakes/fixtures/` exemption still applies to a staged path since
+# `git diff --cached --name-only` already reports paths relative to the
+# repository root. Every test below builds its own throwaway repository
+# under `tmp_path`, real `git` and a real index - this behaviour is
+# specifically about the disagreement between the index and the working
+# tree, which the stubbed-`git` technique `test_pre_commit_hook.py` uses
+# cannot produce, since that stub answers every call itself rather than
+# tracking real staged content.
+# ---------------------------------------------------------------------------
+
+
+def _init_scratch_git_repo(tmp_path):
+    """A throwaway repository carrying a mechanically copied, unmodified
+    `check_secrets.py` at `.github/check_secrets.py` - the same
+    `_scratch_scanner_repo` layout above, reused rather than duplicated,
+    because `--staged` mode fixes its own repository root from its own
+    `__file__` exactly the way the `git ls-files` fallback does (confirmed
+    live: running the real, unmodified script at its real location with
+    `--staged` against a scratch cwd inspects this checkout's own index,
+    not the scratch one, since `REPO_ROOT` never looks at the caller's
+    cwd). Running the *real* `SCRIPT` against a scratch cwd, which an
+    earlier version of this helper did, therefore cannot exercise a scratch
+    commit at all.
+    """
+    repo = _scratch_scanner_repo(tmp_path)
+    subprocess.run(
+        ["git", "config", "user.email", "scratch@example.test"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "scratch"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    return repo
+
+
+def _scratch_script_copy_without_a_git_repository(tmp_path):
+    """The same `.github/check_secrets.py` copy `_scratch_scanner_repo`
+    makes, but deliberately with no `git init` at all - there is no
+    repository here for `--staged` to read an index out of.
+    """
+    repo = tmp_path / "repo"
+    github_dir = repo / ".github"
+    github_dir.mkdir(parents=True)
+    shutil.copy2(SCRIPT, github_dir / "check_secrets.py")
+    return repo
+
+
+def _run_scanner_staged(repo):
+    return subprocess.run(
+        [sys.executable, str(repo / ".github" / "check_secrets.py"), "--staged"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_staged_scans_the_index_not_a_dirty_working_tree(tmp_path):
+    """The regression SPEC.md 13.3 is written against: a file staged with a
+    credential, then overwritten on disk with harmless content and never
+    re-staged. A scanner reading the filesystem would see only the clean
+    disk copy and wrongly exit 0; `--staged` must still find the credential
+    that is actually sitting in the index.
+    """
+    repo = _init_scratch_git_repo(tmp_path)
+    target = repo / "config.py"
+    target.write_text(_credential_assignment_probe() + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=repo, check=True, capture_output=True)
+    target.write_text("nothing interesting here\n", encoding="utf-8")
+
+    result = _run_scanner_staged(repo)
+
+    assert result.returncode == 1, (
+        f"the credential is what was staged, not what is on disk now\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "config.py" in result.stderr
+    assert "possible credential assignment" in result.stderr
+
+
+def test_staged_clean_content_is_not_flagged_by_a_dirty_working_tree(tmp_path):
+    """The opposite disagreement: the index holds only harmless content, but
+    the disk copy was afterwards overwritten with a credential and never
+    staged. A scanner reading the filesystem would wrongly refuse an
+    otherwise clean commit; `--staged` must exit 0.
+    """
+    repo = _init_scratch_git_repo(tmp_path)
+    target = repo / "config.py"
+    target.write_text("nothing interesting here\n", encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=repo, check=True, capture_output=True)
+    target.write_text(_credential_assignment_probe() + "\n", encoding="utf-8")
+
+    result = _run_scanner_staged(repo)
+
+    assert result.returncode == 0, (
+        f"the disk copy carries a credential but nothing carrying it was "
+        f"ever staged\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_staged_rename_with_modification_is_scanned_at_the_new_path(tmp_path):
+    """The headline defect this change closes (SPEC.md 13.3): a file
+    renamed and modified in the same staged commit is classified `R` by
+    git, and an enumeration that only admitted `A`, `C` and `M` returned
+    nothing for it at all - reproduced live before writing this test, not
+    assumed: with the original filter, `git diff --cached --name-only
+    --diff-filter=ACM` printed nothing for a `git mv` plus an edit that git
+    itself reports as `R091` in `--name-status`, while `--diff-filter=ACMR`
+    (or the current exclude-deletions form) printed the new path. Filtering
+    on `ACM` made the hook take its "nothing staged, exit 0" path, so the
+    owner denylist gate never ran on a commit smuggling a credential in
+    under a rename.
+
+    This test is deliberately a rename *and* a modification with the
+    credential only in the added content - a rename with no modification
+    has nothing to find and would pass under either filter, proving
+    nothing about which one is in use. It asserts on behaviour (the
+    credential is found, at the new path) rather than on which filter
+    letters produced that result, so it survives the next respelling the
+    way `--diff-filter=ACM` becoming `ACMR` becoming `--diff-filter=d`
+    already has (SPEC.md 13.3).
+
+    The original content is long enough and similar enough after the edit
+    for git's default rename-detection threshold (50% similarity) to
+    classify this as a rename rather than a delete-plus-add; a one-line
+    file would not reliably do that.
+    """
+    repo = _init_scratch_git_repo(tmp_path)
+    original_lines = [f"line {i}" for i in range(50)]
+    old_path = repo / "sub" / "old_name.py"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text("\n".join(original_lines) + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "sub/old_name.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "scratch fixture commit"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    new_path = repo / "sub" / "new_name.py"
+    subprocess.run(
+        ["git", "mv", "sub/old_name.py", "sub/new_name.py"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    new_path.write_text(
+        "\n".join(original_lines) + "\n" + _credential_assignment_probe() + "\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "sub/new_name.py"], cwd=repo, check=True, capture_output=True)
+
+    name_status = subprocess.run(
+        ["git", "diff", "--cached", "--name-status"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout
+    assert name_status.startswith("R"), (
+        f"fixture did not produce a rename git itself classifies as R, so this test would "
+        f"not exercise the case it is named for: {name_status!r}"
+    )
+
+    result = _run_scanner_staged(repo)
+
+    assert result.returncode == 1, (
+        f"a credential added while renaming a file must still be found\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "sub/new_name.py" in result.stderr, (
+        f"expected the finding reported at the new (staged) path: {result.stderr!r}"
+    )
+    assert "possible credential assignment" in result.stderr
+
+
+def test_deletion_only_staged_area_exits_0_with_a_message_distinct_from_vacuity(tmp_path):
+    """SPEC.md 13.3: an empty staging area - the ordinary shape of a
+    deletion-only commit - is not the vacuity fail-open `test_exit_code_is_2_
+    for_a_run_that_scanned_nothing` above pins exit 2 for. The index was
+    read successfully and genuinely held nothing to scan, which is a
+    different sentence from "nothing was examined", so the message must not
+    borrow that outcome's wording (`0 file(s)`, asserted absent below).
+    """
+    repo = _init_scratch_git_repo(tmp_path)
+    target = repo / "old.txt"
+    target.write_text("nothing interesting here\n", encoding="utf-8")
+    subprocess.run(["git", "add", "old.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "scratch fixture commit"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(["git", "rm", "-q", "old.txt"], cwd=repo, check=True, capture_output=True)
+
+    result = _run_scanner_staged(repo)
+
+    assert result.returncode == 0, (
+        f"a deletion-only staging area must exit 0, not 2\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert combined.strip(), "expected a message stating what was read, not silence"
+    assert "0 file" not in combined, (
+        f"a deletion-only commit is a different outcome from the vacuity case "
+        f"(a run that examined nothing) and must not reuse its wording: {combined!r}"
+    )
+
+
+def test_staged_forbidden_suffix_under_the_fixtures_prefix_is_still_exempt(tmp_path):
+    """SPEC.md 13.3: the `tests/fakes/fixtures/` exemption is measured from
+    the repository root, and `git diff --cached --name-only` already
+    reports paths root-relative, so the exemption must still apply to a
+    staged path the same way it applies to the `git ls-files` fallback
+    `test_forbidden_suffix_exemption_is_a_path_prefix_not_a_free_pass` pins
+    above. The same filename one directory up is refused.
+    """
+    repo = _init_scratch_git_repo(tmp_path)
+    exempt = repo / "tests" / "fakes" / "fixtures" / "sample.pcap"
+    exempt.parent.mkdir(parents=True)
+    exempt.write_bytes(b"harmless bytes, no credential shape at all")
+    outside = repo / "other" / "sample.pcap"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"harmless bytes, no credential shape at all")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+
+    result = _run_scanner_staged(repo)
+
+    assert result.returncode == 1, (
+        f"expected exactly the outside copy to be refused\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "tests/fakes/fixtures/sample.pcap" not in result.stderr, (
+        f"the fixture-prefixed staged .pcap must not be refused: {result.stderr!r}"
+    )
+    assert "other/sample.pcap" in result.stderr and "must never be tracked" in result.stderr, (
+        f"the same filename one directory up must be refused by name: {result.stderr!r}"
+    )
+
+
+def test_staged_scan_outside_a_git_repository_exits_2_not_0(tmp_path):
+    """`--staged` has no index to read at all here, since there is no
+    repository. SPEC.md 13.3's own three-outcome rule applies to `--staged`
+    the same way it applies to a path argument: this must be reported as
+    the scan not having run, not as a clean result earned by reading
+    nothing.
+    """
+    no_repo = _scratch_script_copy_without_a_git_repository(tmp_path)
+
+    result = _run_scanner_staged(no_repo)
+
+    assert result.returncode == 2, (
+        f"expected exit 2 when there is no git index to read at all\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_staged_with_a_path_argument_is_a_usage_error_exit_2(monkeypatch, capsys):
+    """`--staged` takes no path arguments of its own - the index already
+    says what changed (SPEC.md 13.3) - so combining it with one is a usage
+    error the scanner refuses rather than silently accepting or ignoring.
+    Driven in-process against the real, unmodified `cs.main()`, the same
+    way the rest of issue #199's exit-code tests are, since this is a pure
+    argument-validation branch that does not depend on any git state.
+    """
+    rc, out, err = _run_main(monkeypatch, capsys, "--staged", "some/path.py")
+
+    assert rc == 2, (
+        f"expected exit 2 for --staged combined with a path argument, got {rc}\n"
+        f"stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
 def test_no_probe_value_appears_contiguously_in_this_modules_own_source():
     """The finding a security audit made against this module: a probe
     string spelled out as one contiguous literal sits in the tracked source

@@ -1608,7 +1608,14 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const el = diagnosticField('unauthorizedReason')
       const label = `${el.getAttribute('aria-label') ?? ''} ${el.closest('[data-field]')?.previousElementSibling?.textContent ?? ''}`
       expect(/last error/i.test(label)).toBe(false)
-      expect(/last error/i.test(root().textContent ?? '')).toBe(false)
+
+      // Not a screen-wide search: the lastError diagnostic legitimately
+      // carries that label elsewhere on this screen. Scoped to this field's
+      // own row (the wrapper that also holds its label), so an
+      // implementation that labels *this* row "Last error" still fails here.
+      const row = el.closest('[data-field]')?.parentElement
+      expect(row, 'expected the unauthorizedReason field to sit in a labelled row').not.toBeNull()
+      expect(/last error/i.test(row?.textContent ?? '')).toBe(false)
     })
   })
 })

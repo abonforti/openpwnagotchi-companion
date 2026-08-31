@@ -121,6 +121,7 @@ openpwnagotchi-companion/
 │   │   │   ├── geo.ts                # browser Geolocation acquisition + push to plugin
 │   │   │   ├── lists.ts              # sorting and identity for the list views
 │   │   │   ├── log.ts                # log line parsing and the level filter
+│   │   │   ├── map.ts                # the track, the viewport and the tile origin (§4.5.2.7)
 │   │   │   ├── peers.ts              # peer identity and presence
 │   │   │   ├── protocol.ts           # GENERATED from docs/schemas - do not hand-edit
 │   │   │   ├── router.ts             # the seven routes of §4.5, and nothing more

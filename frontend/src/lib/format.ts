@@ -13,7 +13,7 @@ import type { Gps, HandshakeGps, Mode } from './protocol'
 // every other formatter in this section already has on the module that
 // owns the value it is turning into a string.
 import type { NearbySortOrder } from './wifi'
-import type { ConnectionState, LastError, LocalErrorCode, UnauthorizedReason } from './ws'
+import type { ConnectionState, LastError, UnauthorizedReason } from './ws'
 
 /** The dash itself. Exported so no caller writes the character by hand. */
 export const DASH = '-'
@@ -458,12 +458,11 @@ export function formatLastErrorCode(lastError: LastError): string {
     }
   }
   if (lastError.source === 'local') {
-    // `LastError.code` is `string` for every source, but `recordLocalError`
-    // is the only writer for this one and it is typed to `LocalErrorCode`
-    // (SPEC 4.3.10), so the cast makes the switch below total over the two
-    // codes it can actually carry instead of needing a default arm no
-    // runtime value could ever reach.
-    switch (lastError.code as LocalErrorCode) {
+    // `LastError`'s `'local'` arm types `code` to `LocalErrorCode` (SPEC
+    // 4.3.10), so the switch below is total over the two codes it can
+    // actually carry without needing a default arm no runtime value could
+    // ever reach.
+    switch (lastError.code) {
       case 'pong_timeout':
         return 'The connection stopped responding.'
       case 'connect_timeout':

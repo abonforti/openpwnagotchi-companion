@@ -2660,12 +2660,12 @@ can already reach.
 **The client exposes a diagnostics pair, and the stores mirror it.**
 
 ```ts
-export interface LastError {
-  source: 'frame' | 'close' | 'local'
-  code: string
-  message: string
-  at: number
-}
+export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+
+export type LastError =
+  | { source: 'frame'; code: string; message: string; at: number }
+  | { source: 'close'; code: string; message: string; at: number }
+  | { source: 'local'; code: LocalErrorCode; message: string; at: number }
 
 export interface Diagnostics {
   lastError: LastError | null

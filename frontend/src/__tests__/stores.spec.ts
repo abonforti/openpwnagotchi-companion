@@ -483,7 +483,15 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
 // author for issue #176 (Diagnostics/LastError), not from stores.ts.
 // ---------------------------------------------------------------------------
 
-function sampleLastError(overrides: Partial<LastError> = {}): LastError {
+// Overrides are typed against the 'frame'/'close' pair, not the full
+// `LastError` union: both carry `code: string`, and every call site below
+// only ever swaps `source` between the two or changes `code`/`message`/`at`.
+// A `Partial<LastError>` would still typecheck a `source: 'local'` override
+// paired with an arbitrary `code` string, a combination the client can never
+// produce, so this fixture must not be able to build it either.
+type WireLastError = Extract<LastError, { source: 'frame' | 'close' }>
+
+function sampleLastError(overrides: Partial<WireLastError> = {}): LastError {
   return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000123, ...overrides }
 }
 

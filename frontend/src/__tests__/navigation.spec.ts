@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // --- storage stub -------------------------------------------------------
 
@@ -370,6 +370,37 @@ function currentEntryNames(): string[] {
 }
 
 // --- lifecycle --------------------------------------------------------------
+
+// Issue #133: this file is the only spec that imports App.svelte, so it is
+// also the only one paying, once per worker process, to first compile and
+// mount all seven views - Map's Leaflet import included. That cost lands
+// inside whichever `it` happens to run first, which is unrelated to what
+// that test asserts and made the suite flaky under load (a busy runner
+// pushed the first route test past the default 5s testTimeout even though
+// its own render is far cheaper). Mounting and discarding the shell once
+// here, in a beforeAll, moves the cost to the hook budget instead - a
+// separate timeout that a slow first compile is meant to spend - and off
+// every timed `it`. The measurement of what the 4.5s was actually paying
+// for is still owed; this only relocates the cost, it does not explain it.
+beforeAll(async () => {
+  fakeStorage = new FakeStorage()
+  vi.stubGlobal('localStorage', fakeStorage)
+  railMatches = false
+  installMatchMedia()
+  window.history.pushState({}, '', '/')
+
+  await renderShell('/')
+
+  if (instance && svelte) {
+    svelte.unmount(instance)
+  }
+  instance = null
+  svelte = null
+  container?.remove()
+  container = null
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+}, 20_000)
 
 beforeEach(() => {
   fakeStorage = new FakeStorage()

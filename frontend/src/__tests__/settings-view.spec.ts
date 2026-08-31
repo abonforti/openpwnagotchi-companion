@@ -922,7 +922,18 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
   // below asserts the empty case and the populated one in the same test, so
   // neither reading distinguishes "empty" from "the field does not exist".
   describe('lastError and latency (SPEC 4.3.10, issue #176)', () => {
-    function sampleLastError(overrides: Partial<LastError> = {}): LastError {
+    // Every call site below overrides at most `code`, `message` or `at`, or
+    // swaps `source` between 'frame' and 'close' - both of which carry
+    // `code: string`. Typing overrides against that pair (rather than the
+    // full `LastError` union) keeps a `source: 'local'` override paired with
+    // an arbitrary `code` string from typechecking here: the client can
+    // never produce that combination, and a fixture that could still build
+    // it would let a test assert behaviour for a case that does not exist.
+    // The `source: 'local'` fixtures below are built as literals instead,
+    // and already carry one of the two `LocalErrorCode` values.
+    type WireLastError = Extract<LastError, { source: 'frame' | 'close' }>
+
+    function sampleLastError(overrides: Partial<WireLastError> = {}): LastError {
       return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000000000, ...overrides }
     }
 

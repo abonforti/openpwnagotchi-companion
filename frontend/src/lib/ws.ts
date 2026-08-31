@@ -63,34 +63,35 @@ export interface WsClientOptions {
 // of its own.
 export type UnauthorizedReason = 'rejected' | 'required'
 
+// SPEC 4.3.10: the only two codes recordLocalError() ever writes. `LastError`
+// carries this type, not `string`, for `source: 'local'`, so
+// formatLastErrorCode's `source === 'local'` switch is checked total by the
+// compiler instead of carrying a default arm no runtime value could ever
+// reach.
+export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+
 /**
  * SPEC 4.3.10: what the client keeps of the last thing that went wrong,
  * either an `error` frame's `code` and `message`, the close the app did not
  * ask for, or a drop this client noticed itself before any close event
  * arrived. `source` discriminates the three rather than leaving a caller to
  * guess whether a numeric-looking `code` is a wire code that happens to be
- * digits: for a close, `code` is the close code in digits and is never a
- * wire code at all; for `'local'` it names the detection rather than a
- * number (`pong_timeout`, `connect_timeout`) and `message` is always empty,
- * there being no remote to have said anything.
+ * digits, and each arm carries the `code` type that source actually has: a
+ * frame's `code` is remote-chosen and never trusted (SPEC 4.3.10), so it
+ * stays `string`; a close's `code` is the browser's close code rendered in
+ * digits, also `string`; `'local'` names the detection this client made
+ * itself (`pong_timeout`, `connect_timeout`) rather than a number, so it is
+ * typed to `LocalErrorCode`, and its `message` is always empty, there being
+ * no remote to have said anything.
  *
  * `at` is a local timestamp (SPEC 4.3.10's clock, `WsDeps.now`), so a view
  * can say when this happened rather than leaving the reader to assume it
  * was now.
  */
-export interface LastError {
-  source: 'frame' | 'close' | 'local'
-  code: string
-  message: string
-  at: number
-}
-
-// SPEC 4.3.10: the only two codes recordLocalError() ever writes; `LastError`
-// itself keeps `code: string` for every source, so this is what lets
-// formatLastErrorCode's `source === 'local'` switch be checked total by the
-// compiler instead of carrying a default arm no runtime value could ever
-// reach.
-export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+export type LastError =
+  | { source: 'frame'; code: string; message: string; at: number }
+  | { source: 'close'; code: string; message: string; at: number }
+  | { source: 'local'; code: LocalErrorCode; message: string; at: number }
 
 /**
  * SPEC 4.3.10: the pair Settings needs and `onState` must not carry, because

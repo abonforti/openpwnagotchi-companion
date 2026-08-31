@@ -54,8 +54,11 @@ python -m compileall -q plugin/
 cd frontend && npm ci && npx svelte-check && npx tsc --noEmit && npx vitest run --coverage
 ```
 
-Python 3.11 is the target. If the local interpreter is newer, say so in the report — a pass on
-3.13 is not a pass on the device.
+The plugin suite runs twice (SPEC 5.1): on Python 3.13, the version the device ships (F26), and
+again on 3.11, the floor upstream declares (F21). The device's version is the one that blocks a
+merge; the floor runs because somebody can be on an older image. If the local interpreter is
+neither, say so in the report — a pass on a version that is not one of the two is not a pass on
+the device or the floor.
 
 ## Reporting
 

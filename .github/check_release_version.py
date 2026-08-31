@@ -200,12 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plugin_source = PLUGIN_PATH.read_text(encoding="utf-8")
     except OSError as err:
-        fail(f"cannot read {PLUGIN_PATH}: {err}")
+        fail(f"cannot read {PLUGIN_PATH.relative_to(ROOT)}: {err}")
 
     try:
         frontend_source = FRONTEND_PACKAGE_PATH.read_text(encoding="utf-8")
     except OSError as err:
-        fail(f"cannot read {FRONTEND_PACKAGE_PATH}: {err}")
+        fail(f"cannot read {FRONTEND_PACKAGE_PATH.relative_to(ROOT)}: {err}")
 
     plugin = plugin_version(plugin_source)
     frontend = frontend_version(frontend_source)

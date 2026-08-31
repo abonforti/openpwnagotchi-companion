@@ -151,7 +151,7 @@ def load_baseline() -> dict:
         return {}
     baseline = _load_json(BASELINE_PATH)
     if not isinstance(baseline, dict):
-        raise SystemExit(f"error: {BASELINE_PATH} does not hold a JSON object")
+        raise SystemExit(f"error: {BASELINE_PATH.name} does not hold a JSON object")
     return baseline
 
 

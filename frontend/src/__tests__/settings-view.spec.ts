@@ -2,13 +2,14 @@ import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Capabilities, OutgoingMessage, OutgoingStats, Stats } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { ConnectionState, Diagnostics, LastError, UnauthorizedReason, WsClient } from '../lib/ws'
 
 // Written wholesale from SPEC.md 4.5.2.1 ("Settings presentation and DOM
 // hooks", issue #134), the Settings bullet of 4.5.2, 4.5.1's ports-are-
 // diagnostics and IPv4-only rules, 4.7 (lib/settings.ts's own contract), and
-// 4.5.3/4.5.1.1's remote-string rule as it applies to the two remote
-// strings this screen renders (pluginVersion, unauthorizedReason).
+// 4.5.3/4.5.1.1's remote-string rule as it applies to the remote strings this
+// screen renders (pluginVersion, unauthorizedReason, and now lastError -
+// SPEC.md 4.3.10, issue #176).
 //
 // Deliberately not read from views/Settings.svelte. The previous version of
 // this file was written after that file had already been opened, guessed at
@@ -27,8 +28,9 @@ import type { ConnectionState, UnauthorizedReason, WsClient } from '../lib/ws'
 // position; data-action ("activate" | "remove" | "edit" | "save" | "cancel"
 // | "add" | "reveal", the last unmasking one token field at a time, in a row
 // or in the add form); data-field-error="address"; data-field
-// ("connectionState" | "pluginVersion" | "unauthorizedReason"), reusing
-// 4.5.1.1's data-empty convention except on unauthorizedReason, which
+// ("connectionState" | "pluginVersion" | "unauthorizedReason" | "lastError" |
+// "latency", the last two added by SPEC.md 4.3.10 / issue #176), reusing
+// 4.5.1.1's data-empty convention on all but unauthorizedReason, which
 // SPEC.md says carries none.
 
 // ---------------------------------------------------------------------------
@@ -217,8 +219,11 @@ class FakeWsClient {
   currentState: ConnectionState = 'connected'
   reasonValue: UnauthorizedReason | null = null
   private lastStatsValue: Stats | null = null
+  // SPEC 4.3.10: absent, not zero, until something sets it.
+  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
+  readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
 
   connect(): void {}
   close(): void {}
@@ -239,6 +244,13 @@ class FakeWsClient {
     this.messageHandlers.add(handler)
     return () => this.messageHandlers.delete(handler)
   }
+  diagnostics(): Diagnostics {
+    return this.diagnosticsValue
+  }
+  onDiagnostics(handler: (diagnostics: Diagnostics) => void): () => void {
+    this.diagnosticsHandlers.add(handler)
+    return () => this.diagnosticsHandlers.delete(handler)
+  }
   request(): Promise<OutgoingMessage> {
     return new Promise(() => {})
   }
@@ -256,6 +268,11 @@ class FakeWsClient {
   emitMessage(message: OutgoingMessage): void {
     if (message.type === 'stats') this.lastStatsValue = message.data
     for (const handler of [...this.messageHandlers]) handler(message)
+  }
+
+  emitDiagnostics(diagnostics: Diagnostics): void {
+    this.diagnosticsValue = diagnostics
+    for (const handler of [...this.diagnosticsHandlers]) handler(diagnostics)
   }
 }
 
@@ -900,15 +917,638 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
     expect(degradedText).not.toBe(connectedText)
   })
 
-  // "the last error and the latency have no surface at all ... a test that
-  // a view has not invented one is a test worth having."
-  it('has no lastError or latency surface (issue #176 has not landed)', async () => {
-    const { settings: api } = await mountSettings()
-    api.loadSettings(() => 'not-an-ip-address')
-    await settle()
+  // SPEC 4.3.10 / 4.5.2.1: lastError and latency both carry data-empty, "and
+  // carry it often: an app that has just started has neither." Each pair
+  // below asserts the empty case and the populated one in the same test, so
+  // neither reading distinguishes "empty" from "the field does not exist".
+  describe('lastError and latency (SPEC 4.3.10, issue #176)', () => {
+    function sampleLastError(overrides: Partial<LastError> = {}): LastError {
+      return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000000000, ...overrides }
+    }
 
-    expect(diagnosticFieldOrNull('lastError')).toBeNull()
-    expect(diagnosticFieldOrNull('latency')).toBeNull()
+    it('renders lastError with data-empty="true" before any error has been reported', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.getAttribute('data-empty')).toBe('true')
+    })
+
+    it('renders lastError once the client reports one, without data-empty', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: sampleLastError({ message: 'a distinctive sample message' }), latencyMs: null })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      expect(el.textContent ?? '').toContain('a distinctive sample message')
+    })
+
+    // "code is matched against known sentences and never printed, which
+    // 4.5.2.2 already required of it on the command path." An unrecognised
+    // code has no known sentence, so the raw wire value must not leak
+    // through as the fallback - a view that reflects it verbatim would pass
+    // a "renders something" test while breaking this rule specifically.
+    it('never prints the raw error code verbatim, even one the client has no known sentence for', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      const distinctiveUnmappedCode = 'zzz_unmapped_diagnostic_code_xyz'
+      client.emitDiagnostics({
+        lastError: sampleLastError({ code: distinctiveUnmappedCode, message: 'unit rebooted unexpectedly' }),
+        latencyMs: null,
+      })
+      await settle()
+
+      expect(root().textContent ?? '').not.toContain(distinctiveUnmappedCode)
+    })
+
+    it('renders latency with data-empty="true" before any measurement has been reported', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      await settle()
+
+      const el = diagnosticField('latency')
+      expect(el.getAttribute('data-empty')).toBe('true')
+    })
+
+    // SPEC 4.3.10: "whole milliseconds with its unit ... `123 ms`", and "not
+    // rounded to seconds" - exact text, not a substring, so a mutant that
+    // renders "123ms" (no space), "123" (no unit) or "0.1 s" still fails.
+    it('renders the latency as exact whole milliseconds with its unit - "123 ms"', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: null, latencyMs: 123 })
+      await settle()
+
+      const el = diagnosticField('latency')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      expect((el.textContent ?? '').trim()).toBe('123 ms')
+    })
+
+    // A latency of exactly 0ms is a measurement (SPEC 4.3.10), not the
+    // absence of one - guards against a falsy check on the store value, and
+    // against the pinned rendering collapsing to something that reads as
+    // absent (e.g. an empty string) for this one value specifically.
+    it('treats a measured latency of 0ms as present, not empty, and renders it as "0 ms"', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: null, latencyMs: 0 })
+      await settle()
+
+      const el = diagnosticField('latency')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      expect((el.textContent ?? '').trim()).toBe('0 ms')
+    })
+
+    it('renders a hostile lastError message as text, with no element or script created from it (SPEC 4.5.3)', async () => {
+      const HOSTILE = '<script>window.__pwned_settings_lasterror = true</script>'
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: sampleLastError({ message: HOSTILE }), latencyMs: null })
+      await settle()
+
+      expect(root().querySelector('script')).toBeNull()
+      expect((window as unknown as { __pwned_settings_lasterror?: boolean }).__pwned_settings_lasterror).not.toBe(
+        true,
+      )
+      delete (window as unknown as { __pwned_settings_lasterror?: boolean }).__pwned_settings_lasterror
+    })
+
+    // SPEC 4.3.10 (amended, issue #176): "A message that is not a string has
+    // no message ... Coercing it prints null, undefined or [object Object]
+    // on the line, attributed to the unit ... So a non-string is treated as
+    // absent - the code's sentence and the time still render, because those
+    // are facts this client established itself." This is the composed-line
+    // version of the rule format.spec.ts pins at the function level: the
+    // View must actually assemble the sentence and the time without the
+    // message part, not merely have a formatter that returns the empty
+    // string for a non-string input somewhere unused. `message` is cast
+    // through `unknown` because the wire carries no runtime validation
+    // (issue #109) and TypeScript's own `LastError` type would otherwise
+    // refuse to let the test construct this fixture at all.
+    it('a non-string message (the audit finding: an array) renders as absent, not coerced to its string form', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+
+      client.emitDiagnostics({
+        lastError: sampleLastError({
+          code: 'internal_error',
+          message: ['unexpected', 'array', 'payload'] as unknown as string,
+        }),
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = diagnosticField('lastError').textContent ?? ''
+      expect(text).not.toContain('unexpected,array,payload') // Array.prototype.toString() join
+      expect(text).not.toContain('[object')
+      expect(text).not.toContain('null')
+      expect(text).not.toContain('undefined')
+      // "the code's sentence and the time still render, because those are
+      // facts this client established itself" - the message is the only
+      // part missing, the line is not simply blanked out entirely.
+      expect(text.trim().length).toBeGreaterThan(0)
+      expect(/\d{1,2}:\d{2}/.test(text)).toBe(true)
+    })
+
+    // SPEC 4.3.10: "unauthorized, pasv_requires_auto, pasv_unavailable,
+    // log_unavailable and no_frame reuse the sentence they already carry ...
+    // every other frame code gets one generic sentence." No literal wording
+    // is pinned anywhere reachable without reading the implementation the
+    // spec itself is being authored against in parallel, so what is asserted
+    // here is the shape of the rule rather than its exact prose: a pinned
+    // code's line must differ from the generic line an unmapped code gets
+    // (catching "the special case was deleted and it now falls through"),
+    // and two different unmapped codes must produce byte-identical text
+    // (catching "the generic case quietly starts printing the code again",
+    // the mutation SPEC.md names explicitly). `message` is held identical
+    // across every comparison so the only thing that can make two lines
+    // differ is the sentence, not the message beside it.
+    describe('frame code -> sentence mapping (SPEC 4.3.10)', () => {
+      it('unauthorized renders a line distinct from the generic line an unmapped code gets', async () => {
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'an_unmapped_diagnostic_code_one', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const generic = diagnosticField('lastError').textContent
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'unauthorized', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const pinned = diagnosticField('lastError').textContent
+
+        expect(pinned).not.toBe(generic)
+      })
+
+      it('log_unavailable renders a line distinct from the generic line an unmapped code gets', async () => {
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'an_unmapped_diagnostic_code_two', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const generic = diagnosticField('lastError').textContent
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'log_unavailable', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const pinned = diagnosticField('lastError').textContent
+
+        expect(pinned).not.toBe(generic)
+      })
+
+      it('two different codes the client does not recognise render the identical generic line', async () => {
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'totally_unrecognised_code_alpha', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const first = diagnosticField('lastError').textContent
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ code: 'completely_different_unrecognised_beta', message: 'shared payload text' }),
+          latencyMs: null,
+        })
+        await settle()
+        const second = diagnosticField('lastError').textContent
+
+        expect(second).toBe(first)
+      })
+    })
+
+    // SPEC 4.3.10: "A close code is shown, and a wire code is not." Two
+    // halves of the same rule, both asserted here so an implementation that
+    // gets either half backwards (numbers always shown, or never shown)
+    // fails on one of the two branches.
+    describe('a close code reaches the screen, a frame code never does (SPEC 4.3.10)', () => {
+      it('a close (source "close") puts its numeric code on screen, distinguishing 1006 from 1008 from a clean 1000', async () => {
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ source: 'close', code: '1006', message: '' }),
+          latencyMs: null,
+        })
+        await settle()
+        const droppedText = diagnosticField('lastError').textContent ?? ''
+        expect(droppedText).toContain('1006')
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ source: 'close', code: '1008', message: '' }),
+          latencyMs: null,
+        })
+        await settle()
+        const refusedText = diagnosticField('lastError').textContent ?? ''
+        expect(refusedText).toContain('1008')
+        expect(refusedText).not.toBe(droppedText) // three different diagnoses, three different lines
+
+        client.emitDiagnostics({
+          lastError: sampleLastError({ source: 'close', code: '1000', message: '' }),
+          latencyMs: null,
+        })
+        await settle()
+        expect(diagnosticField('lastError').textContent ?? '').toContain('1000')
+      })
+
+      it('a frame (source "frame") never puts its code on screen, even one shaped like a close code', async () => {
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+
+        // §4.5.2.2's rule already forbade a raw wire code; this is the
+        // sibling case where the digits happen to look exactly like one of
+        // the close codes asserted above, so a mutant that renders `code`
+        // whenever it is numeric-looking (rather than gating on `source`)
+        // still fails.
+        client.emitDiagnostics({
+          lastError: sampleLastError({ source: 'frame', code: '1006', message: 'a coincidentally numeric code' }),
+          latencyMs: null,
+        })
+        await settle()
+
+        expect(diagnosticField('lastError').textContent ?? '').not.toContain('1006')
+      })
+    })
+
+    // SPEC 4.3.10 (amended, issue #176): "unauthorized reuses the reason it
+    // already carries and not the call to action beside it ... this line is
+    // already on the screen it would send them to." format.spec.ts pins the
+    // formatter itself; this pins that the View actually composes the line
+    // that way rather than gluing the call to action back on somewhere
+    // between the formatter and the DOM.
+    it('unauthorized carries the reason but not "Fix it in Settings" - that call to action is redundant on this screen', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+
+      client.emitDiagnostics({
+        lastError: sampleLastError({ source: 'frame', code: 'unauthorized', message: '' }),
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = diagnosticField('lastError').textContent ?? ''
+      expect(text).toContain('refused the stored token')
+      expect(text).not.toContain('Fix it in Settings')
+    })
+
+    // SPEC 4.3.10: "it is one sentence of prose ... it does not read as a
+    // sentence with its own full stop glued to a second one." The sibling of
+    // the pasv_unavailable case above, now expressible for `unauthorized`
+    // too: now that §4.3.10 has settled that `unauthorized` reuses only the
+    // single-sentence reason (never the call-to-action clause), its reused
+    // sentence is single-sentence exactly like pasv_unavailable's, so the
+    // same "exactly one full stop" count applies to it as well.
+    it('unauthorized is also one sentence of prose, not two glued together, now that only the reason is reused', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+
+      client.emitDiagnostics({
+        lastError: sampleLastError({ source: 'frame', code: 'unauthorized', message: 'token value did not match' }),
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = (diagnosticField('lastError').textContent ?? '').trim()
+      expect(text).toContain('refused the stored token')
+      expect(text).toContain('token value did not match')
+      expect(text).not.toContain('Fix it in Settings')
+      expect(text).not.toContain('.:')
+      expect(text).not.toContain('. :')
+      expect(text).not.toContain('..')
+      expect(text.match(/\./g)?.length ?? 0).toBe(1)
+    })
+
+    // SPEC 4.3.10: "`at` is rendered, as a time of day rather than an age".
+    // The testable core of that is that formatting `at` is a pure function
+    // of the stamp, not of the clock at the moment of render - the mistake
+    // an "age" computation makes. Proven by rendering the same fixed `at`
+    // from two completely separate mounts with the system clock ten minutes
+    // apart between them: an age would differ, a time of day would not.
+    it('at renders as a pure function of the stamp: the same `at` produces the same text however far the clock has since moved (SPEC 4.3.10)', async () => {
+      const FIXED_AT = 1_700_000_000_000
+
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date(FIXED_AT))
+        const client1 = new FakeWsClient()
+        const { settings: api1, stores: stores1 } = await mountSettings()
+        api1.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores1.connectStores(asClient(client1))
+        client1.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        await settle()
+        const firstText = diagnosticField('lastError').textContent
+
+        // Tear the first mount down completely before the second, exactly as
+        // the file's own afterEach does, so the two mounts are independent.
+        if (instance && svelte) svelte.unmount(instance)
+        container?.remove()
+        if (teardownStores) {
+          teardownStores()
+          teardownStores = null
+        }
+        instance = null
+        container = null
+
+        vi.setSystemTime(new Date(FIXED_AT + 10 * 60 * 1000)) // ten minutes later, same `at`
+
+        const client2 = new FakeWsClient()
+        const { settings: api2, stores: stores2 } = await mountSettings()
+        api2.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores2.connectStores(asClient(client2))
+        client2.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        await settle()
+        const laterText = diagnosticField('lastError').textContent
+
+        expect(laterText).toBe(firstText)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // SPEC 4.5.2.1's field list names five diagnostics, and `at` is folded
+    // into the same `data-field="lastError"` text rather than getting a
+    // sixth hook of its own.
+    it('at has no data-field hook of its own - it lives inside data-field="lastError"', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: sampleLastError(), latencyMs: null })
+      await settle()
+
+      expect(diagnosticFieldOrNull('at')).toBeNull()
+    })
+
+    // SPEC 4.3.10: the pinned test that was missing. "at renders as a pure
+    // function of the stamp" above compares two renders of the *same*
+    // stamp, so an implementation that omits the time from the line
+    // entirely still passes it (two identical omissions are still equal).
+    // This pins the actual rendered text for one fixed `at`, so a rendering
+    // that drops the time - or renders it wrong - fails here even though
+    // the pure-function test above cannot see it. The system clock is fixed
+    // for the render (not just for the stamp) so the test does not depend
+    // on the host's own timezone: SPEC 4.5.1.1's own `formatUnitTime` tests
+    // extract an "H:MM" pair rather than pin an exact clock string for
+    // exactly this reason, and the same discipline is used here.
+    it('renders the time of day for a fixed `at`, not merely something that repeats (SPEC 4.3.10)', async () => {
+      const FIXED_AT = new Date(2026, 7, 15, 9, 14, 0).getTime() // local 09:14, a whole minute
+
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date(FIXED_AT)) // "now" is the stamp itself: today, not another day
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+        client.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        await settle()
+
+        const text = diagnosticField('lastError').textContent ?? ''
+        const match = /(\d{1,2}):(\d{2})/.exec(text)
+        expect(match, `expected an "H:MM" clock time in ${JSON.stringify(text)}`).not.toBeNull()
+        const [, h, m] = match as RegExpExecArray
+        // 09:14 local, allowing a 12h-with-meridiem rendering (hour 9 either way).
+        expect(Number(h)).toBe(9)
+        expect(m).toBe('14')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // SPEC 4.3.10 (amended): "A stamp from another day says so ... a bare
+    // HH:MM then reads as something that happened today." A last error
+    // recorded at 23:59 and read after midnight, with the app never having
+    // reconnected in between (so nothing else could have cleared it), must
+    // not render as if it happened on the day it is being read.
+    it('a stamp from another day renders with a date, not a bare HH:MM that would read as today (SPEC 4.3.10)', async () => {
+      const YESTERDAY_2359 = new Date(2026, 7, 14, 23, 59, 0).getTime()
+      const TODAY_0001 = new Date(2026, 7, 15, 0, 1, 0).getTime() // just after midnight
+
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date(TODAY_0001))
+        const client = new FakeWsClient()
+        const { settings: api, stores } = await mountSettings()
+        api.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores.connectStores(asClient(client))
+        client.emitDiagnostics({ lastError: sampleLastError({ at: YESTERDAY_2359 }), latencyMs: null })
+        await settle()
+        const crossDayText = diagnosticField('lastError').textContent ?? ''
+
+        if (instance && svelte) svelte.unmount(instance)
+        container?.remove()
+        if (teardownStores) {
+          teardownStores()
+          teardownStores = null
+        }
+        instance = null
+        container = null
+
+        // The same 23:59 stamp, but read the same day it was recorded -
+        // the control that isolates "the date got added" from "the render
+        // just differs for some unrelated reason".
+        vi.setSystemTime(new Date(YESTERDAY_2359 + 30_000)) // 30s later, same day
+        const client2 = new FakeWsClient()
+        const { settings: api2, stores: stores2 } = await mountSettings()
+        api2.loadSettings(() => 'not-an-ip-address')
+        teardownStores = stores2.connectStores(asClient(client2))
+        client2.emitDiagnostics({ lastError: sampleLastError({ at: YESTERDAY_2359 }), latencyMs: null })
+        await settle()
+        const sameDayText = diagnosticField('lastError').textContent ?? ''
+
+        expect(crossDayText).not.toBe(sameDayText)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // SPEC 4.3.10 (amended): "it is one sentence of prose ... it does not
+    // read as a sentence with its own full stop glued to a second one."
+    // The review found `The unit refused the stored token.: token rejected
+    // at 14:03` reaching the screen - a sentence's own trailing "." with a
+    // second delimiter glued directly onto it. `pasv_unavailable` is used
+    // here rather than `unauthorized` because its reused sentence (SPEC's
+    // PASV-control table) is a single sentence with no call-to-action
+    // clause of its own, so a legitimate render contains exactly one "."
+    // in total - unlike `unauthorized`'s reused banner text, which is
+    // itself two sentences and would make a period count ambiguous. The
+    // message and the rendered time are both chosen with no "." of their
+    // own so the sentence's own trailing stop is the only one that may
+    // legitimately appear.
+    it('is one sentence of prose, not a sentence with a second full stop glued onto it (SPEC 4.3.10)', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: sampleLastError({ source: 'frame', code: 'pasv_unavailable', message: 'PASV mode requires AUTO' }),
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = (diagnosticField('lastError').textContent ?? '').trim()
+      // The sentence SPEC's own PASV-control table pins for this code, with
+      // its trailing full stop taken off by the assembly rule (SPEC 4.3.10:
+      // "the sentences arrive with their full stops and the assembly takes
+      // them off"), so the substring checked here deliberately omits it -
+      // asserting the sentence *with* its stop here would require the join
+      // to double it up, which is the defect this whole block exists to
+      // catch.
+      expect(text).toContain('The unit does not have the PASV plugin')
+      expect(text).toContain('PASV mode requires AUTO')
+      expect(text).not.toContain('.:')
+      expect(text).not.toContain('. :')
+      expect(text).not.toContain('..')
+      expect(text.match(/\./g)?.length ?? 0).toBe(1)
+    })
+
+    // SPEC 4.3.10 (amended): "log_unavailable carries two [sentences] ...
+    // Reusing it here means this line carries two as well, which is the
+    // price of the rule that one code is worded once." The test above chose
+    // pasv_unavailable specifically to keep its period count at exactly one;
+    // this is the sibling that pins the two-sentence exception instead of
+    // sidestepping it, per the review's instruction not to leave it avoided.
+    // Only the reused sentence's own *trailing* stop is taken off by the
+    // assembly (the same rule as every other code); the internal stop after
+    // "log" belongs to the sentence itself and survives, so a legitimate
+    // render carries exactly two "." in total: one internal, one added by
+    // the assembly at the very end of the composed line (the same one the
+    // pasv_unavailable test above counts as its only period).
+    it('log_unavailable renders both of its sentences, not just the first (SPEC 4.3.10)', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: sampleLastError({ source: 'frame', code: 'log_unavailable', message: 'no config on disk' }),
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = (diagnosticField('lastError').textContent ?? '').trim()
+      expect(text).toContain('The unit could not read its log')
+      expect(text).toContain('With no agent it has no configuration to find the path in')
+      expect(text).toContain('no config on disk')
+      expect(text).not.toContain('.:')
+      expect(text).not.toContain('. :')
+      expect(text).not.toContain('..')
+      expect(text.match(/\./g)?.length ?? 0).toBe(2)
+    })
+  })
+
+  // SPEC 4.3.10 (resolved, issue #176): "Each of the two gets its own
+  // sentence, and the five-code table above does not govern them ... They
+  // must not collapse into each other or into the generic sentence."
+  // format.spec.ts pins the exact-wording level of this rule (the two
+  // sentences differ from each other and from the generic case, and each
+  // contains its distinguishing phrase); this file stays at the DOM level
+  // it was already at. Before this block, no fixture anywhere in this file
+  // built a `source: 'local'` LastError, so an implementation returning the
+  // generic frame sentence for both codes, swapping the two, or throwing on
+  // the unfamiliar `source` value passed every DOM test in the suite
+  // regardless. What is asserted here: both render a real, non-empty line
+  // with the time on it and never leak their own raw code.
+  describe('source "local" - a drop this client detected itself (SPEC 4.3.10)', () => {
+    it('pong_timeout renders a real line with a time on it, and never leaks the raw code', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: { source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 },
+        latencyMs: null,
+      })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      const text = el.textContent ?? ''
+      expect(text.trim().length).toBeGreaterThan(0)
+      expect(text).not.toContain('pong_timeout')
+      expect(/\d{1,2}:\d{2}/.test(text)).toBe(true)
+    })
+
+    it('connect_timeout renders a real line with a time on it, and never leaks the raw code', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: { source: 'local', code: 'connect_timeout', message: '', at: 1_700_000_000_000 },
+        latencyMs: null,
+      })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      const text = el.textContent ?? ''
+      expect(text.trim().length).toBeGreaterThan(0)
+      expect(text).not.toContain('connect_timeout')
+      expect(/\d{1,2}:\d{2}/.test(text)).toBe(true)
+    })
+
+    // "A close code is shown, and a wire code is not." source 'local' is
+    // neither 'close' nor a numeric code - the sibling of the frame-vs-close
+    // digit test above (SPEC 4.3.10, "the rendered sentence comes from the
+    // code, as it does for a frame").
+    it('neither local code renders any digits on screen - source "local" is not the close case', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: { source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 },
+        latencyMs: null,
+      })
+      await settle()
+
+      const text = diagnosticField('lastError').textContent ?? ''
+      expect(/\b1\d{3}\b/.test(text)).toBe(false) // no close-code-shaped digits (1000-1999) anywhere
+    })
   })
 
   describe('unauthorizedReason', () => {

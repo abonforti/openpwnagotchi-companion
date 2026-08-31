@@ -12,7 +12,7 @@ import type {
   OutgoingStats,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 // DASH and EMPTY_LABEL are the pre-existing SPEC 4.5.1.1 surface, not part
 // of this change: the row-level empty rule this file exercises on Nearby
 // and Captured fields is that section's own rule, restated for this view by
@@ -215,6 +215,12 @@ class FakeWsClient {
     return Promise.reject(new Error('the wifi view must never send a command, only reads'))
   }
   sendGps(): void {}
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
+  }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state

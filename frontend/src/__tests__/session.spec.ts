@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AccessPoint, OutgoingAccessPoints, OutgoingLogLines, OutgoingMessage, OutgoingPeersList, Peer } from '../lib/protocol'
 import type { Host } from '../lib/settings'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.8, 4.4.2 and 4.7, and the fixed public surface
 // handed to the test author for issue #119. Deliberately not read from
@@ -248,6 +248,16 @@ class FakeWsClient {
 
   sendGps(): void {
     // Not exercised: no test in this file drives GPS.
+  }
+
+  diagnostics(): Diagnostics {
+    // Not exercised: no test in this file asserts on diagnostics content.
+    return { lastError: null, latencyMs: null }
+  }
+
+  onDiagnostics(): () => void {
+    // Not exercised: no test in this file drives diagnostics.
+    return () => {}
   }
 
   /** Test-only: what connectStores' attach-time seeding (SPEC 4.4.2) will read for lastStats(). */

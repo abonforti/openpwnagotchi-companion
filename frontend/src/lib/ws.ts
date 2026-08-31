@@ -43,6 +43,11 @@ export interface SocketLike {
 export interface WsDeps {
   createSocket(url: string): SocketLike
   random(): number // the jitter draw, so a distribution can be asserted
+  // SPEC 4.3.10: the clock the latency measurement is taken against, for the
+  // same reason random() is already here -- a duration asserted against the
+  // wall clock is asserted against how long the test host took to run the
+  // test, not against the round trip it claims to measure.
+  now(): number
 }
 
 export interface WsClientOptions {
@@ -57,6 +62,46 @@ export interface WsClientOptions {
 // shown, so this is a field on the unauthorized state rather than a state
 // of its own.
 export type UnauthorizedReason = 'rejected' | 'required'
+
+/**
+ * SPEC 4.3.10: what the client keeps of the last thing that went wrong,
+ * either an `error` frame's `code` and `message`, the close the app did not
+ * ask for, or a drop this client noticed itself before any close event
+ * arrived. `source` discriminates the three rather than leaving a caller to
+ * guess whether a numeric-looking `code` is a wire code that happens to be
+ * digits: for a close, `code` is the close code in digits and is never a
+ * wire code at all; for `'local'` it names the detection rather than a
+ * number (`pong_timeout`, `connect_timeout`) and `message` is always empty,
+ * there being no remote to have said anything.
+ *
+ * `at` is a local timestamp (SPEC 4.3.10's clock, `WsDeps.now`), so a view
+ * can say when this happened rather than leaving the reader to assume it
+ * was now.
+ */
+export interface LastError {
+  source: 'frame' | 'close' | 'local'
+  code: string
+  message: string
+  at: number
+}
+
+// SPEC 4.3.10: the only two codes recordLocalError() ever writes; `LastError`
+// itself keeps `code: string` for every source, so this is what lets
+// formatLastErrorCode's `source === 'local'` switch be checked total by the
+// compiler instead of carrying a default arm no runtime value could ever
+// reach.
+export type LocalErrorCode = 'pong_timeout' | 'connect_timeout'
+
+/**
+ * SPEC 4.3.10: the pair Settings needs and `onState` must not carry, because
+ * latency changes without the state changing, once per ping interval, and a
+ * client that fired `onState` to announce a round trip would be telling
+ * every subscriber the state moved when it did not.
+ */
+export interface Diagnostics {
+  lastError: LastError | null
+  latencyMs: number | null
+}
 
 /**
  * SPEC 4.5.2.2: what an `error` frame rejects a read or a command with,
@@ -121,8 +166,12 @@ export interface WsClient {
   state(): ConnectionState
   unauthorizedReason(): UnauthorizedReason | null
   lastStats(): Stats | null
+  diagnostics(): Diagnostics
   onState(handler: (state: ConnectionState) => void): () => void
   onMessage(handler: (message: OutgoingMessage) => void): () => void
+  // SPEC 4.3.10: a second callback rather than folded into onState, see the
+  // comment on Diagnostics above.
+  onDiagnostics(handler: (diagnostics: Diagnostics) => void): () => void
   request<K extends ReadRequest['type']>(
     type: K,
     ...rest: PayloadArgs<Extract<ReadRequest, { type: K }>>
@@ -278,6 +327,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
   const deps: WsDeps = {
     createSocket: options.deps?.createSocket ?? defaultCreateSocket,
     random: options.deps?.random ?? (() => Math.random()),
+    now: options.deps?.now ?? (() => Date.now()),
   }
 
   let currentState: ConnectionState = 'offline'
@@ -289,6 +339,12 @@ export function createWsClient(options: WsClientOptions): WsClient {
   let connectionReady = false
   let firstStatsReceivedThisConnection = false
   let socketOpenedThisConnection = false
+  // SPEC 4.3.10: also doubles as the "does a close overwrite the last
+  // error" guard below. The rule is scoped to `unauthorized` alone, not to
+  // any frame error on the connection -- a benign `pasv_unavailable` at ten
+  // in the morning must not suppress the drop that ends the link four hours
+  // later, so this is the same flag `enterUnauthorized('rejected')` already
+  // reads, not a second one that would drift from it.
   let lastErrorWasUnauthorized = false
 
   // SPEC 4.3.1: the fallback for a transport that swallows the server's 1008
@@ -308,6 +364,12 @@ export function createWsClient(options: WsClientOptions): WsClient {
   let restartReason: RestartReason | null = null
   let unauthorizedReasonValue: UnauthorizedReason | null = null
   let lastStatsValue: Stats | null = null
+  let lastErrorValue: LastError | null = null
+  let latencyMsValue: number | null = null
+  // SPEC 4.3.10: the local send stamp for the outstanding ping, cleared the
+  // moment a pong answers it (or the socket goes) so a later pong -- late,
+  // duplicate or unsolicited -- has nothing to measure against.
+  let pingSentAtMs: number | null = null
 
   let backoffAttempt = 0
   let backoffTimer: ReturnType<typeof setTimeout> | null = null
@@ -320,6 +382,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
   let messageCounter = 0
   const stateHandlers = new Set<(state: ConnectionState) => void>()
   const messageHandlers = new Set<(message: OutgoingMessage) => void>()
+  const diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
 
   const pendingReads = new Map<string, PendingRead>()
   let queue: string[] = [] // ids of pendingReads not yet sent on the current connection
@@ -333,13 +396,44 @@ export function createWsClient(options: WsClientOptions): WsClient {
     return `msg-${messageCounter}`
   }
 
+  function notifyDiagnostics(): void {
+    const value: Diagnostics = { lastError: lastErrorValue, latencyMs: latencyMsValue }
+    for (const handler of [...diagnosticsHandlers]) handler(value)
+  }
+
+  function setLastError(next: LastError | null): void {
+    lastErrorValue = next
+    notifyDiagnostics()
+  }
+
+  function setLatency(next: number | null): void {
+    latencyMsValue = next
+    notifyDiagnostics()
+  }
+
   function setState(next: ConnectionState): void {
+    const wasLive = currentState === 'connected' || currentState === 'degraded'
     const enteringLive = next === 'connected' || next === 'degraded'
-    const leavingLive = (currentState === 'connected' || currentState === 'degraded') && !enteringLive
+    const leavingLive = wasLive && !enteringLive
+    // SPEC 4.3.10: "cleared on the transition, never on the state being
+    // re-entered" -- a `stats` push calls setState('connected'/'degraded')
+    // again once per broadcast interval while the connection is already
+    // live, and a clearing rule keyed to the target state alone would erase
+    // every error that arrives on a live connection seconds after it was
+    // recorded. Computed the same way leavingLive is: from whether the
+    // state was already admitted, not from where it is going.
+    const admittingNow = enteringLive && !wasLive
     currentState = next
     if (enteringLive) {
       backoffAttempt = 0
       if (!heartbeatActive) armHeartbeat()
+      // SPEC 4.3.10: cleared once the connection is admitted -- 'connected',
+      // or 'degraded', which SPEC 4.3.10 counts as admitted too: a connection
+      // carrying stale data, not a failed one. Not before: the failure that
+      // matters is the one still happening, and a client that retries every
+      // few seconds would otherwise erase the reason at the start of each
+      // attempt.
+      if (admittingNow && lastErrorValue !== null) setLastError(null)
     } else if (leavingLive) {
       disarmHeartbeat()
     }
@@ -383,6 +477,11 @@ export function createWsClient(options: WsClientOptions): WsClient {
       clearTimeout(pongTimer)
       pongTimer = null
     }
+    pingSentAtMs = null
+    // SPEC 4.3.10: latency describes a link, and a link whose heartbeat just
+    // stopped has no round trip to show -- not carried across the gap, the
+    // same reasoning that keeps a dropped session's stats off screen.
+    if (latencyMsValue !== null) setLatency(null)
   }
 
   function scheduleNextPing(): void {
@@ -399,6 +498,11 @@ export function createWsClient(options: WsClientOptions): WsClient {
   function sendPing(): void {
     pingTimer = null
     if (!currentSocket) return
+    // SPEC 4.3.10: the local send stamp, taken here rather than read off the
+    // reply -- pong.json carries its own timestamp and this measurement
+    // never reads it, so the round trip is a duration and not a subtraction
+    // of two clocks that may disagree by days on a unit with no RTC.
+    pingSentAtMs = deps.now()
     trySend(currentSocket, JSON.stringify({ type: 'ping' }))
     pongTimer = setTimeout(onPongTimeout, PONG_TIMEOUT_MS)
   }
@@ -408,7 +512,25 @@ export function createWsClient(options: WsClientOptions): WsClient {
       clearTimeout(pongTimer)
       pongTimer = null
     }
+    // SPEC 4.3.10: only a pong answering an outstanding ping updates the
+    // latency -- guarded on the send stamp itself rather than on pongTimer,
+    // so a pong that somehow arrives with no outstanding ping to answer
+    // measures nothing instead of a NaN duration.
+    if (pingSentAtMs !== null) {
+      setLatency(deps.now() - pingSentAtMs)
+      pingSentAtMs = null
+    }
     scheduleNextPing()
+  }
+
+  // SPEC 4.3.10: a drop this client detected itself, recorded the same as
+  // any other last error -- `source: 'local'` because it is neither a frame
+  // nor a close, `message` empty because there is no remote to have said
+  // anything. Called from both places this client notices a dead link on
+  // its own, before discardSocketSilently() unhooks onclose and the
+  // browser's own close event (if it ever arrives at all) is lost.
+  function recordLocalError(code: LocalErrorCode): void {
+    setLastError({ source: 'local', code, message: '', at: deps.now() })
   }
 
   function onPongTimeout(): void {
@@ -416,6 +538,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     // SPEC 4.3.1/4.3.2: no pong within the timeout is a dead socket, not a
     // slow one. `connected` and `degraded` both go straight back to
     // `connecting`, immediately rather than through the backoff schedule.
+    recordLocalError('pong_timeout')
     discardSocketSilently()
     disarmHeartbeat()
     rejectInFlightCommands('the connection dropped while the command was in flight')
@@ -654,6 +777,15 @@ export function createWsClient(options: WsClientOptions): WsClient {
         break
       case 'error':
         if (message.data.code === 'unauthorized') lastErrorWasUnauthorized = true
+        // SPEC 4.3.10: every code goes through, including the ones SPEC
+        // 4.3.5 routes elsewhere -- log_unavailable has its own sentence in
+        // the Log view and it is still the last error the connection saw.
+        setLastError({
+          source: 'frame',
+          code: message.data.code,
+          message: message.data.message,
+          at: deps.now(),
+        })
         break
       case 'pong':
         onPong()
@@ -681,6 +813,30 @@ export function createWsClient(options: WsClientOptions): WsClient {
     requeueUnresolvedReads()
     currentSocket = null
     connectionReady = false
+
+    // SPEC 4.3.10: a close records an error only when the app did not ask
+    // for it. close() itself never reaches here -- discardSocketSilently()
+    // detaches this handler before the socket actually closes, which is
+    // what keeps a locally-requested disconnect from recording anything;
+    // `!stopped` is the same rule held a second time, at the one place the
+    // caller's intent is known for certain. A close reached while
+    // `restarting` is the other kind of close the app asked for --
+    // `reboot`, `shutdown` and a mode change all end the socket on
+    // purpose -- and records nothing either: the app knows what it did and
+    // the owner watched themselves do it, so `The connection closed (code
+    // 1006)` would explain an event that needs no explanation, and for
+    // `shutdown` the client is terminal by guard and never re-admitted, so
+    // the clearing rule never fires and that sentence would stay for the
+    // life of the app. A close does not overwrite a last error whose code
+    // was `unauthorized`, and only that code: the rule exists for the
+    // plugin sending `unauthorized` and then closing with 1008, not for any
+    // frame error on the connection, so a benign `pasv_unavailable` earlier
+    // on this same connection must not suppress the drop that ends it
+    // later. Same scope SPEC 4.3.1 gives the unauthorized latch, and the
+    // same flag.
+    if (!stopped && currentState !== 'restarting' && !lastErrorWasUnauthorized) {
+      setLastError({ source: 'close', code: `${event.code}`, message: event.reason, at: deps.now() })
+    }
 
     if (currentState === 'restarting') {
       handleRestartingClose()
@@ -737,6 +893,10 @@ export function createWsClient(options: WsClientOptions): WsClient {
       // arrives, still reaches `offline` rather than sitting here for ever.
       connectingBoundTimer = setTimeout(() => {
         connectingBoundTimer = null
+        // SPEC 4.3.10: this is the same "detected the drop itself" case as
+        // onPongTimeout, for the socket that never got as far as a
+        // heartbeat to notice on.
+        recordLocalError('connect_timeout')
         discardSocketSilently()
         disarmHeartbeat()
         rejectInFlightCommands('the connection dropped while the command was in flight')
@@ -818,6 +978,10 @@ export function createWsClient(options: WsClientOptions): WsClient {
     return lastStatsValue
   }
 
+  function diagnostics(): Diagnostics {
+    return { lastError: lastErrorValue, latencyMs: latencyMsValue }
+  }
+
   function onState(handler: (state: ConnectionState) => void): () => void {
     stateHandlers.add(handler)
     return () => stateHandlers.delete(handler)
@@ -826,6 +990,11 @@ export function createWsClient(options: WsClientOptions): WsClient {
   function onMessage(handler: (message: OutgoingMessage) => void): () => void {
     messageHandlers.add(handler)
     return () => messageHandlers.delete(handler)
+  }
+
+  function onDiagnostics(handler: (diagnostics: Diagnostics) => void): () => void {
+    diagnosticsHandlers.add(handler)
+    return () => diagnosticsHandlers.delete(handler)
   }
 
   // Typed against the read subset of the generated IncomingMessage union
@@ -934,8 +1103,10 @@ export function createWsClient(options: WsClientOptions): WsClient {
     state,
     unauthorizedReason,
     lastStats,
+    diagnostics,
     onState,
     onMessage,
+    onDiagnostics,
     request,
     command,
     sendGps,

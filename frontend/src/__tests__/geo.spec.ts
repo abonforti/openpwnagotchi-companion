@@ -6,7 +6,7 @@ import gpsDataSchema from '../../../docs/schemas/incoming/gps_data.json'
 import { formatGeoStateMessage, formatGeoToggleLabel } from '../lib/format'
 import type { GeoState } from '../lib/geo'
 import type { Capabilities, Gps, OutgoingMessage, OutgoingStats } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
 
 // Written from SPEC.md 4.6 and 4.6.2 ("Acquiring the position: the tap, the
 // third timer, and what backgrounding takes away", issue #175), which is
@@ -171,6 +171,12 @@ class FakeWsClient {
   }
   sendGps(data: Record<string, unknown>): void {
     this.sendGpsCalls.push(data)
+  }
+  diagnostics(): Diagnostics {
+    return { lastError: null, latencyMs: null }
+  }
+  onDiagnostics(): () => void {
+    return () => {}
   }
 
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {

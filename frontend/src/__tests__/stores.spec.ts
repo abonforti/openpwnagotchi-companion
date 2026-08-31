@@ -33,7 +33,7 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason, WsClient } from '../lib/ws'
+import type { ConnectionState, Diagnostics, LastError, UnauthorizedReason, WsClient } from '../lib/ws'
 import {
   accessPoints,
   capabilities,
@@ -271,8 +271,11 @@ class FakeWsClient {
   currentState: ConnectionState = 'offline'
   reasonValue: UnauthorizedReason | null = null
   private lastStatsValue: Stats | null = null
+  // SPEC 4.3.10: absent, not zero, until something sets it.
+  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
+  readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
   readonly requestCalls: RecordedRequest[] = []
   private readonly pendingRequests: Array<{
     resolve: (message: OutgoingMessage) => void
@@ -311,6 +314,15 @@ class FakeWsClient {
     return () => this.messageHandlers.delete(handler)
   }
 
+  diagnostics(): Diagnostics {
+    return this.diagnosticsValue
+  }
+
+  onDiagnostics(handler: (diagnostics: Diagnostics) => void): () => void {
+    this.diagnosticsHandlers.add(handler)
+    return () => this.diagnosticsHandlers.delete(handler)
+  }
+
   request(type: string, data?: unknown): Promise<OutgoingMessage> {
     this.requestCalls.push({ type, data })
     return new Promise((resolve, reject) => {
@@ -331,6 +343,11 @@ class FakeWsClient {
     this.lastStatsValue = data
   }
 
+  /** Test-only: sets the value connectStores should seed diagnostics from at mount, before connect() was ever called on a real client (SPEC 4.3.10, mirrors primeLastStats). */
+  primeDiagnostics(diagnostics: Diagnostics): void {
+    this.diagnosticsValue = diagnostics
+  }
+
   /** Test-only: simulates the client entering a new state, exactly as onState would deliver it. */
   emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
     this.currentState = state
@@ -342,6 +359,12 @@ class FakeWsClient {
   emitMessage(message: OutgoingMessage): void {
     if (message.type === 'stats') this.lastStatsValue = message.data
     for (const handler of [...this.messageHandlers]) handler(message)
+  }
+
+  /** Test-only: simulates the client's diagnostics changing, exactly as onDiagnostics would deliver it (SPEC 4.3.10). */
+  emitDiagnostics(diagnostics: Diagnostics): void {
+    this.diagnosticsValue = diagnostics
+    for (const handler of [...this.diagnosticsHandlers]) handler(diagnostics)
   }
 
   /**
@@ -405,7 +428,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     fake.currentState = 'degraded'
     mount(fake)
-    expect(get(connection)).toEqual({ state: 'degraded', unauthorizedReason: null })
+    expect(get(connection)).toEqual({ state: 'degraded', unauthorizedReason: null, lastError: null, latencyMs: null })
   })
 
   it('carries every connection state through unchanged', () => {
@@ -414,7 +437,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'restarting']
     for (const state of states) {
       fake.emitState(state)
-      expect(get(connection)).toEqual({ state, unauthorizedReason: null })
+      expect(get(connection)).toEqual({ state, unauthorizedReason: null, lastError: null, latencyMs: null })
     }
   })
 
@@ -422,9 +445,9 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'rejected' })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'rejected', lastError: null, latencyMs: null })
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required' })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', lastError: null, latencyMs: null })
   })
 
   it('clears the reason once the client leaves unauthorized, rather than keeping it stale', () => {
@@ -432,7 +455,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
     fake.emitState('connecting')
-    expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null })
+    expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null, lastError: null, latencyMs: null })
   })
 
   it('reads offline once no client is attached, not the client\'s last reported state (SPEC 4.4.2)', () => {
@@ -445,11 +468,124 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('connected')
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null })
+    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, lastError: null, latencyMs: null })
 
     teardown?.()
 
-    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null })
+    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null, lastError: null, latencyMs: null })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC 4.3.10 / 4.4.1: ConnectionView gains lastError and latencyMs, mirrored
+// from WsClient.diagnostics()/onDiagnostics() exactly as state/unauthorizedReason
+// already are. Written from the same public surface handed to the ws.ts test
+// author for issue #176 (Diagnostics/LastError), not from stores.ts.
+// ---------------------------------------------------------------------------
+
+function sampleLastError(overrides: Partial<LastError> = {}): LastError {
+  return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000123, ...overrides }
+}
+
+describe('connection: the diagnostics pair mirrors the client, not a second opinion (SPEC 4.3.10)', () => {
+  it('seeds lastError and latencyMs from the client at mount, before any onDiagnostics push', () => {
+    const fake = new FakeWsClient()
+    const seededError = sampleLastError()
+    fake.primeDiagnostics({ lastError: seededError, latencyMs: 42 })
+    mount(fake)
+    expect(get(connection)).toEqual({
+      state: 'offline',
+      unauthorizedReason: null,
+      lastError: seededError,
+      latencyMs: 42,
+    })
+  })
+
+  it('shows null lastError and null latencyMs at mount when the client has neither yet, rather than a placeholder shape', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    expect(get(connection).lastError).toBeNull()
+    expect(get(connection).latencyMs).toBeNull()
+  })
+
+  it('carries a diagnostics update through unchanged, without disturbing state or unauthorizedReason', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitState('connected')
+    const error = sampleLastError({ source: 'close', code: '1006', message: '' })
+    fake.emitDiagnostics({ lastError: error, latencyMs: 88 })
+    expect(get(connection)).toEqual({
+      state: 'connected',
+      unauthorizedReason: null,
+      lastError: error,
+      latencyMs: 88,
+    })
+  })
+
+  // A latency of exactly 0ms is a measurement, not the absence of one - a
+  // mirror that treats a falsy number the same as null would silently turn
+  // a very fast link into "no data", which is the reading SPEC 4.3.10 rules
+  // out ("both are absent rather than zero when [there is nothing to report]").
+  it('distinguishes a measured latencyMs of 0 from an absent one', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitDiagnostics({ lastError: null, latencyMs: 0 })
+    expect(get(connection).latencyMs).toBe(0)
+    expect(get(connection).latencyMs).not.toBeNull()
+  })
+
+  it('reads a null lastError and null latencyMs once no client is attached, not the client\'s last reported diagnostics (SPEC 4.4.2)', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitDiagnostics({ lastError: sampleLastError(), latencyMs: 15 })
+    expect(get(connection).lastError).not.toBeNull()
+    expect(get(connection).latencyMs).toBe(15)
+
+    teardown?.()
+
+    expect(get(connection).lastError).toBeNull()
+    expect(get(connection).latencyMs).toBeNull()
+  })
+
+  // AMBIGUITY, see report: SPEC 4.3.10 pins that latency changes go through
+  // onDiagnostics rather than onState ("a client that fired onState to
+  // announce a round trip would be telling every subscriber the state moved
+  // when it did not"), but it does not say whether the *reverse* also
+  // happens - whether the state-change handler re-reads client.diagnostics()
+  // on every transition, or reuses whatever the store already cached from
+  // the last onDiagnostics push/seed. The ordinary FakeWsClient double above
+  // cannot distinguish the two designs at all: its diagnostics() never
+  // changes as a side effect of a state emission, so both designs read the
+  // same value either way, which is exactly why nothing in this file caught
+  // it. This double is built specifically so the two disagree: diagnostics()
+  // returns a fixed reading for 'connected' and a different one otherwise,
+  // and the test drives only emitState() - never emitDiagnostics() - so the
+  // store's own cached copy (seeded null/null at mount) and a fresh read of
+  // diagnostics() at the moment of the transition are forced apart.
+  //
+  // The direction asserted below (the transition re-reads diagnostics())
+  // is not read off §4.3.10 directly - it follows this file's own stated
+  // principle for every other field in this describe block ("a mirror of
+  // the client state, not a second opinion", the same reasoning behind
+  // "reads offline once no client is attached, not the client's last
+  // reported state" above): a mirror that composes a stale, separately
+  // cached copy of lastError/latencyMs into the object it hands out on a
+  // state transition is a second opinion about what the client's
+  // diagnostics currently are, not a mirror of them. That is an inference
+  // from the file's own design language, not a literal §4.3.10 citation, so
+  // it is named as such here rather than presented as a direct quote.
+  it('a state transition composes the connection object from a fresh read of diagnostics(), not a stale cached copy (inferred from the "mirror, not a second opinion" principle - see report)', () => {
+    class StateLinkedDiagnosticsClient extends FakeWsClient {
+      diagnostics(): Diagnostics {
+        return this.currentState === 'connected' ? { lastError: null, latencyMs: 999 } : { lastError: null, latencyMs: null }
+      }
+    }
+    const fake = new StateLinkedDiagnosticsClient()
+    mount(fake)
+    expect(get(connection).latencyMs).toBeNull()
+
+    fake.emitState('connected') // onState only - emitDiagnostics() is never called
+    expect(get(connection).latencyMs).toBe(999)
   })
 })
 
@@ -937,7 +1073,7 @@ describe('unauthorized clears every data store', () => {
     mount(fake)
     populateEverything(fake)
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required' })
+    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', lastError: null, latencyMs: null })
   })
 })
 
@@ -977,7 +1113,7 @@ describe('resetStores: the explicit clear a caller reaches for around close()', 
     // SPEC 4.4.2: connection is a mirror of the client (4.4.1); resetStores
     // must not report offline while the client is still connected, which
     // would be the second opinion that row forbids.
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null })
+    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, lastError: null, latencyMs: null })
   })
 
   it('is safe to call with no client ever connected, and every data store starts from that same cleared shape', () => {

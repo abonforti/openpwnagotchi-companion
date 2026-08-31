@@ -13,7 +13,7 @@ import type { Gps, HandshakeGps, Mode } from './protocol'
 // every other formatter in this section already has on the module that
 // owns the value it is turning into a string.
 import type { NearbySortOrder } from './wifi'
-import type { ConnectionState, UnauthorizedReason } from './ws'
+import type { ConnectionState, LastError, LocalErrorCode, UnauthorizedReason } from './ws'
 
 /** The dash itself. Exported so no caller writes the character by hand. */
 export const DASH = '-'
@@ -379,6 +379,140 @@ export function formatUnauthorizedCallToAction(reason: UnauthorizedReason): stri
 }
 
 // ---------------------------------------------------------------------------
+// The diagnostics pair (SPEC 4.3.10, 4.5.2.1): the last error and the
+// latency. Both live on lib/ws.ts's Diagnostics, mirrored onto the
+// `connection` store, and rendered by Settings alone -- there is no second
+// caller these need to agree with yet.
+// ---------------------------------------------------------------------------
+
+/**
+ * SPEC 4.3.10/4.5.3: `error.json`'s `message` carries no length limit the
+ * way an SSID's 32 bytes does, so the view bounds it itself rather than
+ * trusting a remote to have been brief. Truncation, not escaping -- Svelte's
+ * default `{...}` escaping already makes the text safe to render; this only
+ * keeps one diagnostic line from being able to grow to the size of the
+ * screen. The bound is 200 characters, counted in Unicode code points and
+ * not UTF-16 units, so a truncation can never cut a surrogate pair in half
+ * and leave a lone half to render as a replacement character.
+ *
+ * Total over its argument, not just its declared `string` type: `lib/ws.ts`
+ * writes `error.json`'s payload into `LastError` with no runtime validation
+ * (issue #109), so a `message` that is not actually a string reaches here at
+ * runtime despite what the signature claims. Coercing it with `String()`
+ * puts `null`, `undefined` or `[object Object]` on the line, attributed to
+ * the unit -- a sentence the unit never sent, on the one screen whose job is
+ * to report faithfully what it did send. So a non-string is treated as
+ * absent, the same as no message at all, and the bound below is computed on
+ * the string that survives, not on a `.length` that may not be a character
+ * count at all.
+ */
+export const LAST_ERROR_MESSAGE_MAX_LENGTH = 200
+
+export function formatLastErrorMessage(message: string): string {
+  if (typeof message !== 'string') return ''
+  const codePoints = Array.from(message)
+  return codePoints.length > LAST_ERROR_MESSAGE_MAX_LENGTH
+    ? `${codePoints.slice(0, LAST_ERROR_MESSAGE_MAX_LENGTH).join('')}...`
+    : message
+}
+
+/**
+ * SPEC 4.3.10/4.5.2.2: for `source: 'frame'`, `code` is remote-chosen and
+ * never rendered itself -- it only selects one of the sentences below, the
+ * same discipline `formatControlFailure` already holds the command path to.
+ *
+ * A code that already has a home elsewhere in this app (the PASV control,
+ * the Log view) is given the same sentence it is shown under there, reused
+ * rather than re-worded a second time for this line. Everything else falls
+ * to one generic sentence: SPEC 4.3.5's own table already calls this
+ * diagnostics line "where an unrecognised code goes rather than nowhere".
+ *
+ * For `source: 'close'`, `code` is not a wire code at all, it is the close
+ * code in digits, browser-generated from a small closed set, and SPEC
+ * 4.3.10 has it rendered rather than hidden: `1006` with no reason is the
+ * tether gone or a certificate the phone refused, `1008` is the unit
+ * answering and declining the token, and a clean `1000` is a unit that shut
+ * down while connected. One sentence collapses those three; the code beside
+ * it is the diagnosis.
+ *
+ * For `source: 'local'`, `code` names a drop this client detected itself --
+ * `pong_timeout`, `connect_timeout` -- rather than anything a remote said,
+ * so there is no message and no code shown beside the sentence, unlike the
+ * close case above.
+ */
+export function formatLastErrorCode(lastError: LastError): string {
+  if (lastError.source === 'frame') {
+    switch (lastError.code) {
+      case 'unauthorized':
+        return formatUnauthorizedReason('rejected')
+      case 'pasv_requires_auto':
+        return PASV_DISABLED_REASON
+      case 'pasv_unavailable':
+        return PASV_UNAVAILABLE_MESSAGE
+      case 'log_unavailable':
+        return LOG_UNAVAILABLE_MESSAGE
+      case 'no_frame':
+        return MIRROR_NO_FRAME_MESSAGE
+      default:
+        return 'The unit reported an error.'
+    }
+  }
+  if (lastError.source === 'local') {
+    // `LastError.code` is `string` for every source, but `recordLocalError`
+    // is the only writer for this one and it is typed to `LocalErrorCode`
+    // (SPEC 4.3.10), so the cast makes the switch below total over the two
+    // codes it can actually carry instead of needing a default arm no
+    // runtime value could ever reach.
+    switch (lastError.code as LocalErrorCode) {
+      case 'pong_timeout':
+        return 'The connection stopped responding.'
+      case 'connect_timeout':
+        return 'The unit did not answer while connecting.'
+    }
+  }
+  return `The connection closed (code ${lastError.code}).`
+}
+
+/**
+ * SPEC 4.3.10: `at`, in the phone's own clock -- never through
+ * `formatUnitTime`. Every other timestamp this app renders came off the
+ * wire and belongs to the unit, whose clock can be days out on a device
+ * with no RTC (the same reason `pong.timestamp` is never read for the
+ * latency above); formatting a phone stamp with the unit's formatter would
+ * be at its most misleading exactly when the two clocks disagree, which is
+ * the case somebody reads this line to work out.
+ *
+ * A time of day, not an age: an age has to be recomputed to stay true, and
+ * SPEC 4.5.2.5 spends the one timer this client is allowed on the Log. This
+ * is written once and stays correct.
+ *
+ * A bare `HH:MM` claims today: the last error survives until the connection
+ * is admitted (SPEC 4.3.10), so one recorded at 23:59 can still be on
+ * screen after midnight, and read as today's if the date is left off. The
+ * date is added once the stamp is not the current day, compared at render
+ * rather than kept by a timer -- there is no timer here to keep it with,
+ * and a render that happens after midnight without one is a render nobody
+ * is looking at.
+ */
+export function formatLastErrorTime(atMs: number): string {
+  const date = new Date(atMs)
+  const hours = `${date.getHours()}`.padStart(2, '0')
+  const minutes = `${date.getMinutes()}`.padStart(2, '0')
+  const time = `${hours}:${minutes}`
+  if (isSameLocalDay(date, new Date())) {
+    return time
+  }
+  const day = `${date.getDate()}`
+  const month = SHORT_MONTHS[date.getMonth()]
+  return `${day} ${month} ${time}`
+}
+
+/** SPEC 4.3.10/4.5.2.1: the round trip in whole milliseconds, `DASH` when there is none to show. */
+export function formatLatency(latencyMs: number | null): string {
+  return latencyMs === null ? DASH : `${Math.round(latencyMs)} ms`
+}
+
+// ---------------------------------------------------------------------------
 // The Dashboard controls (SPEC 4.5.2.2). Every string in that section's four
 // copy tables, verbatim, so `lib/controls.ts` and `views/Dashboard.svelte`
 // never type a control's wording themselves. `ControlId` lives here, not in
@@ -460,7 +594,10 @@ export const SHUTDOWN_PENDING = 'Shutting down.'
 /** The cancel button's label, the same word for every control (SPEC 4.5.2.2). */
 export const CANCEL_LABEL = 'Cancel'
 
-const PASV_UNAVAILABLE_MESSAGE = 'The unit does not have the PASV plugin.'
+// Exported so formatLastErrorCode (SPEC 4.3.10, below) can reuse it rather
+// than re-wording the same code's meaning a second time for the diagnostics
+// line.
+export const PASV_UNAVAILABLE_MESSAGE = 'The unit does not have the PASV plugin.'
 const COMMAND_REFUSED_MESSAGE = 'The unit did not accept the command.'
 
 /** Two `stats` frames arrived with no confirmation of the change (SPEC 4.5.2.2). */
@@ -699,7 +836,10 @@ export function formatPeerNumber(value: number | null): string {
 // beside the refresh trigger it reuses.
 // ---------------------------------------------------------------------------
 
-const LOG_UNAVAILABLE_MESSAGE =
+// Exported so formatLastErrorCode (SPEC 4.3.10, below) can reuse it rather
+// than re-wording the same code's meaning a second time for the diagnostics
+// line.
+export const LOG_UNAVAILABLE_MESSAGE =
   'The unit could not read its log. With no agent it has no configuration to find the path in.'
 
 /**
@@ -763,7 +903,9 @@ export const LOG_FILTER_LABEL = 'Filter'
 // watchViewFollow, the Log's own, granted a second call site by that section.
 // ---------------------------------------------------------------------------
 
-const MIRROR_NO_FRAME_MESSAGE = 'The unit has not drawn a frame yet.'
+// Exported so formatLastErrorCode (SPEC 4.3.10, above) reuses it rather than
+// wording the `no_frame` code a second way.
+export const MIRROR_NO_FRAME_MESSAGE = 'The unit has not drawn a frame yet.'
 
 /**
  * SPEC 4.5.2.6's copy table. Both the "no frame held, connected" row and the

@@ -10,6 +10,10 @@ import {
   formatConnectionState,
   formatGpsFix,
   formatGpsSource,
+  formatLastErrorCode,
+  formatLastErrorMessage,
+  formatLastErrorTime,
+  formatLatency,
   formatMode,
   formatNamedEvent,
   formatTemperature,
@@ -20,7 +24,7 @@ import {
   NEVER_REFRESHED,
 } from '../lib/format'
 import type { Gps } from '../lib/protocol'
-import type { ConnectionState, UnauthorizedReason } from '../lib/ws'
+import type { ConnectionState, LastError, UnauthorizedReason } from '../lib/ws'
 
 // Written from SPEC.md 4.5.1.1's function table only, never from lib/format.ts
 // itself (companion-implementer is authoring that file in parallel). Every
@@ -714,5 +718,394 @@ describe('the Dashboard unauthorized banner is this composition (SPEC 4.5.1.1, 4
   ] as const)('%s composes to the pinned banner sentence', (reason, pinnedBannerSentence) => {
     const composed = `${formatUnauthorizedReason(reason as UnauthorizedReason)} ${formatUnauthorizedCallToAction(reason as UnauthorizedReason)}`
     expect(composed).toBe(pinnedBannerSentence)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SPEC.md 4.3.10 (amended, issue #176): formatLatency, formatLastErrorMessage,
+// formatLastErrorCode, formatLastErrorTime. None of these four is in a
+// signature table anywhere in SPEC.md - 4.3.10 only pins the rules the
+// rendered output must follow, not the functions' own argument shapes. Every
+// other formatter in this file takes exactly one primitive named after what
+// it formats (formatChannel(channel), formatBatteryPercent(percent), ...),
+// so that was the starting assumption for all four: formatLatency(latencyMs),
+// formatLastErrorMessage(message), formatLastErrorCode(code),
+// formatLastErrorTime(at). `tsc --noEmit` (run without reading lib/format.ts
+// itself) rejected that guess for formatLastErrorCode specifically - it takes
+// the whole `LastError`, not a bare code, presumably because "a close code is
+// shown, a wire code is not" needs `source` too - and that one signature was
+// corrected from the compiler's diagnostic alone; the other three type-check
+// as single-primitive-argument functions and are left on that assumption,
+// unverified beyond that.
+// ---------------------------------------------------------------------------
+
+describe('formatLatency', () => {
+  it('is DASH for null - no measurement yet, following this file\'s own "not known" convention', () => {
+    expect(formatLatency(null)).toBe(DASH)
+  })
+
+  it('renders exact whole milliseconds with unit - "123 ms" (SPEC 4.3.10: "not rounded to seconds")', () => {
+    expect(formatLatency(123)).toBe('123 ms')
+  })
+
+  it('renders 0ms as "0 ms", not as absent: SPEC 4.3.10 - "a round trip that completed inside the clock\'s resolution, not an absent value"', () => {
+    expect(formatLatency(0)).toBe('0 ms')
+  })
+
+  it('does not round to seconds even for a duration under a second\'s worth of milliseconds either way', () => {
+    expect(formatLatency(999)).toBe('999 ms')
+    expect(formatLatency(1000)).toBe('1000 ms')
+  })
+})
+
+describe('formatLastErrorTime', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('renders a bare time of day for a stamp made today, on the phone\'s own clock', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 15, 12, 0, 0)) // "now": local noon, 15 Aug 2026
+    const stampToday = new Date(2026, 7, 15, 9, 14, 0).getTime()
+
+    const rendered = formatLastErrorTime(stampToday)
+    const match = /(\d{1,2}):(\d{2})/.exec(rendered)
+    expect(match, `expected an "H:MM" clock time in ${JSON.stringify(rendered)}`).not.toBeNull()
+    const [, h, m] = match as RegExpExecArray
+    expect(Number(h)).toBe(9)
+    expect(m).toBe('14')
+  })
+
+  // SPEC 4.3.10 (amended): "A stamp from another day says so ... a bare
+  // HH:MM then reads as something that happened today." Read on the day
+  // after it was recorded, the render must differ from the same stamp read
+  // on the day it happened - the property, not a specific format, since the
+  // exact way the date is appended is not pinned here (SPEC 4.5.1.1's own
+  // formatUnitTime table above is the only place a literal date format is
+  // pinned, and that pin is explicitly not this function - "it is not
+  // formatUnitTime").
+  it('a stamp from another day renders differently from the same stamp read on the day it happened', () => {
+    const stamp = new Date(2026, 7, 14, 23, 59, 0).getTime() // 23:59, 14 Aug 2026
+
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 14, 23, 59, 30)) // read 30s later, same day
+    const sameDayText = formatLastErrorTime(stamp)
+    vi.useRealTimers()
+
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 15, 0, 1, 0)) // read just after midnight, the next day
+    const nextDayText = formatLastErrorTime(stamp)
+    vi.useRealTimers()
+
+    expect(nextDayText).not.toBe(sameDayText)
+  })
+
+  it('is a pure function of the stamp within the same calendar day: two reads of the same stamp on the same day render identically', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 7, 15, 9, 0, 0))
+    const stamp = new Date(2026, 7, 15, 8, 30, 0).getTime()
+
+    const first = formatLastErrorTime(stamp)
+    vi.setSystemTime(new Date(2026, 7, 15, 18, 0, 0)) // ten hours later, same day
+    const second = formatLastErrorTime(stamp)
+
+    expect(second).toBe(first)
+  })
+})
+
+describe('formatLastErrorCode', () => {
+  // `tsc --noEmit` rejected the bare-code-argument guess this block
+  // originally used ("Argument of type 'string' is not assignable to
+  // parameter of type 'LastError'") - the compiler's own diagnostic, not a
+  // read of lib/format.ts's body, corrected the assumption to the whole
+  // `LastError` to this shape instead. `source` is still needed on every
+  // fixture below because the "close code is shown, a wire code is not"
+  // rule (SPEC 4.3.10) means the function's output depends on it, not on
+  // `code` alone.
+  function frameLastError(code: string): LastError {
+    return { source: 'frame', code, message: '', at: 1_700_000_000_000 }
+  }
+
+  // SPEC 4.3.10: "pasv_unavailable ... reuse the sentence they already
+  // carry where §4.3.5's table sends them" - the PASV control's own table
+  // pins this one verbatim, and it is a single sentence with no
+  // call-to-action clause, unlike unauthorized's reused banner text (which
+  // is two sentences and not asserted here for that reason).
+  it('pasv_unavailable renders the sentence pinned for it elsewhere, not the raw code', () => {
+    const rendered = formatLastErrorCode(frameLastError('pasv_unavailable'))
+    expect(rendered).toBe('The unit does not have the PASV plugin.')
+    expect(rendered).not.toContain('pasv_unavailable')
+  })
+
+  // SPEC 4.3.10's own list names five pinned codes; the suite only pinned
+  // one of them (pasv_unavailable) at the formatter level. A mutant deleting
+  // either of these two `case`s and letting it fall through to the generic
+  // sentence was unverified - the sentences are the PASV control's own
+  // table entries, reused verbatim.
+  it('pasv_requires_auto renders the sentence pinned for it on the PASV control, not the raw code', () => {
+    const rendered = formatLastErrorCode(frameLastError('pasv_requires_auto'))
+    expect(rendered).toBe('PASV is reachable only from AUTO.')
+    expect(rendered).not.toContain('pasv_requires_auto')
+  })
+
+  it('no_frame renders the sentence pinned for it on the Mirror control, not the raw code', () => {
+    const rendered = formatLastErrorCode(frameLastError('no_frame'))
+    expect(rendered).toBe('The unit has not drawn a frame yet.')
+    expect(rendered).not.toContain('no_frame')
+  })
+
+  // SPEC 4.3.10: "log_unavailable carries two [sentences], because the Log
+  // view needs the second one ... Reusing it here means this line carries
+  // two as well, which is the price of the rule that one code is worded
+  // once." Pinned in full, trailing full stop included: formatLastErrorCode
+  // returns the sentence as the Log view's own table carries it: stripping
+  // the trailing stop for the composed line is the View's job (settings-view
+  // .spec.ts pins that half), not this formatter's.
+  it('log_unavailable renders both of its sentences verbatim, not just the first', () => {
+    const rendered = formatLastErrorCode(frameLastError('log_unavailable'))
+    expect(rendered).toBe('The unit could not read its log. With no agent it has no configuration to find the path in.')
+    expect(rendered).not.toContain('log_unavailable')
+  })
+
+  it('an unrecognised code never leaks through verbatim (SPEC 4.5.2.2\'s rule already required of the command path)', () => {
+    const distinctive = 'zzz_unmapped_diagnostic_code_xyz'
+    expect(formatLastErrorCode(frameLastError(distinctive))).not.toContain(distinctive)
+  })
+
+  it('two different unrecognised codes render the identical generic sentence - the generic case must not quietly start printing the code again', () => {
+    const first = formatLastErrorCode(frameLastError('totally_unrecognised_code_alpha'))
+    const second = formatLastErrorCode(frameLastError('completely_different_unrecognised_beta'))
+    expect(second).toBe(first)
+  })
+
+  it('a pinned code renders a sentence distinct from the generic one an unmapped code gets', () => {
+    const pinned = formatLastErrorCode(frameLastError('pasv_unavailable'))
+    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_one'))
+    expect(pinned).not.toBe(generic)
+  })
+
+  // SPEC 4.3.10 (amended, issue #176): the generic sentence is what a
+  // non-string `message` composes with when its code is unmapped (e.g.
+  // `internal_error`), so settings-view.spec.ts's non-string-message DOM
+  // test relies on this sentence itself containing none of the literal
+  // substrings a coercion bug would print. Asserted once here at the source
+  // rather than left to the DOM test to happen not to trip over: a reworded
+  // generic sentence that introduced one of these substrings would make that
+  // DOM test pass for the wrong reason (the substring belonging to the
+  // sentence, not to a coerced non-string message) without this test to
+  // catch the sentence itself.
+  it('the generic sentence contains none of the literal substrings a coercion bug would print', () => {
+    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_two'))
+    expect(generic).not.toContain('null')
+    expect(generic).not.toContain('undefined')
+    expect(generic).not.toContain('[object')
+  })
+
+  // SPEC 4.3.10: "A close code is shown, and a wire code is not ... the
+  // close case renders the number beside its sentence; the frame case
+  // renders the sentence alone." settings-view.spec.ts already pins this at
+  // the DOM level; asserted here too now that the function is known to take
+  // the whole LastError and therefore can make the distinction itself.
+  it('a close renders its numeric code, a frame with the same digits as its code does not', () => {
+    const close = formatLastErrorCode({ source: 'close', code: '1006', message: '', at: 1_700_000_000_000 })
+    const frame = formatLastErrorCode(frameLastError('1006'))
+    expect(close).toContain('1006')
+    expect(frame).not.toContain('1006')
+  })
+
+  // SPEC 4.3.10 (amended, issue #176): "unauthorized reuses the reason it
+  // already carries and not the call to action beside it: 'Fix it in
+  // Settings' is a sentence for the screen that sends the reader somewhere,
+  // and this line is already on the screen it would send them to." A frame
+  // with code `unauthorized` is, by construction, always the *rejected*
+  // reason and never *required*: §4.3.1 draws the *required* reading only
+  // from a bare close with no error frame at all (a client with no token
+  // sends nothing and is closed on the auth timeout), or from three
+  // consecutive closes with none of them carrying an `error` frame, so a
+  // `source: 'frame', code: 'unauthorized'` LastError can only have arisen
+  // from the plugin answering an `auth` it received and refused - the
+  // rejected branch. `formatUnauthorizedReason`/`formatUnauthorizedCallToAction`
+  // are the same two functions the Dashboard banner composition test above
+  // pins against SPEC 4.5.1.1's table, so this asserts the diagnostics line
+  // reuses exactly one of that pair's two halves and not the other.
+  it('unauthorized reuses only the reason, never the call to action beside it', () => {
+    // `formatUnauthorizedReason('rejected')` and not `('required')`: this is
+    // drawn from §4.3.1's prose, not assumed. §4.3.1 draws the *required*
+    // reading only from a bare close with no error frame at all, or from
+    // three consecutive closes with none carrying an `error` frame - never
+    // from a frame that arrived. A `source: 'frame', code: 'unauthorized'`
+    // LastError can therefore only have arisen from the plugin answering an
+    // `auth` it received and refused, which is *rejected* by construction.
+    // Do not weaken this back to 'required' or to "excludes the call to
+    // action" - the reason side is a specific, derived fact, not a guess.
+    const rendered = formatLastErrorCode(frameLastError('unauthorized'))
+    expect(rendered).toBe(formatUnauthorizedReason('rejected'))
+    expect(rendered).not.toContain(formatUnauthorizedCallToAction('rejected'))
+    expect(rendered).not.toContain('Fix it in Settings')
+  })
+
+  // SPEC 4.3.10 (resolved, issue #176): "Each of the two gets its own
+  // sentence, and the five-code table above does not govern them ... They
+  // must not collapse into each other or into the generic sentence, because
+  // they are two different failures - a link that was working and went
+  // away, against one that never came up ... Neither shows its code: unlike
+  // a close code, these are names this app chose, and printing an
+  // identifier the owner has no way to look up is not a diagnostic." The
+  // five-code table (unauthorized, pasv_requires_auto, pasv_unavailable,
+  // log_unavailable, no_frame) governs codes the wire carries, so that a
+  // code worn by another screen is worded once; `pong_timeout` and
+  // `connect_timeout` came from this client and no screen has ever worded
+  // them, so §4.3.10 words them itself, distinctly from each other and from
+  // the generic sentence an unrecognised code gets. No fixture anywhere in
+  // this suite built a `source: 'local'` LastError before this change, so an
+  // implementation that collapsed both into the generic sentence, collapsed
+  // them into each other, leaked the raw code, threw on the unfamiliar
+  // `source`, or rendered nothing passed regardless.
+  it('pong_timeout (source "local") says the link stopped responding, and never leaks the raw code', () => {
+    const rendered = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    expect(rendered.trim().length).toBeGreaterThan(0)
+    expect(rendered).not.toContain('pong_timeout')
+    expect(rendered.toLowerCase()).toContain('stopped responding')
+  })
+
+  it('connect_timeout (source "local") says the unit did not answer while connecting, and never leaks the raw code', () => {
+    const rendered = formatLastErrorCode({
+      source: 'local',
+      code: 'connect_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    expect(rendered.trim().length).toBeGreaterThan(0)
+    expect(rendered).not.toContain('connect_timeout')
+    expect(rendered.toLowerCase()).toContain('did not answer')
+  })
+
+  // The two must not collapse into each other, and neither may collapse
+  // into the generic sentence an unrecognised code gets - "a link that was
+  // working and went away, against one that never came up ... the
+  // difference is most of what the reader is on this screen to learn."
+  it('pong_timeout and connect_timeout render different sentences from each other and from the generic case', () => {
+    const pongTimeout = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    const connectTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'connect_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_three'))
+    expect(pongTimeout).not.toBe(connectTimeout)
+    expect(pongTimeout).not.toBe(generic)
+    expect(connectTimeout).not.toBe(generic)
+  })
+})
+
+describe('formatLastErrorMessage', () => {
+  it('passes a short message through unchanged', () => {
+    expect(formatLastErrorMessage('token rejected')).toBe('token rejected')
+  })
+
+  it('passes an empty message through as the empty string, not DASH - SPEC 4.3.10: "the empty string when it did not" carry one', () => {
+    expect(formatLastErrorMessage('')).toBe('')
+  })
+
+  // SPEC 4.3.10 (amended, issue #176): "The bound is 200 characters, counted
+  // in code points and not in UTF-16 units ... The number is not load-bearing
+  // and no behaviour depends on its exact value; it is written down here so
+  // that a test can assert it instead of asserting that some bound exists,
+  // which is an assertion a missing bound also satisfies." Previously this
+  // suite could only assert "some bound under 1000", which a missing bound
+  // also happened to satisfy at the 50,000-character fixture used then. The
+  // number is now pinned, so the exact code-point count is asserted instead.
+  //
+  // SPEC 4.3.10 (amended, issue #176): "A message that was cut says it was
+  // cut, with `...` after the two hundredth code point and only when
+  // something was actually removed ... a truncated line carries 203 code
+  // points." A message this far over the bound is unambiguously truncated,
+  // so the marker is expected here.
+  it('bounds a very long message to 200 content code points plus the "..." marker, not merely to some smaller number', () => {
+    const hostileLength = 50_000
+    const veryLongMessage = 'x'.repeat(hostileLength)
+    const rendered = formatLastErrorMessage(veryLongMessage)
+    expect(Array.from(rendered).length).toBe(203)
+    expect(rendered).toBe(`${'x'.repeat(200)}...`)
+  })
+
+  it('a message at a modest, unremarkable length is not truncated and carries no marker', () => {
+    const ordinaryMessage = 'x'.repeat(120)
+    expect(formatLastErrorMessage(ordinaryMessage)).toBe(ordinaryMessage)
+  })
+
+  // This is the edge that distinguishes ">" from ">=" in the truncation
+  // condition: a message at exactly the bound was not cut, so it must pass
+  // through byte-identical and unmarked. An implementation that truncates
+  // (or appends "...") at ">= 200" instead of "> 200" fails only here -
+  // every other test in this block uses a length far enough from the
+  // boundary that both readings agree.
+  it('a message of exactly 200 code points passes through unchanged and unmarked - the bound is inclusive', () => {
+    const exactly200 = 'x'.repeat(200)
+    const rendered = formatLastErrorMessage(exactly200)
+    expect(rendered).toBe(exactly200)
+    expect(rendered).not.toContain('...')
+  })
+
+  it('a message of 201 code points, one over the bound, is truncated to 200 content code points plus the marker', () => {
+    const exactly201 = 'x'.repeat(201)
+    const rendered = formatLastErrorMessage(exactly201)
+    expect(Array.from(rendered).length).toBe(203)
+    expect(rendered).toBe(`${'x'.repeat(200)}...`)
+  })
+
+  // SPEC 4.3.10: "so that a truncation can never cut a surrogate pair in
+  // half and leave a lone half to render as a replacement character." An
+  // astral character (U+1F600, a surrogate pair - two UTF-16 code units but
+  // one code point) is placed so that it occupies UTF-16 units 200 and 201:
+  // 199 BMP characters precede it, then padding follows so the message is
+  // long enough to be truncated at all. A truncation that counts UTF-16
+  // units (e.g. `String.prototype.slice(0, 200)`) grabs units 1-200, which
+  // is the 199 BMP characters plus only the astral character's leading
+  // surrogate - a lone half. A truncation that counts code points keeps the
+  // astral character whole as the 200th code point. `Array.from` iterates
+  // by code point and would report length 200 either way (it treats an
+  // unpaired surrogate as one element too), so the count alone cannot tell
+  // the two readings apart - only the content of the 200th code point can.
+  // The message is truncated (299 code points over the bound), so the "..."
+  // marker is expected after the astral character, not in place of it.
+  it('does not split an astral character straddling the 200-code-point boundary in UTF-16 units', () => {
+    const astral = '\u{1F600}' // one code point, two UTF-16 units
+    const prefix = 'a'.repeat(199)
+    const suffix = 'b'.repeat(300)
+    const rendered = formatLastErrorMessage(prefix + astral + suffix)
+    const codePoints = Array.from(rendered)
+    expect(codePoints.length).toBe(203)
+    expect(codePoints[199]).toBe(astral)
+    expect(rendered).toBe(`${prefix}${astral}...`)
+  })
+
+  // SPEC 4.3.10 (amended, issue #176): "A message that is not a string has
+  // no message ... Coercing it prints null, undefined or [object Object] on
+  // the line, attributed to the unit, which is worse than saying nothing
+  // ... So a non-string is treated as absent." Previously this suite only
+  // asserted "does not throw, returns a string", which a coercing
+  // implementation (`String(message)`, printing the literal word "null")
+  // also satisfies - `typeof "null"` is `'string'` too. The reading is now
+  // pinned: a non-string collapses to the same empty-string "no message"
+  // value the wire's own empty string already produces (asserted above),
+  // not to a stringified representation of whatever the wire actually sent.
+  it.each([
+    ['a number', 12345],
+    ['null', null],
+    ['undefined', undefined],
+    ['a boolean', true],
+    ['an array (the audit finding: an array-valued message reached the screen)', ['unexpected', 'array', 'payload']],
+    ['a plain object', { unexpected: 'object payload' }],
+  ] as const)('a %s message is treated as absent, not coerced to its string form', (_label, notAString) => {
+    const rendered = formatLastErrorMessage(notAString as unknown as string)
+    expect(rendered).toBe('')
+  })
+
+  it('does not throw when message is not actually a string at runtime, and still returns a string', () => {
+    const notAString = 12345 as unknown as string
+    expect(() => formatLastErrorMessage(notAString)).not.toThrow()
+    expect(typeof formatLastErrorMessage(notAString)).toBe('string')
   })
 })

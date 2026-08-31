@@ -2647,6 +2647,242 @@ showing it to someone who has not yet asked for anything would answer a question
 view renders connection copy only after `connect()`; the state before that is for the code, not
 for the screen.
 
+#### 4.3.10 The last error and the round trip, and what each is allowed to claim (issue #176)
+
+§4.5.2 asks the Settings screen for three diagnostics and §4.3.5's table sends every unhandled
+error code to the same place. Neither could be built, because the client kept no last error and
+measured no latency: it tracked `lastErrorWasUnauthorized` as a boolean used once to pick a close
+reason, and it cleared a timer on `pong` without ever reading a clock. Both are surfaces on
+`lib/ws.ts`, and both are the kind of thing a view will otherwise manufacture out of whatever it
+can already reach.
+
+**The client exposes a diagnostics pair, and the stores mirror it.**
+
+```ts
+export interface LastError {
+  source: 'frame' | 'close' | 'local'
+  code: string
+  message: string
+  at: number
+}
+
+export interface Diagnostics {
+  lastError: LastError | null
+  latencyMs: number | null
+}
+```
+
+`WsClient` gains `diagnostics(): Diagnostics` and `onDiagnostics(handler): () => void`, and
+`ConnectionView` (§4.4.1) gains the two fields. **A second callback rather than more work for
+`onState`**: latency changes without the state changing, once per ping interval, and a client
+that fired `onState` to announce a round trip would be telling every subscriber the state moved
+when it did not.
+
+**The clock is injected.** `WsDeps` gains `now(): number`, defaulting to `() => Date.now()`, for
+the reason `random` is already there: a measurement asserted against the wall clock is asserted
+against how long the test host took to run the test.
+
+**The remote clock is never read.** `pong.json` carries a `timestamp` and this measurement
+ignores it. A round trip computed across two clocks measures their disagreement as well as the
+link, and a pwnagotchi that has been off for a week and has no RTC boots with a clock that is
+wrong by days. Both stamps are taken locally, so the figure is a duration and not a subtraction
+of two different opinions about what time it is.
+
+**Only a pong that answers an outstanding ping updates the latency.** This is a second guard and
+not a reuse of the one already there: the existing protection against a duplicate pong lives in
+the function that arms the next ping, which clears any timer still running before setting a new
+one, and it says nothing about whether a send stamp exists. So the measurement is guarded on the
+send stamp itself. With no outstanding ping there is nothing to measure from, and the alternative
+is to date the round trip from the previous ping, which reports a number that is not a
+measurement of anything -- or, worse, to subtract from a null and put `NaN` on the screen.
+
+**Latency is cleared when the socket goes**, not carried across the gap. The figure describes a
+link, and a link that has dropped has no round trip; showing 40 ms next to `offline` claims the
+last thing the app knew is still true, which is the one thing it cannot be.
+
+**The last error survives the reconnection that fixed it, until the connection is admitted.**
+It is cleared when a connection **becomes** admitted -- `connected`, or `degraded`, which is an
+admitted connection carrying stale data and not a failed one -- and not before: the failure that
+matters to
+somebody reading this screen is the one that is still happening, and a client that retries every
+few seconds would otherwise erase the reason at the start of each attempt, which is where
+§4.3.1's backoff spends most of its time. Once a connection is admitted the error describes a
+condition that has demonstrably passed, and holding it on screen invites the owner to fix a
+thing that is no longer broken. `at` is there so that a view can say when, rather than leaving
+the reader to assume it was now.
+
+**Cleared on the transition, never on the state being re-entered.** Every `stats` push sets the
+state again while the connection is already live, once per broadcast interval. A clearing rule
+written against the target state alone therefore fires every 20 s, and every error that arrives
+on a live connection -- `pasv_unavailable`, `pasv_requires_auto`, `log_unavailable`, `no_frame`,
+and every rejected request -- is erased seconds after it is recorded. The screen would show a
+dash while the unit is refusing something on every tap. The test that distinguishes the two
+readings is an error frame followed by a `stats` frame with no reconnection in between; the
+condition is that the state was not already admitted, computed the same way the teardown side
+already computes leaving.
+
+**A restart is asked for, and so is the close that carries it.** `reboot`, `shutdown` and a mode
+change all end the socket on purpose, and the state machine has a name for that window:
+`restarting`. A close arriving in it records nothing. The app knows what it did and the owner
+watched themselves do it, so putting `The connection closed (code 1006)` on the diagnostics line
+explains an event that needs no explanation -- and for `shutdown` the client is terminal by
+guard and never re-admitted, so the clearing rule never fires and that sentence stays for the
+life of the app. The test is a close reached through `restarting` rather than through a frame,
+which is the path the state machine's own tests do not take.
+
+**A close records an error only when the app did not ask for it.** `close()` called by a screen
+ends in `offline` like a dropped tether does (§4.4.2 says the client cannot tell those apart
+afterwards), but at the moment of the call it knows perfectly well which one this is: `stopped`
+is set by the caller before the socket goes. A user who taps disconnect and is then shown a last
+error has been told their own action was a fault.
+
+**A drop this client detected itself is recorded too, and it is the common case.** The pong
+timeout is how a tether that went away is noticed: the socket is discarded deliberately, its
+`onclose` is unhooked first so the teardown runs once, and the browser's own `1006` never
+arrives. An implementation that records only on a close event therefore shows a dash next to
+`offline` for the single failure this screen exists to explain. The same applies to the bound on
+how long `connecting` may last. Both record a `LastError` with `source: 'local'` -- a third
+source beside `frame` and `close`, because it is neither -- and a `code` naming the detection
+rather than a number: `pong_timeout` and `connect_timeout`. `message` is empty; there is no
+remote to have said anything, and inventing a sentence here would put words in the unit's mouth.
+
+**Each of the two gets its own sentence, and the five-code table above does not govern them.**
+That table is about codes the wire carries, where the rule is to reuse the wording another screen
+already gives them. These two came from this client and no screen has ever worded them, so they
+are written here: `pong_timeout` says the connection stopped responding, `connect_timeout` says
+the unit did not answer while connecting. They must not collapse into each other or into the
+generic sentence, because they are two different failures -- a link that was working and went
+away, against one that never came up -- and the difference is most of what the reader is on this
+screen to learn. Neither shows its code: unlike a close code, these are names this app chose, and
+printing an identifier the owner has no way to look up is not a diagnostic.
+
+**A close that follows an `error` frame does not overwrite it, and `unauthorized` is what that
+means.** The rule exists for one sequence: the plugin sends `unauthorized` and then closes with
+1008, and recording the close last would replace the code that says what happened with a number
+that says only that something ended. Read as "any frame error blocks any later close on this
+connection" it does something else entirely -- a benign `pasv_unavailable` at ten in the morning
+would suppress the drop that ends the link four hours later, and the screen would explain the
+wrong event. So the rule is scoped to the code it was written for: **a close does not overwrite a
+last error whose code is `unauthorized`**, which §4.3.5's table already names as the one code
+fatal to the connection. Every other frame error is overwritten by whatever ends the
+connection, because by then the connection ending is the newer fact. `unauthorized` arrives as a
+frame and the plugin then closes with 1008 (§4.3.1); recording the close last would replace the
+one code that says what happened with a number that says only that something ended. The frame
+wins for the connection it arrived on, which is the same scope §4.3.1 gives the unauthorized
+latch and for the same reason.
+
+**`code` for a close is the close code in digits, and it is not a wire code.** `source`
+discriminates them, so nothing has to guess whether `1006` is an `error.json` code that happens
+to be numeric. `message` is the close reason when the socket carried one and the empty string
+when it did not, which is the ordinary case for `1006`: a browser that never saw a close frame
+has nothing to report but the code it synthesised.
+
+**A close code is shown, and a wire code is not.** §4.5.2.2's rule that a code selects a sentence
+rather than being printed is about strings a remote chose. A close code is not one: the browser
+generates it, the set is closed, and it is small enough to read. It is also the only thing that
+separates the three failures this screen exists for. `1006` with no reason is the tether gone or a
+certificate the phone refused, `1008` is the unit answering and declining the token, and a clean
+`1000` from the other end is a unit that shut down while connected. Collapsing those into one
+sentence about the connection closing unexpectedly throws away the diagnosis on the screen whose
+whole job is to give it. So the close case renders the number beside its sentence; the frame case
+renders the sentence alone.
+
+**The line says when.** `at` is rendered, as a time of day rather than an age: an age has to be
+recomputed to stay true, and §4.5.2.5 spends the one timer this client is allowed on the Log. An
+absolute time is written once and stays correct.
+
+**A stamp from another day says so.** A last error is cleared only on admission, so one recorded
+at 23:59 survives a night with the app open and offline, and a bare `HH:MM` then reads as
+something that happened today. The date is added once the stamp is not the current day, which is
+computed at render and costs no timer: the value being compared is the calendar day, and a render
+that happens after midnight without one is a render nobody is looking at.
+
+**It is the phone's clock, and it is not `formatUnitTime`.** `at` is stamped by `deps.now()` in
+the browser. Every other timestamp this app renders came off the wire and belongs to the unit,
+whose clock can be days out (§4.3.10's reason for ignoring `pong.timestamp` is the same one). A
+diagnostics line that formatted a phone stamp with the unit's formatter would be at its most
+misleading exactly when the two clocks disagree, which is the case somebody is on this screen to
+work out.
+
+**Every code goes through, including the ones §4.3.5 routes elsewhere.** `log_unavailable` has
+its own sentence in the Log view and it is still the last error the connection saw. The table in
+§4.3.5 says where an error is *acted on*; this records what *happened*, and a diagnostics block
+that omits the errors somebody else already handled is a diagnostics block that goes quiet
+exactly when the app is at its busiest.
+
+**The latency is whole milliseconds with its unit, and it is not rounded to seconds.** `123 ms`.
+On this link the interesting range is tens of milliseconds against several hundred, and a figure
+rendered in seconds is `0 s` for both. `0 ms` is a real measurement and renders as one: it is a
+round trip that completed inside the clock's resolution, not an absent value, and the two must not
+collapse into the same cell (§4.5.1.1 gives `data-empty` to the absent one only).
+
+**Which sentence a frame code selects is fixed here**, so that two screens do not word the same
+code differently. `unauthorized`, `pasv_requires_auto`, `pasv_unavailable`, `log_unavailable` and
+`no_frame` reuse the sentence they already carry where §4.3.5's table sends them; every other
+frame code gets one generic sentence. `unauthorized` reuses the **reason** it already carries and
+not the call to action beside it: "Fix it in Settings" is a sentence for the screen that sends the
+reader somewhere, and this line is already on the screen it would send them to.
+
+The generic sentence is not a failure of the mapping, it is §4.3.5's own answer for an
+unrecognised code, and it is why the `message` is rendered beside it in both cases.
+
+**"The close case renders the number beside its sentence" above is about the code**,
+which a frame never shows and a close always does; the `message` is a separate field and it is
+shown whenever there is one. A line is assembled from at most three parts -- the sentence, the
+remote message when it is not empty, and the time -- and it reads as prose rather than as a
+sentence with its own full stop glued to a second one. Not necessarily *one* sentence: the copy a
+code reuses is whatever that code already carries, and `log_unavailable` carries two, because the
+Log view needs the second one. Reusing it here means this line carries two as well, which is the
+price of the rule that one code is worded once. What the assembly owes is the absence of a
+doubled stop at a join, not a sentence count.
+
+**The sentences arrive with their full stops and the assembly takes them off.** That is string
+surgery and it looks like something to tidy away, so the constraint is written down here to stop
+somebody tidying it: every sentence this line reuses is an exported constant that other screens
+render on its own, where the full stop belongs. The Dashboard's unauthorized banner joins the
+reason to its call to action with one, and the PASV control renders its reason standing alone.
+Removing the full stop at the source to spare this line would break those, and duplicating each
+sentence in a second, stopless form is exactly the two-wordings-for-one-code problem this
+section already refuses.
+
+**The bound is 200 characters**, counted in code points and not in UTF-16 units, so a truncation
+can never cut a surrogate pair in half and leave a lone half to render as a replacement
+character. The number is not load-bearing and no behaviour depends on its exact value; it is
+written down here so that a test can assert it instead of asserting that some bound exists,
+which is an assertion a missing bound also satisfies.
+
+**A message that was cut says it was cut**, with `...` after the two hundredth code point and
+only when something was actually removed. The bound counts the content, so a truncated line
+carries 203 code points and an untruncated one carries what it carried. Without the marker a unit
+that sent a long message and a unit that sent a terse one read identically at the cut, and the
+reader has no way to tell that the sentence they are looking at stops mid-thought because this
+app decided it should.
+
+**A `message` that is not a string has no message.** The type says `string` and nothing validates
+it (issue #109), so the runtime value can be anything the wire carried. Coercing it prints
+`null`, `undefined` or `[object Object]` on the line, attributed to the unit, which is worse than
+saying nothing: it is a sentence the unit never sent, on the one screen whose job is to report
+faithfully what it did send. So a non-string is treated as absent -- the code's sentence and the
+time still render, because those are facts this client established itself -- and the bound is
+computed on the string that survives, not on a `.length` that may not be a character count at
+all. That last part is what the audit demonstrated: an array-valued `message` sailed past a
+200-character bound and put 1012 characters on the screen.
+
+**While the state is `unauthorized` two rows carry the same sentence, and that is allowed.** The
+reason row and the last-error row sit four rows apart and both read "the unit refused the stored
+token", the second with a time after it. It reads as the screen repeating itself, and the two
+obvious ways to stop it both cost more than the repetition does: letting `unauthorized` fall to
+the generic sentence throws away the one code the reader most needs named, and suppressing the
+last-error row while a reason is showing blanks the diagnostics line during the exact failure it
+was built for. They answer different questions -- what the connection is doing now, and what
+happened and when -- and the labels say which is which. The repetition is the honest cost of both
+rows being right.
+
+**Neither value is rendered raw.** `message` came off the wire, so §4.5.3 applies to it in full:
+it is text, never markup, never an attribute, and the view bounds its length rather than trusting
+a remote to have been brief. `code` is matched against known sentences and never printed, which
+§4.5.2.2 already required of it on the command path.
+
 ### 4.4 Stores (`lib/stores.ts`)
 
 Svelte writable/derived stores: `connection`, `stats`, `accessPoints`, `handshakes`, `peers`,
@@ -2662,7 +2898,7 @@ before this section existed.
 
 | store | written by | rule |
 |---|---|---|
-| `connection` | the client's state and its unauthorized reason | a mirror, not a second opinion. §4.3.1 owns the state machine. **With no client attached it reads `offline`**, which is the same rule rather than an exception to it: a mirror of nothing shows nothing connected, and leaving the last client's final state standing would have the app claim a connection that no longer exists |
+| `connection` | the client's state, its unauthorized reason, and its diagnostics (§4.3.10) | a mirror, not a second opinion. §4.3.1 owns the state machine. **With no client attached it reads `offline`**, which is the same rule rather than an exception to it: a mirror of nothing shows nothing connected, and leaving the last client's final state standing would have the app claim a connection that no longer exists |
 | `stats` | the last `stats` message | **the payload as it arrived, never patched.** See below |
 | `capabilities` | derived from `stats` | not a store of its own with its own writer: it arrives inside `stats` and having two sources for one fact is how they disagree |
 | `accessPoints` | `wifi_update`, and the `access_points` reply | **replaced whole, never merged** |
@@ -3300,12 +3536,18 @@ issue #177.
 `role="alert"` on it, and the mutator's throw is caught as the backstop it is meant to be.
 
 **Diagnostics render what exists, and name what does not.** §4.5.2 asks for the last error,
-the latency and the negotiated plugin version. Only the third has a surface today
-(`capabilities.pluginVersion`), alongside the connection state and, when the state is
-`unauthorized`, its reason (§4.3.1). The other two need a surface in `lib/ws.ts` that does not
-exist, and a view must not manufacture one: labelling the authentication reason as "the last
-error" says nothing happened when a TLS failure or a refused connection is exactly what did.
-That surface is issue #176 and this block grows when it lands.
+the latency and the negotiated plugin version, and all three now render, alongside the connection
+state and, when the state is `unauthorized`, its reason (§4.3.1). The first two were missing for
+most of this project's life because `lib/ws.ts` had no surface for them, and the rule that kept
+them missing rather than approximated still stands: a view must not manufacture one, because
+labelling the authentication reason as "the last error" says nothing happened when a TLS failure
+or a refused connection is exactly what did.
+§4.3.10 builds the two that were missing: the client keeps the last error -- an `error` frame's
+code and message, the code of a close the app did not ask for, or the drop it detected itself
+when neither of those ever arrives -- with the time it happened, and
+measures the round trip on the ping/pong pair it was already sending. Both reach this screen
+through the `connection` store like the state does, and both are absent rather than zero when
+there is nothing to report: no error yet, and no latency while the socket is down.
 
 **The DOM hooks**, declared here for the reason §4.5.1.1 gives: a test that finds an element by
 walking the markup breaks when the markup is rearranged, and this screen will be rearranged.
@@ -3321,12 +3563,13 @@ walking the markup breaks when the markup is rearranged, and this screen will be
   is not a host and must not wear `data-host-field`: overloading the two made a test filter for
   "the one address input outside any row", which is a test walking the markup by another name.
 - `data-field` on each diagnostic value, reusing §4.5.1.1's convention and its `data-empty="true"`:
-  `connectionState`, `pluginVersion`, and `unauthorizedReason` on the row that appears only while
-  the state is `unauthorized`. The third is named here because the first implementation rendered
-  the row without a hook, correctly refusing to invent one the list did not carry. It is also the
-  one field that carries **no** `data-empty`: the row exists only when there is a reason, so the
-  two can never both be true, and a branch that cannot be reached is worse than absent - it reads
-  as a case somebody handled.
+  `connectionState`, `pluginVersion`, `lastError`, `latency`, and `unauthorizedReason` on the row
+  that appears only while the state is `unauthorized`. That last one is named here because the
+  first implementation rendered the row without a hook, correctly refusing to invent one the list
+  did not carry. It is also the one field that carries **no** `data-empty`: the row exists only
+  when there is a reason, so the two can never both be true, and a branch that cannot be reached
+  is worse than absent - it reads as a case somebody handled. `lastError` and `latency` do carry
+  it, and carry it often: an app that has just started has neither.
 
 **The address grammar has one expression, and the form asks for it.** §4.7 says to validate in
 the form and keep the mutator's throw as the backstop that says the form forgot. That is right,

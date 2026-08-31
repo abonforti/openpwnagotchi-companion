@@ -9,6 +9,10 @@
     formatConnectionState,
     formatGeoStateMessage,
     formatGeoToggleLabel,
+    formatLastErrorCode,
+    formatLastErrorMessage,
+    formatLastErrorTime,
+    formatLatency,
     formatUnauthorizedReason,
   } from '../lib/format'
   import { geoState, toggleSharing } from '../lib/geo'
@@ -191,17 +195,49 @@
   // Dashboard, applied here) and this view only lays out what it returns.
   const connectionLabel = $derived(formatConnectionState(conn.state))
 
-  // SPEC 4.5.2.1: the last error and the latency have no surface in
-  // lib/ws.ts today (issue #176) and this view must not manufacture one.
-  // The one thing the state itself names, when it is `unauthorized`, is
-  // the reason -- rendered as what it is rather than folded into a generic
-  // "last error" that would claim nothing happened when a TLS failure or a
-  // refused connection is exactly what did.
+  // SPEC 4.5.2.1: the one thing the state itself names, when it is
+  // `unauthorized`, is the reason -- rendered as what it is rather than
+  // folded into the generic last error below, which would claim nothing
+  // happened when a TLS failure or a refused connection is exactly what did.
   const unauthorizedReasonText = $derived(
     conn.state === 'unauthorized' && conn.unauthorizedReason !== null
       ? formatUnauthorizedReason(conn.unauthorizedReason)
       : null,
   )
+
+  // SPEC 4.3.10/4.5.2.1: a line assembled from at most three parts -- the
+  // sentence formatLastErrorCode selects, the remote message when it is not
+  // empty, and the time -- not that sentence's own full stop glued to a
+  // second one. Not necessarily *one* sentence: the copy a code reuses is
+  // whatever that code already carries, and LOG_UNAVAILABLE_MESSAGE carries
+  // two, because the Log view needs the second one; what this line owes is
+  // the absence of a doubled full stop at the join, not a sentence count.
+  // `message` is remote text, rendered as text and
+  // length-bounded (SPEC 4.5.3); `code` is never printed raw for a frame,
+  // it only selects the sentence -- a close code is the one exception and
+  // formatLastErrorCode renders it itself. `at` is the phone's own clock
+  // (SPEC 4.3.10) and stays inside this same field: the hook list in SPEC
+  // 4.5.2.1 gains no sixth field for it. `DASH` here follows the same idiom
+  // pluginVersionText/pluginVersionEmpty below already use: one derived
+  // string decides both what is shown and whether the field counts as empty.
+  const lastErrorText = $derived.by((): string => {
+    if (conn.lastError === null) return DASH
+    // The trailing period belongs to the sentence read on its own (SPEC
+    // 4.3.5's rejection sentences, formatUnauthorizedReason, ...); here it
+    // is one clause among up to three, so it is dropped and replaced by the
+    // single period the whole line ends with instead.
+    const sentence = formatLastErrorCode(conn.lastError).replace(/\.$/, '')
+    const message = formatLastErrorMessage(conn.lastError.message)
+    const time = formatLastErrorTime(conn.lastError.at)
+    return message === '' ? `${sentence} at ${time}.` : `${sentence}: ${message} at ${time}.`
+  })
+  // SPEC 4.3.10: `conn.lastError === null` is the fact itself, one line
+  // above -- comparing the rendered string a second time would derive
+  // emptiness from a value already derived from the fact.
+  const lastErrorEmpty = $derived(conn.lastError === null)
+
+  const latencyText = $derived(formatLatency(conn.latencyMs))
+  const latencyEmpty = $derived(latencyText === DASH)
 
   // capabilities.pluginVersion is a string the plugin put on the wire
   // (SPEC 4.5.3 treats it like any other remote string), rendered as text
@@ -434,6 +470,18 @@
         data-empty={pluginVersionEmpty ? 'true' : undefined}
       >
         {pluginVersionText}{#if pluginVersionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      </span>
+    </div>
+    <div class="field">
+      <span class="field-label">Last error</span>
+      <span class="field-value" data-field="lastError" data-empty={lastErrorEmpty ? 'true' : undefined}>
+        {lastErrorText}{#if lastErrorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      </span>
+    </div>
+    <div class="field">
+      <span class="field-label">Latency</span>
+      <span class="field-value" data-field="latency" data-empty={latencyEmpty ? 'true' : undefined}>
+        {latencyText}{#if latencyEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
       </span>
     </div>
     {#if unauthorizedReasonText !== null}

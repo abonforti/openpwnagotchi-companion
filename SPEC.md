@@ -114,6 +114,8 @@ openpwnagotchi-companion/
 │   │   └── manifest.webmanifest
 │   ├── src/
 │   │   ├── __tests__/                # vitest specs, see §10.5
+│   │   │   ├── helpers/              # assertions shared by more than one spec
+│   │   │   │   └── ...
 │   │   │   └── ...
 │   │   ├── lib/
 │   │   │   ├── controls.ts           # the control messages and what may send one
@@ -3560,7 +3562,6 @@ because the tests for this view are written from this document and not from the 
 | `formatGpsFix(gps)` | `off` when `enabled` is false, otherwise `fix` or `no fix` |
 | `formatGpsSource(gps)` | the source name as it arrived; `DASH` when it is `null`, which is the ordinary dash rule and not a fourth word. `off` belongs to the fix indicator, which is the row that answers "is it looking": a source is a name, and the absence of a name is the absence of a name |
 | `formatUnitTime(epochSeconds \| null)` | the time of day in the reader's timezone, hours and minutes, and in front of it the date whenever the instant is not today: `09:14` today, `5 Aug 09:14` earlier this year, `5 Aug 2025 09:14` in another year. The day is **not** zero-padded. `DASH` for `null`. A timestamp in the phone's future still renders, which is the whole point of the rule above |
-| `formatNamedEvent(name \| null, epochSeconds \| null)` | `<name> at <time>` for the last handshake and the last peer; the name alone when the timestamp is missing, the time alone when the name is absent **or empty**; `DASH` when both are. An empty name is a real capture, not a malformed one - a hidden network broadcasts no SSID - and it must not render as `` at 12:04`` with a leading space where a name should be. `common.json` makes `LastHandshake.ssid` and `Peer.name` required strings, so the `null` arms are unreachable from a conformant payload and are there because this function takes the two fields off an object that may itself be `null`. The name is passed through unchanged, hostile or not: escaping is the renderer's job and mangling it here would be a second, quieter answer to §4.5.3 |
 
 Rounding rather than truncating, for the temperature and the battery: 47.6 shown as 47 is a
 degree the unit never reported, and the direction of that error is always the same one. Ages and
@@ -4372,9 +4373,11 @@ answer for a value the app does not know is the dash. The asymmetry is the libra
 this screen's, and it is written down here so it does not read as an oversight.
 
 `lastSeen` is `formatUnitTime` (§4.5.1.1), which is not written a second time here. It is **not**
-paired with the name through `formatNamedEvent`: that function exists for the Dashboard's
-single-line summary of a last peer, where one row has to carry both facts, and this screen has a
-column for each. Named because the two are easy to confuse and the hook list below settles it.
+composed with the name into one string: this screen has a column for each. The Dashboard's
+single-line summary of a last peer had to carry both facts in one row and once did compose them,
+through a `formatNamedEvent` that §4.5.3 has since removed -- a composed line cannot isolate the
+remote half of itself, so that row now builds its two pieces in the markup. Named here because
+the two shapes are easy to confuse and the hook list below settles it.
 
 ##### Order
 
@@ -4764,6 +4767,65 @@ controls and, in `localStorage`, the token (§4.3.6). So the rule is not a style
   concatenation breaks on an apostrophe with no hostility at all, and executes with a little.
 - **A remote string is rendered as text.** Never into a URL, an attribute or a style without the
   escaping that context needs, which is not the same escaping in each of them.
+
+**A string rendered as text can still lie about its neighbours (issue #219).** That is this
+rule's second half and it is a different question from the first. U+202E and the other bidi
+overrides are preserved verbatim by every escaping this section requires -- correctly, because
+escaping is about not executing a string -- and the browser then renders the rest of the line
+reversed. On a diagnostics line that means a hostile unit can reorder its own sentence against
+the timestamp printed beside it; in a list it means a row that reads as though it belongs to a
+different network.
+
+**The answer is isolation, not stripping.** A remote string is rendered inside a `<bdi>`, the
+element the platform has for exactly this: it isolates the bidirectional context of its contents
+from the surrounding text, with no CSS and no filtering. Stripping the characters was the other
+option and it is wrong for this product: an Arabic or Hebrew SSID is a name, not an attack, and
+this app displays names it did not choose. This section's own rule about a remote name refuses to
+mangle one
+for a related reason, and deleting characters to make a layout behave is the same mistake with a
+security justification attached to it.
+
+**A separator between the two must be expressed so the compiler cannot drop it.** Taking a
+composed line apart puts the local text into its own block, and Svelte trims whitespace at a block
+boundary: `{#if hasTime} at {time}{/if}` renders `nameat 09:14`. This is the same compiler
+behaviour issue #188 recorded for the accessible label beside a dash, met again in a new place
+because the isolation rule creates exactly the shape that provokes it -- a remote piece and a
+local piece with a space between them, now separated by a tag or a block. Write the separator as
+an expression, `{' at '}`, which is a value rather than markup and survives.
+
+**Only the remote substring goes inside the element, never the composed line.** This is the part
+that decides whether the fix works at all: an override inside an isolate still reorders the text
+*beside it within that isolate*, so wrapping `<name> at <time>` as one unit isolates it from the
+rest of the page and leaves the timestamp exactly as reorderable as before. The local text -- the
+separators, the sentence the code selected, the time this client stamped -- stays outside. Three
+sites had to be taken apart rather than tagged, because they were building one string out of a
+remote piece and a local one before anything could wrap either: the Dashboard's last handshake and
+last peer, and the Settings diagnostics line.
+
+That has a consequence worth stating: **a formatter that composes a remote value with local text
+into one string cannot be used at a site that needs isolation.** The composition has to happen in
+the markup, where the boundary can exist, rather than in the function.
+
+`formatNamedEvent` was that formatter and it has no callers left. It goes, with its tests: a
+function kept because deleting it felt wasteful is a function the next reader will use, and this
+one now composes a shape the isolation rule forbids. What was worth keeping from it -- that a
+remote name passes through unchanged, hostile or not, and that a missing name and a missing
+timestamp each have an answer -- is a property of the markup that replaced it, and belongs in that
+markup's tests.
+
+**What a hostile-string test asserts changes with this, and the old form was always the weaker
+one.** Those tests read "the field has no child elements", which stood in for "the remote string
+produced no markup" only while the template happened to create no elements of its own. It creates
+one now, deliberately, so the proxy is false and the tests it protected would fail for a reason
+unrelated to any attack. The property was never about the count: it is that **no element in the
+field came from the remote string**. Assert that -- the string's own characters present as text,
+and no `script`, `img` or other injected node anywhere under the field -- because an assertion
+that a container is empty stops being about security the moment somebody legitimately puts
+something in it.
+
+The realistic worst case is modest and worth saying plainly: nobody gets code execution out of
+this. It is a display-integrity bug on a tool whose whole job is to report faithfully what a unit
+saw, which is why it is worth the element rather than a shrug.
 
 This is one of two layers. The other is a Content-Security-Policy on the static server, issue
 #67, which is not shipped yet: when it is, an escape missed on one screen will not execute,
@@ -5956,6 +6018,72 @@ Two behaviours are deliberately unchanged, and are pinned so that a later edit h
 a test rather than with nobody. The script exempts itself, because it necessarily contains the
 patterns it looks for. Matched text is never echoed in a finding, because the match is the
 secret; a finding is a path, a line number and a label, and that is enough to go and look.
+
+**A credential is not always at the start of a line (issue #211).** The npm pattern is anchored to
+column 0, which is a deliberate concession stated in its own comment: it spares prose that writes
+`_authToken=<your token>` mid-sentence. #199 measured how wide the concession really is, and it is
+wider than the `#` case that comment names -- `    "_authToken=VALUE",` inside a list literal,
+`probe = "_authToken=VALUE"`, and anything else with a character before the key all escape it,
+and `credential assignment` does not cover them either because it requires the quote to follow the
+`=` and here it precedes the key.
+
+Widening the anchor to tolerate leading quotes was tried during #199 and rejected on measurement:
+it catches the list-literal form, still misses `x = "_authToken=..."`, which is the likelier
+paste, and turns any documentation line starting with a backtick into a false positive. Half a fix
+bought with a false positive is worse than an honest limit.
+
+**So the second pattern is about the value, not the position.** It matches the key anywhere on the
+line and requires what follows to look like a credential rather than a placeholder: a run of at
+least sixteen characters from the alphabet real tokens use, with no spaces, no angle brackets, and
+none of the words a document uses to mean "put yours here". `_authToken=<your token>` does not
+match, because a placeholder announces itself; a quoted assignment carrying sixteen or more
+token characters does, because a real token cannot announce itself. The anchored pattern stays as
+it is -- it catches the column-0 case with no value heuristic at all, and two patterns with
+different failure modes are the point.
+
+**The placeholder exclusion is about the whole value, not about a word boundary.** The first
+attempt anchored the excluded words with `\b`, which holds against a hyphen and not against an
+underscore -- and the underscore is inside the token alphabet, so `YOUR_TOKEN_HERE_XXXX` fired
+while `your-token-here-xxxx` did not. `YOUR_TOKEN_HERE` is the commonest documentation
+placeholder there is, which makes that the exact false positive §5.1.2 gives as its reason for
+rejecting the widened anchor, arrived at from the other direction. So the rule is: **a value
+containing any of the placeholder words anywhere in it is not a credential.** A real token is
+random and will not contain `changeme`; a document that means "put yours here" almost always
+says so in the value. The false negative that buys -- a genuine secret that happens to spell one
+of those words inside itself -- is the cheaper mistake, because the other one turns the scanner
+off.
+
+**A colon is an assignment too.** All three patterns require `=`, so a credential written the way
+JSON, YAML and a JavaScript object literal write it -- `{"_authToken": "..."}`, `_authToken:
+Ab3x...` -- escapes every one of them unless it happens to sit at column 0. That is the honest
+answer to "can it be missed by trivial reformatting", and it is the form a token most often
+arrives in, because it is the form a config file and a paste from a lockfile take. The
+value-shaped pattern accepts `=` or `:` between the key and the value, with **an optional quote on
+either side of the separator**: in these formats the value is quoted, and in JSON the key is
+quoted too, so `"_authToken": "..."` puts one quote before the colon and another after it. The
+first attempt allowed only the second quote and still missed the JSON form -- the very form this
+paragraph was written for -- which was found by running the pattern against the shapes rather than
+by reading it. A scanner is the one thing in this repository where a rule and its measurement
+must not be separated: it is the tool the audits are conducted with. Half the fix is worse than none here: it would make the section
+claim the JSON form is covered while it is not. The anchored one does not change: it is a
+deliberate, documented concession and widening it is what §5.1.2 already refused.
+
+The neighbouring `credential assignment` pattern misses these too, for a related reason -- it
+opens with `\b`, and a leading underscore is not a word boundary, so `_authToken` defeats it
+before the value is ever considered. That is pre-existing and it is not this pattern's job to
+compensate: two patterns covering for each other's blind spots is how both end up untested.
+
+`none`, `null`, `true` and `false` come out of the list. They cannot be reached: the shortest is
+four characters against a sixteen-character floor, so as alternatives they were dead the moment
+the floor was written, and a dead alternative in a list of live ones is read as a case somebody
+considered.
+
+**Both are probed in both directions, like every other pattern**, and the probe for the new one
+carries a value that is credential-shaped rather than a word, or it would be testing the key and
+not the rule. **Every excluded word gets its own probe**, shaped so it passes the length and
+alphabet tests and is refused only by the exclusion: a probe that fails on shape first proves
+nothing about the word list, and a word list with one probe standing for all of it is a list
+where deleting eight entries is invisible.
 
 ### 5.2 `release.yml` (on tag `v*`)
 

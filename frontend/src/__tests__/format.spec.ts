@@ -15,7 +15,6 @@ import {
   formatLastErrorTime,
   formatLatency,
   formatMode,
-  formatNamedEvent,
   formatTemperature,
   formatUnauthorizedCallToAction,
   formatUnauthorizedReason,
@@ -488,75 +487,6 @@ describe('formatUnitTime', () => {
 })
 
 // ---------------------------------------------------------------------------
-// formatNamedEvent - "<name> at <time of day>" for the last handshake and
-// the last peer; the name alone when the timestamp is missing, the time
-// alone when the name is; DASH when both are absent; the name passed
-// through unchanged, hostile or not (SPEC.md 4.5.1.1, added for issue #121's
-// "named, not merely timed" decision).
-// ---------------------------------------------------------------------------
-
-describe('formatNamedEvent', () => {
-  it('is DASH when both the name and the timestamp are absent', () => {
-    expect(formatNamedEvent(null, null)).toBe(DASH)
-  })
-
-  it('renders the name alone when the timestamp is missing', () => {
-    expect(formatNamedEvent('TestNet_001', null)).toBe('TestNet_001')
-  })
-
-  it('renders the time alone when the name is missing', () => {
-    const epochSeconds = 1_700_000_460
-    const clock = extractClock(formatUnitTime(epochSeconds))
-    const rendered = formatNamedEvent(null, epochSeconds)
-    // The time-alone rendering must carry the same clock as formatUnitTime
-    // would produce on its own: this function does not invent its own time
-    // formatting rule for the name-absent case.
-    expect(extractClock(rendered)).toEqual(clock)
-  })
-
-  it('combines the name and the time of day as "<name> at <time of day>" when both are present', () => {
-    const epochSeconds = 1_700_000_460
-    const rendered = formatNamedEvent('TestNet_001', epochSeconds)
-
-    expect(rendered.startsWith('TestNet_001')).toBe(true)
-    expect(rendered).toContain(' at ')
-    // The time-of-day portion carries the same clock formatUnitTime would
-    // produce for the same instant, wherever in the string it lands.
-    expect(extractClock(rendered)).toEqual(extractClock(formatUnitTime(epochSeconds)))
-  })
-
-  it('passes a hostile name through unchanged rather than escaping or stripping it', () => {
-    // SPEC.md: "The name is passed through unchanged, hostile or not:
-    // escaping is the renderer's job and mangling it here would be a
-    // second, quieter answer to §4.5.3." This function's contract is string
-    // in, string out with no sanitisation; the view is what must render it
-    // as text (pinned separately in dashboard.spec.ts).
-    const hostileName = '<script>alert(1)</script>'
-    expect(formatNamedEvent(hostileName, null)).toBe(hostileName)
-    const withTime = formatNamedEvent(hostileName, 1_700_000_460)
-    expect(withTime.startsWith(hostileName)).toBe(true)
-  })
-
-  it('treats an empty name as absent: a hidden network broadcasts no SSID, and that is a real capture', () => {
-    // SPEC.md 4.5.1.1 (amended): "the time alone when the name is absent or
-    // empty ... it must not render as ' at 12:04' with a leading space
-    // where a name should be." An empty string is truthy-adjacent (`name
-    // !== null` is true for ''), so a version of this function that only
-    // checks for `null` renders exactly that leading-space defect; checking
-    // for `''` too is the fix this test pins.
-    const epochSeconds = 1_700_000_460
-    const rendered = formatNamedEvent('', epochSeconds)
-    expect(rendered).toBe(formatUnitTime(epochSeconds))
-    expect(rendered.startsWith(' ')).toBe(false)
-    expect(rendered).not.toContain(' at ')
-  })
-
-  it('is DASH for an empty name with no timestamp either, the same as a null name', () => {
-    expect(formatNamedEvent('', null)).toBe(DASH)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // "A value that is not a finite number is not known" (SPEC.md amended
 // §4.5.1.1). Every function returns DASH for NaN, for either infinity, and
 // for a negative duration; formatAge returns "never refreshed" for the same
@@ -571,8 +501,8 @@ describe('formatNamedEvent', () => {
 // above), so negative is not tested as invalid for formatTemperature,
 // formatChannel or formatBattery's percentage here -- only NaN and the two
 // infinities, which the rule states without qualification for every
-// function. An epoch second (formatUnitTime/formatNamedEvent's second
-// argument) is not a duration either, so the same holds for it.
+// function. An epoch second (formatUnitTime's own argument) is not a
+// duration either, so the same holds for it.
 // ---------------------------------------------------------------------------
 
 describe('non-finite and negative-duration input is treated as not known', () => {
@@ -619,11 +549,6 @@ describe('non-finite and negative-duration input is treated as not known', () =>
     expect(formatUnitTime(-Infinity)).toBe(DASH)
   })
 
-  it('formatNamedEvent: a non-finite timestamp is treated as absent, the same as null', () => {
-    expect(formatNamedEvent('TestNet_001', NaN)).toBe('TestNet_001')
-    expect(formatNamedEvent(null, NaN)).toBe(DASH)
-    expect(formatNamedEvent('TestNet_001', Infinity)).toBe('TestNet_001')
-  })
 })
 
 // ---------------------------------------------------------------------------

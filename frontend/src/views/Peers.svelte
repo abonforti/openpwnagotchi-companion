@@ -81,23 +81,23 @@
          remote string on this row, and only '' dashes; '???' passes
          through unchanged because it is not ''. -->
     <span class="row-field" data-field="name" data-empty={nameEmpty ? 'true' : undefined}>
-      {formatRemoteString(peer.name)}{#if nameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.name)}</bdi>{#if nameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="fullName" data-empty={fullNameEmpty ? 'true' : undefined}>
-      {formatRemoteString(peer.fullName)}{#if fullNameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.fullName)}</bdi>{#if fullNameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span
       class="row-field"
       data-field="fingerprint"
       data-empty={fingerprintEmpty ? 'true' : undefined}
     >
-      {formatRemoteString(peer.fingerprint)}{#if fingerprintEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.fingerprint)}</bdi>{#if fingerprintEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="face" data-empty={faceEmpty ? 'true' : undefined}>
-      {formatRemoteString(peer.face)}{#if faceEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.face)}</bdi>{#if faceEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="version" data-empty={versionEmpty ? 'true' : undefined}>
-      {formatRemoteString(peer.version)}{#if versionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.version)}</bdi>{#if versionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
     </span>
     <span class="row-field" data-field="rssi" data-empty={rssiEmpty ? 'true' : undefined}>
       {formatPeerNumber(peer.rssi)}{#if rssiEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}

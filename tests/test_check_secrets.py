@@ -76,6 +76,7 @@ def _pattern(label):
 
 NPM_ACCESS_TOKEN = _pattern("npm access token")
 NPM_REGISTRY_CREDENTIAL = _pattern("npm registry credential")
+NPM_REGISTRY_CREDENTIAL_VALUE = _pattern("npm registry credential value")
 
 
 def _synthetic_npm_token_body(length=36):
@@ -103,6 +104,30 @@ def _npm_registry_credential_probe(
     than merely unlikely.
     """
     return f"{prefix}{keyword}" + f"={value}"
+
+
+def _credential_shape_json_probe(key="_authToken", value=None):
+    """Assembles a `{"key": "value"}` line - the JSON-object shape SPEC.md
+    5.1.2 names as "the form a token most often arrives in, ... from a
+    config file or a paste out of a lockfile" - for `PROBES["npm registry
+    credential value"]` specifically.
+
+    This shape, not the plain `key=value` one `_credential_shape_probe`
+    builds, is deliberate: a `key=value` line sits at column 0 with no
+    character in front of the key, which the anchored `npm registry
+    credential` pattern (`^\\s*(?:prefix)?_authToken...`) matches too, so a
+    probe built that way proves nothing about what makes the new pattern's
+    own PATTERNS entry worth having - the anchored one already fires on it.
+    The `{"` here sits at the very start of the line, in the position the
+    anchor's own `_` would need to occupy, so the anchored pattern cannot
+    match this line at all (pinned directly by
+    `test_anchored_pattern_does_not_fire_on_the_new_patterns_own_json_probe`
+    below); only the new, position-independent pattern does. It also
+    exercises the `:` separator SPEC.md 5.1.2 adds alongside `=`, which a
+    bare `key=value` probe would not.
+    """
+    value = value if value is not None else _synthetic_npm_token_body(16)
+    return "{" + '"' + key + '": "' + value + '"}'
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +279,29 @@ def test_npm_registry_credential_does_not_fire_on_a_documentation_line():
     assert not NPM_REGISTRY_CREDENTIAL.search(probe), f"expected no match on {probe!r}"
 
 
+def test_anchored_pattern_does_not_fire_on_the_new_patterns_own_json_probe():
+    """`PROBES["npm registry credential value"]` (below) is deliberately a
+    shape only the value-shaped pattern can match: `{"_authToken": "..."}`
+    sits with `{"` in front of the key, which the anchored pattern's
+    `^\\s*(?:prefix)?_...` cannot see past - review found the probe that
+    used to stand here was a plain `_authToken=...` line at column 0, which
+    the *anchored* pattern also fires on, so it demonstrated nothing about
+    what the new pattern is for. Pinned here, once, against both patterns at
+    once: the anchored one is silent on it (this test), the new one fires on
+    it (`test_pattern_fires_on_its_own_probe`, parametrized over `PATTERNS`,
+    covers that half already).
+    """
+    probe = _credential_shape_json_probe()
+    assert not NPM_REGISTRY_CREDENTIAL.search(probe), (
+        f"the anchored 'npm registry credential' pattern is not supposed to fire on "
+        f"{probe!r} - the '{{\"' in front of the key is exactly what the new "
+        f"'npm registry credential value' PROBES entry is chosen to demonstrate"
+    )
+    assert NPM_REGISTRY_CREDENTIAL_VALUE.search(probe), (
+        f"expected the value-shaped pattern to fire on its own PROBES entry {probe!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # main() over the real tree: pins that adding the two patterns did not turn
 # any file this checkout already tracks into a false positive. It reaches
@@ -344,6 +392,7 @@ PROBES = {
     "Google API key": "AIza" + "C" * 35,
     "npm access token": f"npm_{_synthetic_npm_token_body(36)}",
     "npm registry credential": _npm_registry_credential_probe(),
+    "npm registry credential value": _credential_shape_json_probe(),
     "private key in a URL": _url_credential_probe(),
     "credential assignment": _credential_assignment_probe(),
 }

@@ -171,9 +171,13 @@
       // argument as HTML, which the row views never do -- Svelte's own
       // `{entry.ssid}` interpolation escapes it instead -- so the popup
       // content is built as a text node explicitly rather than handed the
-      // string directly.
+      // string directly. Isolated in a <bdi> the same way every other
+      // remote string in this app is, so a bidi override inside the SSID
+      // cannot reorder anything around it in the popup.
       const content = document.createElement('span')
-      content.textContent = pin.ssid
+      const isolated = document.createElement('bdi')
+      isolated.textContent = pin.ssid
+      content.appendChild(isolated)
       L.marker([pin.lat, pin.lon]).bindPopup(content).addTo(layer)
     }
     if (!centeredOnUnit && !centeredOnCapture && pins.length > 0) {

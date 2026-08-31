@@ -11,6 +11,8 @@ import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClie
 // re-deriving the formatting rule locally.
 import { DASH, EMPTY_LABEL, formatUnitTime } from '../lib/format'
 
+import { assertRemoteStringIsolated } from './helpers/remoteText'
+
 // Written from SPEC.md 4.5.2.4 ("Peers, and the refresh rule stops being the
 // Wi-Fi view's", issue #190), which claims most of its behaviour from 4.5.2.3
 // (the Wi-Fi view) rather than restating it: the three refresh occasions, why
@@ -729,7 +731,16 @@ describe('every remote string renders as text (SPEC 4.5.3)', () => {
 
   for (const field of fields) {
     for (const hostile of HOSTILE_STRINGS) {
-      it(`${field} "${hostile}" renders as text, no element created`, async () => {
+      // Every one of these five fields is isolated inside a <bdi> (5a below
+      // pins it directly for name/fullName/fingerprint/face/version), so
+      // "no element created" is no longer literally true - the field's own
+      // wrapper is deliberate. assertRemoteStringIsolated is the exact
+      // property this test is actually named for: the string's own
+      // characters present as text, inside that one wrapper, and no script,
+      // img or other element anywhere in the field, on top of it - a check
+      // that "the field has no child elements" stopped being able to make
+      // once the template started creating one on purpose (SPEC 4.5.3).
+      it(`${field} "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
         const { client } = await mountPeers()
         client.settle('get_peers', peersListEnvelope([peer({ [field]: hostile } as Partial<Peer>)]))
         await settle()
@@ -739,6 +750,7 @@ describe('every remote string renders as text (SPEC 4.5.3)', () => {
         expect(root().querySelector('script')).toBeNull()
         expect(root().querySelector('[onerror]')).toBeNull()
         expect((window as unknown as { __peersViewPwned?: boolean }).__peersViewPwned).toBeUndefined()
+        assertRemoteStringIsolated(el, hostile)
       })
     }
   }
@@ -751,6 +763,47 @@ describe('every remote string renders as text (SPEC 4.5.3)', () => {
     expect(field.textContent).toBe('-')
     expect(field.getAttribute('data-empty')).not.toBe('true')
   })
+})
+
+// =============================================================================
+// 5a. Bidi isolation (SPEC 4.5.3, issue #219): `Peer.fullName`, `Peer.face`
+//     and `Peer.identity` arrive over pwngrid from another person's unit, so
+//     a peer name is exactly the "reorders its own sentence" case SPEC 4.5.3
+//     names. See wifi-view.spec.ts's own bidi-isolation block for why the
+//     wrapping shape is checked either way rather than one guessed reading.
+// =============================================================================
+
+const BIDI_OVERRIDE = '‮'
+const HOSTILE_BIDI_NAME = `unit-${BIDI_OVERRIDE}atled.exe`
+const RTL_NAME_ARABIC = 'وحدة_اختبار'
+const RTL_NAME_HEBREW = 'יחידת_בדיקה'
+
+describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
+  // Every text field on a peer row (§4.5.2.4's own DOM-hook list), not only
+  // name and fullName - fingerprint, face and version arrive over pwngrid
+  // exactly the same way, and each was left untested here until review found
+  // the gap: a wrapper deleted from any of the three left this suite green.
+  for (const field of ['name', 'fullName', 'fingerprint', 'face', 'version'] as const) {
+    it(`${field} carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped`, async () => {
+      const { client } = await mountPeers()
+      client.settle('get_peers', peersListEnvelope([peer({ [field]: HOSTILE_BIDI_NAME } as Partial<Peer>)]))
+      await settle()
+      const el = fieldIn(rows()[0] as HTMLElement, field)
+      expect(el.textContent).toBe(HOSTILE_BIDI_NAME)
+      expect(el.textContent).toContain(BIDI_OVERRIDE)
+      assertRemoteStringIsolated(el, HOSTILE_BIDI_NAME)
+    })
+
+    for (const rtlName of [RTL_NAME_ARABIC, RTL_NAME_HEBREW]) {
+      it(`a legitimate right-to-left ${field} "${rtlName}" renders unmangled, not stripped or reordered`, async () => {
+        const { client } = await mountPeers()
+        client.settle('get_peers', peersListEnvelope([peer({ [field]: rtlName } as Partial<Peer>)]))
+        await settle()
+        const el = fieldIn(rows()[0] as HTMLElement, field)
+        expect(el.textContent).toBe(rtlName)
+      })
+    }
+  }
 })
 
 // =============================================================================

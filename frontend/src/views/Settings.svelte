@@ -217,20 +217,28 @@
   // it only selects the sentence -- a close code is the one exception and
   // formatLastErrorCode renders it itself. `at` is the phone's own clock
   // (SPEC 4.3.10) and stays inside this same field: the hook list in SPEC
-  // 4.5.2.1 gains no sixth field for it. `DASH` here follows the same idiom
-  // pluginVersionText/pluginVersionEmpty below already use: one derived
-  // string decides both what is shown and whether the field counts as empty.
-  const lastErrorText = $derived.by((): string => {
-    if (conn.lastError === null) return DASH
-    // The trailing period belongs to the sentence read on its own (SPEC
-    // 4.3.5's rejection sentences, formatUnauthorizedReason, ...); here it
-    // is one clause among up to three, so it is dropped and replaced by the
-    // single period the whole line ends with instead.
-    const sentence = formatLastErrorCode(conn.lastError).replace(/\.$/, '')
-    const message = formatLastErrorMessage(conn.lastError.message)
-    const time = formatLastErrorTime(conn.lastError.at)
-    return message === '' ? `${sentence} at ${time}.` : `${sentence}: ${message} at ${time}.`
-  })
+  // 4.5.2.1 gains no sixth field for it.
+  //
+  // SPEC 4.5.3 (issue #219): the sentence, the message and the time are
+  // kept as three separate pieces rather than joined into one string here,
+  // because only the message is remote. Composing them into one string and
+  // isolating the whole result in one <bdi> would still let a bidi override
+  // inside the message reorder the sentence and the time that share its
+  // isolate -- the diagnostics-line case the issue names. The markup below
+  // wraps only lastErrorMessage; the trailing period belongs to the
+  // sentence read on its own (SPEC 4.3.5's rejection sentences,
+  // formatUnauthorizedReason, ...) and is dropped here in favour of the
+  // single period the whole line ends with instead.
+  const lastErrorSentence = $derived(
+    conn.lastError === null ? '' : formatLastErrorCode(conn.lastError).replace(/\.$/, ''),
+  )
+  const lastErrorMessage = $derived(
+    conn.lastError === null ? '' : formatLastErrorMessage(conn.lastError.message),
+  )
+  const lastErrorHasMessage = $derived(lastErrorMessage !== '')
+  const lastErrorTimeText = $derived(
+    conn.lastError === null ? '' : formatLastErrorTime(conn.lastError.at),
+  )
   // SPEC 4.3.10: `conn.lastError === null` is the fact itself, one line
   // above -- comparing the rendered string a second time would derive
   // emptiness from a value already derived from the fact.
@@ -469,13 +477,16 @@
         data-field="pluginVersion"
         data-empty={pluginVersionEmpty ? 'true' : undefined}
       >
-        {pluginVersionText}{#if pluginVersionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+        <bdi>{pluginVersionText}</bdi>{#if pluginVersionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
       </span>
     </div>
     <div class="field">
       <span class="field-label">Last error</span>
       <span class="field-value" data-field="lastError" data-empty={lastErrorEmpty ? 'true' : undefined}>
-        {lastErrorText}{#if lastErrorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+        <!-- SPEC 4.5.3 (issue #219): only lastErrorMessage is remote, so
+             only it sits in a <bdi> -- the sentence and the time are this
+             client's own text and stay outside the isolate. -->
+        {#if lastErrorEmpty}{DASH}{:else}{lastErrorSentence}{#if lastErrorHasMessage}: <bdi>{lastErrorMessage}</bdi>{/if} at {lastErrorTimeText}.{/if}{#if lastErrorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
       </span>
     </div>
     <div class="field">

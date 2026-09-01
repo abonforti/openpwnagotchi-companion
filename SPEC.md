@@ -1819,9 +1819,10 @@ That fix has a residual, and it is not one thread total, it is one thread and on
 descriptor per silent peer. `daemon_threads = True` (`_serve_http`) is what stops
 `server_close()` waiting on a handshake that will never finish, which is the entire point of the
 fix above - but the same setting means that thread is never joined, by `stop()`, by a reload, or
-by anything else. It outlives all three: a peer that connects and sends nothing keeps its thread
-and its socket for the life of the process, and every further silent peer adds one more of each,
-unbounded in aggregate. Tracked separately as issue #102.
+by anything else. It outlives all three: a peer that connects and sends nothing would keep its
+thread and its socket for the life of the process. What stops that from being unbounded in
+aggregate is §2.15.2, which caps how many connections may sit in the handshake state at once and
+closes the rest.
 
 Two requirements v1 omitted, both of which break the PWA silently:
 
@@ -1868,6 +1869,243 @@ Additional rules:
   it writes into a log the caller does not own. The exception is logged by its `repr`, not
   its `str`: `str()` of an `OSError` carries the path it failed on and `repr()` does not,
   so the choice is part of the rule rather than a formatting preference.
+
+#### 2.15.2 A bound on unfinished handshakes (issue #102)
+
+The residual above was measured rather than argued about: twenty plain TCP connections that send
+nothing produced twenty handler threads and twenty descriptors, all still alive after `stop()`
+returned. One thread and one descriptor **per connection**, held for the life of the pwnagotchi
+process, surviving `on_unload` and a plugin reload. Nobody needs to be hostile to cause it: a
+phone that suspends the app mid-handshake does exactly this by accident, and the port carries no
+token, so anyone who can reach the tether can do it on purpose.
+
+**What is bounded is a count, not a duration.** §2.15 (issue #100) rejected a socket timeout
+because a defensible number needs a real handshake measured over BT PAN, and device access here is
+read-only and gated. That reasoning still stands and this does not reopen it. How many unfinished
+handshakes may exist at once is a different question, and it can be answered without measuring the
+tether.
+
+**At most `MAX_PENDING_HANDSHAKES = 16` connections may be in the handshake state at once.** A
+connection enters that state when it is accepted and leaves it when its TLS handshake completes or
+its socket closes. The number is not arbitrary: a browser opens up to six connections to one host
+over HTTP/1.1, so a single legitimate client can hold six at an instant, and the cap is two such
+clients plus headroom. A completed handshake does not occupy a slot, so an app in ordinary use
+never approaches it -- reaching the cap means either abuse or a client that stopped talking.
+
+**An unfinished handshake also expires, after `HANDSHAKE_DEADLINE = 30` seconds.** §2.15 declined
+a handshake timeout, and this does not overturn that reasoning so much as narrow what a timeout is
+for. What was declined was a *tight* bound, a number meant to say how long a TLS handshake over BT
+PAN ought to take -- and that does need the link measured, which device access here does not allow.
+Thirty seconds is not that number. It is three orders of magnitude above any handshake that will
+ever complete, so it never has to be right about the link; it only has to be safely larger than it,
+and it is. What it buys is the property every policy below depends on: **a slot in this registry is
+never held forever**. Without it, a peer's sixteen silent sockets are permanent at zero cost, and
+every rule about which one to close is a rule about how to lose slowly.
+
+**At the cap, the oldest unfinished handshake is closed.** With the deadline above, the oldest is
+also the one nearest its own expiry, so the eviction advances by seconds what would have happened
+anyway. Refusing the newly arrived connection instead is the obvious choice and the wrong one: it
+hands anyone who can reach the port a way to keep the owner out for as long as the flood lasts,
+while closing the oldest lets a fresh connection through on every arrival.
+
+This is deliberately the simplest rule that works, and it replaces two that did not. The first was
+plain oldest-first without a deadline, where sixteen sockets that never speak lock the owner out
+permanently. The second tried to be fair by source address, closing from whichever address held
+the most unfinished handshakes: an audit found that a peer using many addresses simply holds one
+each and is never the busiest, while the one source that legitimately holds several at once is a
+real browser -- so the rule targeted the owner by construction, and every patch to its tie-break
+moved the failure rather than removing it. **A fairness rule keyed on source address cannot work
+on this port**, because addresses are free here: a host on the USB gadget interface owns its side
+of a point-to-point link and can add aliases at will, and the BT PAN `/28` holds fourteen. Any
+metric an attacker can minimise by spreading out is a metric that eventually names the legitimate
+client, whose honest behaviour is concentrated. The deadline needs no such metric.
+
+Say plainly what remains, since two versions of this section claimed more than they delivered. A
+sustained flood still denies service, and nothing at this layer changes that. What the deadline
+buys is that denial costs the attacker a continuous stream of new connections rather than sixteen
+sockets opened once and abandoned, and that the listener is fully available again within thirty
+seconds of the flood stopping rather than needing the plugin restarted.
+
+**Every deadline here is measured on a monotonic clock, not on the wall clock.** The unit has no
+RTC and takes its time from the phone, so a step is expected rather than hypothetical, and a
+deadline is the one thing that must not move when it happens. A backward step would extend a
+request deadline by the length of the step, parking a handler thread for exactly as long as the
+correction -- reintroducing the unbounded wait this section exists to remove, at the moment the
+unit finally learns what time it is. A forward step would expire every connection in flight at
+once. The rule that the same wall clock is the right source for a `timestamp` on the wire, because
+that one has to mean something to the phone reading it, is what makes this worth stating
+separately: a stamp is a claim about when, and a deadline is a measurement of how long.
+
+**A socket closed twice is not the hazard it looks like, and the thing that looked like it was
+something else.** The deadline made an old worry routine: the oldest pending connection is the one
+the cap evicts and also the one nearest its own expiry, so two paths can close the same socket at
+once, and a descriptor freed by one of them can be reused by the kernel before the other gets
+there. A guard was built for that -- a set recording which path owned each teardown -- and then
+the experiment was run rather than the argument continued: with the guard disabled, the test that
+had caught the original symptom stayed green through ten runs and a twenty-six connection stress
+probe through five. The guard was removed. Python's own socket object invalidates its descriptor
+when it closes, so a second close on the same object fails with a bad descriptor rather than
+reaching a recycled one, and `socketserver` already swallows that.
+
+The symptom that prompted it was real, and its cause was two lines sitting outside a `try`: the
+socket timeout set just before the handshake raises when another thread has already closed that
+socket, and that exception escaped the silence rule and logged a line naming the peer. A guard
+that makes a symptom disappear is not the same as a diagnosis, and the way to tell them apart is
+to remove the guard and see whether the symptom comes back.
+
+**`stop()` closes every socket still in the handshake state.** It does not join their threads:
+that wait is exactly what `daemon_threads = True` exists to avoid, and what #90 and #100 both
+depend on being absent. Closing a socket is not waiting on it. After `stop()` returns, no
+descriptor from a peer that never completed a handshake is still held, which is the acceptance
+criterion this section exists to meet.
+
+**An eviction is not an error and is not logged.** It is the specified behaviour of a full
+registry, and a log line per eviction would hand an unauthenticated peer a way to write into the
+log `get_log` serves (§2.9), one line per connection, for as long as it cares to keep connecting.
+The refused handshake surfaces as the connection closing, which is what the peer already knows.
+**Every deadline this section sets is silent for the same reason**, the handshake one included.
+A handshake that expires is not "a handshake that failed for some other reason" in §2.15's sense:
+the plugin set that clock and the plugin closed that socket, so it is the plugin's own doing in
+exactly the way an eviction is, and it is one debug line per abandoned connection for anyone
+willing to wait thirty seconds. A handshake that fails on its own -- a peer that speaks something
+that is not TLS, a certificate the client rejects -- still logs at debug, because that one is news.
+
+Silence has a cost the audit named and it is worth paying attention to rather than arguing away:
+a tether so degraded that no handshake ever completes produces, under this rule, nothing at all.
+That is the owner's own symptom, and it is the one this listener is best placed to report. So
+expiries are **counted, and one line is written at most once a minute** saying how many there have
+been since the last one. A peer can force that line, but not more than one a minute however many
+connections it opens, which is the property that made the per-connection line unacceptable. The
+count is a number this plugin produced and not anything the peer supplied.
+The test is not the shape of the exception, it is whether this listener is the reason the socket
+closed.
+
+**A live-cap eviction is counted and reported like a handshake expiry, not silenced outright.**
+The same argument that made the blanket handshake silence wrong applies here twice over: the
+connection being closed may be the owner's, mid-response, and a PWA that breaks with nothing in
+the log to explain it is the worst diagnostic outcome this section can produce. It shares the
+once-a-minute counter, so a peer still cannot write a line per connection, and the owner still
+learns that this listener is closing sessions to keep up.
+
+**A request deadline that expires is silent too**: `BaseHTTPRequestHandler` reports a
+timed-out read through its own error log, one line per connection, and a rule that forbids the
+eviction line while permitting that one is a rule that has not been read carefully. The text
+carries nothing the peer controls, and thirty seconds per line is not the cheapest way into this
+log, but neither of those is the argument -- the argument is that this section says what may write
+into a log a client can read, and it has to mean it.
+
+That collides with §2.15's own rule that a handshake failure is logged at debug, and the collision
+is not theoretical: evicting a connection unblocks its handler thread with a TLS end-of-file
+error, which is precisely what that rule catches and logs. Two rules meeting on the same line is
+how one of them quietly wins, so this says which. **The eviction wins.** The plugin knows it
+closed that socket -- it is the one that closed it -- so the handler for a connection this
+listener evicted logs nothing, while a handshake that fails for any other reason still logs at
+debug as §2.15 says. The distinction is a fact the implementation holds, not a guess about the
+exception, so it is made by remembering which sockets were evicted rather than by inspecting what
+was raised.
+
+**Closing an evicted connection means `shutdown()` and then `close()`, not `close()` alone.**
+This was found by the tests rather than by reasoning, and the first implementation failed them:
+server-side the count capped at sixteen immediately and correctly, while every one of the fifty
+client sockets stayed open for as long as anyone waited. A `close()` releases the calling thread's
+reference to the file description; the kernel tears the connection down only when every reference
+is gone, and the handler thread blocked inside `do_handshake()` holds one for the duration of that
+syscall. A peer that never speaks never lets that syscall return, so the eviction removed the
+socket from the registry and changed nothing else: the descriptor stayed open, the thread stayed
+parked, and the bound existed only in the bookkeeping. `shutdown(SHUT_RDWR)` acts on the
+connection rather than on one reference to it, which is what actually unblocks the other thread.
+It is called on the raw socket rather than through the TLS wrapper's own `shutdown`, because that
+one also clears state a concurrent handshake may still be reading.
+
+**The cap is per bound address, not global.** Each address in `bind_addresses` gets its own
+server with its own socket and its own handler threads (§2.3.1), and the justification above is
+about one client talking to one address: six connections from a browser, two clients plus
+headroom. A global cap would also mean a silent peer on the USB gadget interface could evict the
+handshakes of a client on the tether, which is a coupling between two listeners that nothing else
+in this design has. The aggregate bound is therefore sixteen per address; on the reference
+hardware that is one or two addresses, and the number of addresses is the owner's own
+configuration rather than anything a peer can grow.
+
+**The drain in `stop()` happens after `shutdown()` returns, not before it.** Draining first races
+the loop it is draining: `shutdown()` only sets a flag the poll loop notices up to its poll
+interval later, so every connection accepted in that window is registered after the registry was
+cleared, and nothing ever closes it -- `server_close()` releases the listening socket and nothing
+else. That leaks up to a full cap per unload and accumulates across plugin reloads, which is the
+opposite of what this section promises. `shutdown()` does not wait on handler threads, so ordering
+it first costs nothing this section cares about.
+
+**A slot is released on every path out, not only the normal one.** The registration happens at
+accept; if the handler thread fails to start -- routine enough on the reference hardware that the
+code already comments on it -- the normal removal never runs and a closed socket occupies a slot
+until the next eviction reclaims it. Removal belongs where every path passes, so it is done where
+the request is torn down rather than only where it is finished.
+
+**What this does not bound, and it is not an oversight.** A peer that completes the TLS handshake
+frees its slot and can then send no request line at all, parking a thread in the read for the life
+of the process, out of reach of both the cap and `stop()`. One extra round-trip would buy back the
+exact outcome this section was written to stop, and nothing in TLS here refuses it: the port has
+no client certificate and no token. So a completed handshake has **30 seconds
+from the end of the handshake to the end of the request headers**, and that is a deadline rather
+than a read timeout. The distinction is the whole of it: `socketserver`'s `timeout` attribute
+becomes a per-read timeout, which a peer resets by sending one byte every twenty-nine seconds and
+so holds a thread for days at a cost of two bytes a minute. The remaining time is therefore
+recomputed before each read, so a trickle runs the deadline down like silence does. This is not
+the timeout §2.15 declined: that one bounded a TLS handshake over an unmeasured link, and this
+bounds how long a client that has already finished its handshake may take to ask for something. A
+request follows a completed handshake immediately or it is not coming, and thirty seconds is
+generous by orders of magnitude for a link whose round trip is measured in milliseconds.
+
+**And the number of live connections is capped too, at `MAX_HTTP_CONNECTIONS = 48` per bound
+address.** A deadline bounds how long each connection lives; it does not bound how many exist,
+and thirty seconds multiplied by an arrival rate is a thread count with no ceiling on a
+single-core Pi Zero 2 W. Past the cap the **least recently active live connection** is closed and the new one is served.
+Note what that is not: it is not the oldest, and the difference is the owner's session. Age is the
+right measure in the handshake registry, where the oldest is also the nearest to its own expiry
+and nothing that waits there is doing anything. Among live connections it is exactly wrong -- a
+connection that has been serving the owner happily for a while is the oldest by construction,
+while a peer's connection that arrived a second ago and then went quiet is the youngest, so a
+first-in rule hands the flooder the owner's own session as the standing first victim. Activity is
+what separates them: the owner's connection is reading or writing, and the attacker's is not.
+Every read and every write on a connection marks it as used, and the eviction takes whichever has
+gone longest without one.
+
+This is the second property in this section the suite cannot pin from outside, and it is worth
+naming for the same reason as the first. A completed request closes its connection here, because
+the handler is HTTP/1.0, so a test cannot hold a connection that is both live and demonstrably
+recently used while forcing the cap; three shapes were tried and each failed for that reason
+rather than for a fixable one. What checks it instead is a probe driving the server directly, and
+what a reader should verify is that the two marking sites still exist: the read path and the write
+path both mark, or the rule silently becomes first-in again -- which is the failure this
+replaced. Refusing the newcomer instead was the first version of this rule, and an audit priced it:
+holding forty-eight slots that each expire in thirty seconds costs between one and two connections
+a second, sustained, from a single address, with no race to win -- against the eighty to a hundred
+and sixty a second it takes to beat the eviction rule, and that only probabilistically. The
+cheapest lockout in a design is the one that decides its availability, so the two rules have to
+agree; a section that argues at length against refusing the newcomer and then refuses the newcomer
+forty lines later has not been read as a whole. That does mean a flood can keep the owner out while it lasts, which is the trade the
+handshake registry deliberately refuses to make -- and it is acceptable here only because it is
+temporary, and only because every slot is on a clock. A connection still in
+the handshake state holds one of these forty-eight too, which was a permanent floor of sixteen
+until this section gave the handshake its own deadline; with it, every one of the forty-eight
+expires within thirty seconds of the peer going quiet. Holding them all therefore costs a
+continuous stream of new connections rather than one burst, and the listener is fully available
+again thirty seconds after the flood stops. That is the whole of the trade against an unbounded
+thread count, which never recovers at all and takes the unit with it.
+Forty-eight is three times what §2.15.2's own reasoning gives a legitimate client, on hardware
+where each thread costs a stack the unit cannot spare.
+
+**One thing here cannot be tested from outside, and saying so is the honest alternative to a test
+that passes for a reason nobody can state.** Whether a closed connection's slot is actually
+released is invisible under this policy: a register full of slots that were never released evicts
+one of those on every arrival, so an ordinary request succeeds exactly as it would if the release
+worked. The two paths are observationally equivalent for that defect, which is why the suite
+records it as untested rather than pretending otherwise. What guards it instead is that the
+release happens at a single site, on the one path every accepted connection passes through
+whatever else happens to it, so the property a reader has to check is "is this reached" and not
+"is this reached on each of five paths".
+
+**The bound is over the HTTPS listener only.** The WSS side authenticates and is specified
+separately; nothing here changes it.
 
 #### 2.15.1 Content-Security-Policy and the headers beside it (issue #67)
 

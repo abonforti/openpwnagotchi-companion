@@ -27,6 +27,7 @@ covered by the integration test.
 from __future__ import annotations
 
 import base64
+import collections
 import hmac
 import ipaddress
 import json
@@ -121,6 +122,58 @@ ACCEPTED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {"enabled"}
 WITHDRAWN_INTERFACES_KEY = "interfaces"
 
 HANDSHAKE_LIMIT = 500
+# How many HTTPS connections may sit unfinished-handshake at once, per
+# listener (SPEC 2.15.2, #102). A browser opens up to six connections to one
+# host over HTTP/1.1, so a single legitimate client can hold six at an
+# instant; the cap is two such clients plus headroom. A completed handshake
+# does not occupy a slot, so ordinary use never approaches it.
+MAX_PENDING_HANDSHAKES = 16
+# How long an unfinished handshake may sit in that state before it is closed
+# on its own (SPEC 2.15.2, #102). Not the tight, link-measured bound §2.15
+# declined for the handshake itself - that one needed BT PAN measured, which
+# device access here does not allow. This one only has to be safely larger
+# than any handshake that will ever complete, and thirty seconds is three
+# orders of magnitude above one over BT PAN. What it buys is that a slot in
+# `Server._pending` is never held forever: without it, a peer's silent
+# sockets are permanent at zero cost, and any eviction policy on top is only
+# a rule about how to lose slowly.
+HANDSHAKE_DEADLINE = 30
+# How long a connection may take, after its TLS handshake completes, to
+# finish sending its request headers (SPEC 2.15.2, #102). A deadline, not a
+# read timeout: `socketserver`'s own `timeout` attribute resets on every
+# read, so a peer trickling one byte every twenty-nine seconds would hold a
+# thread for days at a cost of two bytes a minute. `_DeadlineReader` below
+# recomputes the remaining time before each read instead, so a trickle runs
+# the deadline down the way silence does.
+HTTP_REQUEST_DEADLINE = 30
+# How often the rate-limited report on handshakes that expired on their own
+# is written, at most (SPEC 2.15.2, #102): "counted, and one line is written
+# at most once a minute saying how many there have been since the last one."
+# A peer can force this line by abandoning connections, but never more than
+# once in this many seconds however many it opens - the property that made a
+# per-connection line unacceptable.
+EXPIRY_REPORT_INTERVAL = 60.0
+# How many HTTPS connections may be live - accepted but not yet fully torn
+# down, whether still negotiating TLS or already serving a request - at once
+# per bound address (SPEC 2.15.2, #102). A deadline bounds how long each one
+# lives, not how many exist, and that deadline times an arrival rate is an
+# unbounded thread count on a single-core Pi Zero 2 W. Past the cap the
+# oldest live connection is closed and the newcomer is served, the same
+# choice and reasoning as the handshake registry's own cap - refusing the
+# newcomer instead was the first version of this rule, and an audit priced
+# it: holding forty-eight slots that each expire in thirty seconds costs one
+# to two connections a second, sustained, from one address, with no race to
+# win, against the eighty to a hundred and sixty a second it takes to beat
+# the eviction rule below, and that only probabilistically - fifty to a
+# hundred times cheaper, which would have made the weaker rule the one that
+# actually governs this listener's availability. With HANDSHAKE_DEADLINE
+# above giving the handshake state its own expiry, every one of these slots
+# - not only the ones already past their handshake - is on a clock, so the
+# listener is fully available again within thirty seconds of a flood
+# stopping rather than being left with a permanent floor. Three times what
+# the handshake-registry reasoning above gives a legitimate client, on
+# hardware where every thread costs a stack the unit cannot spare.
+MAX_HTTP_CONNECTIONS = 48
 # How often an unauthenticated connection wakes up to re-check its deadline
 # (SPEC 2.3.4). It has to be a poll rather than a check on the next frame,
 # because the peer the deadline exists to stop is the one that never sends one.
@@ -2273,10 +2326,181 @@ def content_security_policy(bound_addresses: Sequence[str], ws_port: int | None)
     )
 
 
+def _close_pending_socket(sock: Any) -> None:
+    """Forces closed a socket that may have a handler thread blocked inside
+    `do_handshake()` on it right now (SPEC 2.15.2, #102).
+
+    A plain `close()` only drops the caller's own reference to the file
+    description; the kernel does not tear the connection down - or free the
+    descriptor - until every reference is gone, including the one the other
+    thread's blocked read holds for as long as that read is in progress.
+    A silent peer never causes that read to return on its own, so a bare
+    `close()` here leaves both the thread and the descriptor exactly as
+    stuck as they were before the eviction. `shutdown()` acts on the
+    connection itself rather than on one reference to it, so it reliably
+    unblocks a concurrent read on the same socket, in any thread. It is
+    called on the raw `socket.socket`, not through `SSLSocket.shutdown`:
+    the latter also clears `_sslobj`, which a concurrently running
+    `do_handshake()` may still be reading.
+
+    After `shutdown()` returns, the other thread's blocked read returns
+    promptly - but `close()` can still free the descriptor number while
+    OpenSSL is unwinding underneath it, and the accept loop is the one
+    thread about to allocate a new one. Narrow, real, and worth naming
+    here rather than claiming `close()` is simply what frees the
+    descriptor.
+    """
+    try:
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except (OSError, TypeError):
+        # `TypeError` is what `shutdown()` raises when `sock` is not a real
+        # socket - a duck-typed double, in a test exercising this path
+        # without a live connection - and `_shutdown_http` deliberately
+        # tolerates those, since it must never fail.
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+class _RequestDeadlineExceeded(TimeoutError):
+    """Raised by `_DeadlineReader` when its own deadline, not the peer, is
+    why a read did not complete (SPEC 2.15.2, #102).
+
+    A subclass of `TimeoutError` rather than a plain, unrelated exception:
+    `BaseHTTPRequestHandler.handle_one_request` catches `TimeoutError`
+    specifically to close a connection whose read timed out, and this must
+    still trigger that. A distinct type rather than reusing `TimeoutError`
+    bare: on Python 3.10+ `socket.timeout` *is* `TimeoutError`, so matching
+    on that type alone in `Handler.log_error` below would also silence any
+    future, unrelated `TimeoutError` the stdlib machinery in this handler
+    happens to raise for a reason that has nothing to do with this deadline.
+    Pinning the silence to this specific type pins it to the fact that
+    caused it, not to a type the standard library also uses.
+    """
+
+
+class _DeadlineReader:
+    """Wraps a handler's `rfile` so every `readline()`/`read()` it makes
+    recomputes the connection's socket timeout from a fixed deadline, rather
+    than the fixed per-read timeout `socketserver` applies once at `setup()`
+    (SPEC 2.15.2, #102).
+
+    `socketserver`'s own `timeout` attribute is applied with `settimeout()`,
+    which resets on every read rather than counting down from when the
+    handshake finished - a peer sending one byte every twenty-nine seconds
+    would hold a thread for days at a cost of two bytes a minute. Recomputing
+    the remaining time before each call here, and calling `settimeout()` with
+    that instead of the fixed constant, makes a trickle run the deadline down
+    the same way silence does. Once the deadline has passed, this raises
+    `_RequestDeadlineExceeded` directly rather than calling `settimeout(0)`,
+    which would put the socket into non-blocking mode and raise
+    `BlockingIOError` instead - a type `BaseHTTPRequestHandler.handle_one_request`
+    does not catch.
+
+    `clock` must be a monotonic source (SPEC 2.15.2: "every deadline here is
+    measured on a monotonic clock, not on the wall clock"). The unit has no
+    RTC and takes its time from the phone, so a step is expected rather than
+    hypothetical: a backward step would extend `remaining` by the length of
+    the step, and a forward one would expire every connection in flight at
+    once. `time.monotonic()` is immune to either.
+
+    `mark_used` is called on every read too, not only on a write (see
+    `_ActivityWriter` below): it is what lets `MAX_HTTP_CONNECTIONS`'s
+    eviction target the connection that has gone longest without activity
+    rather than simply the oldest (SPEC 2.15.2, "every read and every write
+    on a connection marks it as used").
+
+    `_tick`'s own raise only covers a read *attempted after* the deadline
+    has already passed - the rare case. The ordinary one is the opposite
+    order: the handshake completes, the peer sends nothing, `_tick` sets
+    `settimeout(remaining)` and returns, and the underlying read itself
+    blocks until that timeout fires, raising a bare `TimeoutError` that
+    never passes through `_tick` at all. Left uncaught, that reaches
+    `BaseHTTPRequestHandler.handle_one_request`'s own `except TimeoutError`
+    unchanged, which logs `"Request timed out: %r"` before `Handler.log_error`
+    ever gets a chance to recognise it - one line per abandoned connection,
+    from an unauthenticated peer, into the log SPEC 2.15.2 says this must
+    not do. So `readline`/`read` below catch `TimeoutError` from the
+    underlying call too, and re-raise `_RequestDeadlineExceeded` exactly
+    when the clock confirms the deadline has passed - the same "a fact
+    about the clock, not the shape of the exception" test `finish_request`
+    already uses for `HANDSHAKE_DEADLINE`. A `TimeoutError` the clock does
+    not confirm - which nothing here is expected to raise, since this
+    deadline is the only timeout ever placed on this socket, but the check
+    costs one comparison - is re-raised unchanged rather than assumed away.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        connection: Any,
+        deadline: float,
+        clock: Callable[[], float],
+        mark_used: Callable[[], None],
+    ) -> None:
+        self._inner = inner
+        self._connection = connection
+        self._deadline = deadline
+        self._clock = clock
+        self._mark_used = mark_used
+
+    def _tick(self) -> None:
+        self._mark_used()
+        remaining = self._deadline - self._clock()
+        if remaining <= 0:
+            raise _RequestDeadlineExceeded("request deadline exceeded")
+        self._connection.settimeout(remaining)
+
+    def _read(self, method: Callable[..., bytes], *args: Any, **kwargs: Any) -> bytes:
+        self._tick()
+        try:
+            return method(*args, **kwargs)
+        except TimeoutError:
+            if self._clock() >= self._deadline:
+                raise _RequestDeadlineExceeded("request deadline exceeded") from None
+            raise
+
+    def readline(self, *args: Any, **kwargs: Any) -> bytes:
+        return self._read(self._inner.readline, *args, **kwargs)
+
+    def read(self, *args: Any, **kwargs: Any) -> bytes:
+        return self._read(self._inner.read, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _ActivityWriter:
+    """Wraps a handler's `wfile` so every `write()` marks the connection as
+    recently active, the other half of `_DeadlineReader`'s own marking (SPEC
+    2.15.2, "every read and every write on a connection marks it as used").
+
+    A response being written is exactly the case the live-connection cap's
+    eviction must not mistake for an idle connection: without this, a
+    connection sending a large file over a slow link, all write and no read
+    for the whole transfer, would look identical to one that has gone quiet,
+    and `MAX_HTTP_CONNECTIONS` would be free to close it mid-response.
+    """
+
+    def __init__(self, inner: Any, mark_used: Callable[[], None]) -> None:
+        self._inner = inner
+        self._mark_used = mark_used
+
+    def write(self, *args: Any, **kwargs: Any) -> Any:
+        self._mark_used()
+        return self._inner.write(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 def make_http_handler(
     web_root: str,
     bound_addresses: Callable[[], Sequence[str]],
     ws_port: int | None,
+    now: Callable[[], float] = time.monotonic,
 ) -> type:
     """Builds the request handler class serving `web_root` over HTTPS.
 
@@ -2323,8 +2547,111 @@ def make_http_handler(
             ".woff2": "font/woff2",
         }
 
+        # A peer that finishes its TLS handshake frees its cap slot (SPEC
+        # 2.15.2, #102) and can then send no request line at all, parking
+        # this thread in the read for the life of the process - out of
+        # reach of both the cap and `stop()`, which does not join handler
+        # threads. This is not the handshake timeout SPEC 2.15 declined:
+        # that one needed a real measurement over an unmeasured link, and
+        # this bounds silence after a handshake that has already completed,
+        # where thirty seconds is generous by two orders of magnitude for a
+        # link measured in milliseconds. Named at module scope rather than
+        # left bare here, since `setup()` below turns it into a deadline
+        # rather than the per-read timeout this attribute alone would give
+        # it - `StreamRequestHandler.setup()` still reads it once, as the
+        # socket's initial timeout, before `rfile` is wrapped.
+        timeout = HTTP_REQUEST_DEADLINE
+
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, directory=root, **kwargs)
+
+        def setup(self) -> None:
+            super().setup()
+            # `StreamRequestHandler.setup()` above has just built `self.rfile`
+            # from `self.connection` and set the connection's timeout to the
+            # fixed `self.timeout`. Wrapping `rfile` here, in a deadline
+            # computed once from `now()`, is what turns that fixed per-read
+            # timeout into the deadline SPEC 2.15.2 requires - see
+            # `_DeadlineReader`.
+            #
+            # Armed once per connection, here in `setup()`, not once per
+            # request: on a keep-alive connection this deadline is measured
+            # from the first request's handshake, not each subsequent
+            # request's own start, so a second request's first read could in
+            # principle die the moment the connection turns thirty seconds
+            # old regardless of how promptly the peer asked for it. Harmless
+            # today only because `protocol_version` is left at its default,
+            # `HTTP/1.0` - `Handler`'s own class body never overrides it -
+            # so `close_connection` is always true and `handle()` never
+            # loops for a second request on the same connection. Whoever
+            # sets `protocol_version = "HTTP/1.1"` for the PWA's asset load
+            # needs to re-arm this deadline per request instead, or this
+            # becomes silent request loss on the second request of any
+            # connection that happens to live past thirty seconds.
+            deadline = now() + HTTP_REQUEST_DEADLINE
+            # `getattr` rather than a direct attribute access: `self.server`
+            # is a real `Server` (defined in `_serve_http`) in production,
+            # which always has `_mark_used`, but a test exercising this
+            # handler in isolation, over a plain socket, may construct it
+            # with something that does not - tolerated the same way
+            # `_shutdown_http` tolerates a duck-typed double elsewhere.
+            server_mark_used = getattr(self.server, "_mark_used", None)
+            connection = self.connection
+
+            def mark_used() -> None:
+                # Shared by both wrappers below: every read and every write
+                # on this connection marks it as recently active, which is
+                # what lets `MAX_HTTP_CONNECTIONS`'s eviction target
+                # whichever live connection has gone longest without either
+                # (SPEC 2.15.2) instead of simply the oldest - the oldest is
+                # the owner's own long-lived session by construction, and a
+                # first-in rule would hand a flooder that session as its
+                # standing first victim.
+                if server_mark_used is not None:
+                    server_mark_used(connection)
+
+            self.rfile = _DeadlineReader(self.rfile, connection, deadline, now, mark_used)
+            self.wfile = _ActivityWriter(self.wfile, mark_used)
+
+        def parse_request(self) -> bool:
+            result = super().parse_request()
+            # `_DeadlineReader` has been shrinking `self.connection`'s
+            # timeout down from `HTTP_REQUEST_DEADLINE` toward zero as the
+            # request line and each header line arrived, and by the time
+            # this returns the headers are fully read - successfully or
+            # not, since a malformed request line still consumed whatever
+            # the peer sent. Left alone, whatever sliver of the deadline
+            # happened to remain would carry over onto the response this
+            # request goes on to write, or onto the next request on a
+            # keep-alive connection, neither of which this deadline is
+            # about (SPEC 2.15.2: it bounds "the end of the handshake to
+            # the end of the request headers", nothing past that). Restored
+            # to the full deadline here rather than left to `_DeadlineReader`,
+            # which only ever shrinks it.
+            self.connection.settimeout(HTTP_REQUEST_DEADLINE)
+            return result
+
+        def log_error(self, fmt: str, *args: Any) -> None:
+            # `handle_one_request` reports its own read timing out through
+            # this method, with the exception itself as `args[0]` (CPython's
+            # `http.server`: `self.log_error("Request timed out: %r", e)`).
+            # `_RequestDeadlineExceeded` specifically, not `TimeoutError` in
+            # general: on Python 3.10+ `socket.timeout` *is* `TimeoutError`,
+            # so matching that broader type would also silence some future,
+            # unrelated timeout this handler happens to raise for a reason
+            # that has nothing to do with this deadline. This one is
+            # `_DeadlineReader`'s own deadline expiring (SPEC 2.15.2) - the
+            # request-headers analogue of an eviction, and SPEC is explicit
+            # that the same rule applies to both: a log line an
+            # unauthenticated peer can trigger by sending nothing for
+            # thirty seconds is exactly what this section forbids, whether
+            # the line comes from an eviction or from this deadline. Every
+            # other error this method reports - a bad request line, an
+            # unsupported method, `send_error`'s own "code %d, message %s"
+            # - still logs, unchanged.
+            if args and isinstance(args[0], _RequestDeadlineExceeded):
+                return
+            super().log_error(fmt, *args)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             # At info this would flood the pwnagotchi log on every asset.
@@ -2656,19 +2983,21 @@ class Listeners:
         wraps each accepted connection instead, with `do_handshake_on_connect=
         False`: wrapping there returns immediately - it only builds the SSL
         object, it does not touch the network - so `accept()` stays a plain
-        TCP accept and the handshake happens lazily on the connection's first
-        read, inside `SimpleHTTPRequestHandler.handle_one_request`, which runs
-        on the handler thread `ThreadingMixIn` spawns for that connection, not
-        on the `serve_forever` loop (#100).
+        TCP accept and the handshake happens lazily, in `Server.finish_request`,
+        which runs on the handler thread `ThreadingMixIn` spawns for that
+        connection, not on the `serve_forever` loop (#100).
 
         The residual is one thread and one file descriptor per silent peer, not
         one in total. `daemon_threads = True` below is what stops
         `server_close()` waiting on a handshake that will never finish - the
         entire point of this change - but the same setting means that thread is
-        never joined, by `stop()`, by a reload, or by anything else. It outlives
-        all three: a peer that connects and sends nothing keeps its thread and
-        its socket alive for the life of the process, and each further silent
-        peer adds one more of each. Tracked separately as its own defect: #102.
+        never joined, by `stop()`, by a reload, or by anything else. Left alone,
+        a peer that connects and sends nothing would keep its thread and its
+        socket alive for the life of the process, and each further silent peer
+        would add one more of each. `Server._pending` below bounds that: at
+        most `MAX_PENDING_HANDSHAKES` connections may sit unfinished at once,
+        each also expiring on its own after `HANDSHAKE_DEADLINE`, and past
+        the cap the oldest is closed to make room (SPEC 2.15.2, #102).
         """
         if self._http_port is None:
             return None
@@ -2685,6 +3014,12 @@ class Listeners:
             # ever starts, and `content_security_policy` omits the `wss://`
             # origin entirely rather than name one nothing can serve.
             self._ws_port,
+            # `time.monotonic`, not `self._deps.now` (which is `time.time`,
+            # SPEC F7's wall clock): the request deadline this builds must
+            # not move when the unit's clock does, and the unit has no RTC
+            # (SPEC 2.15.2, "every deadline here is measured on a monotonic
+            # clock").
+            time.monotonic,
         )
         ssl_context = self._ssl
 
@@ -2701,6 +3036,340 @@ class Listeners:
             # hold: `server_close()` must never wait on one of those either.
             daemon_threads = True
             allow_reuse_address = True
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                # Sockets accepted but not yet past their TLS handshake,
+                # oldest first - a plain dict keeps insertion order, which
+                # `get_request` relies on to find the oldest one at the cap.
+                # No source address is tracked here any more: an audit found
+                # that "close from whichever source holds the most" targets
+                # the owner by construction on a port where addresses are
+                # free (SPEC 2.15.2), so the value carries nothing and this
+                # is effectively an ordered set of sockets.
+                #
+                # `_live_order` is the broader registry `_pending` is a
+                # subset of: every accepted connection not yet fully torn
+                # down, whether still negotiating TLS or already serving a
+                # request, least recently active first - `move_to_end` (via
+                # `_mark_used` below) is why this is an `OrderedDict` and
+                # not a plain one, since a plain dict's iteration order does
+                # not change when an existing key is reassigned.
+                # `MAX_HTTP_CONNECTIONS` is enforced against this one, the
+                # same way `_pending` enforces `MAX_PENDING_HANDSHAKES`, but
+                # ordered by activity rather than age: past the cap the
+                # *least recently active* live connection is evicted and
+                # the new one is served, not refused. Age is right for the
+                # handshake registry, where the oldest is also nearest its
+                # own expiry and nothing waiting there is doing anything;
+                # among live connections it is exactly wrong, since a
+                # connection that has been serving the owner happily for a
+                # while is the oldest by construction, while a peer's
+                # connection that arrived a second ago and then went quiet
+                # is the youngest - a first-in rule would hand a flooder
+                # the owner's own session as its standing first victim
+                # (SPEC 2.15.2).
+                #
+                # `_evicted` names a connection this class closed itself -
+                # at either cap, or in `stop()`'s own drain - so
+                # `finish_request` and `handle_error` can both tell that
+                # apart from a failure the peer actually caused and stay
+                # silent about it (SPEC 2.15.2, #102). A closed Python
+                # socket object invalidates its own file descriptor rather
+                # than keeping hold of a number the kernel may since have
+                # handed to an unrelated connection, and `TCPServer`'s own
+                # `shutdown_request` already swallows the `OSError` that
+                # invalidation produces - which is what makes it safe for
+                # this eviction and a connection's own, independent
+                # teardown to race for the same socket without either
+                # needing to know about the other.
+                #
+                # `_expiry_count`, `_live_evict_count` and `_report_window`
+                # back the rate-limited report on closures this listener
+                # makes on its own - a handshake expiring, or a live
+                # connection evicted under `MAX_HTTP_CONNECTIONS` (SPEC
+                # 2.15.2): silencing every one of them individually, with
+                # nothing to replace the line, would hide both a tether so
+                # degraded that no handshake ever completes and a listener
+                # closing the owner's own sessions to keep up - both the
+                # owner's own symptom, and this listener is best placed to
+                # report either.
+                #
+                # All set before `TCPServer.__init__`, which only binds and
+                # activates the listening socket here - `serve_forever` is
+                # what starts accepting, and `_start_http` only calls that
+                # once this constructor has returned.
+                self._pending: dict[Any, None] = {}
+                self._pending_lock = threading.Lock()
+                self._live_order: collections.OrderedDict[Any, None] = collections.OrderedDict()
+                self._evicted: set[Any] = set()
+                self._expiry_count = 0
+                self._live_evict_count = 0
+                self._report_window: float | None = None
+                super().__init__(*args, **kwargs)
+
+            def _mark_used(self, conn: Any) -> None:
+                # Moves `conn` to the most-recently-active end of
+                # `_live_order`, so `MAX_HTTP_CONNECTIONS`'s eviction -
+                # which always takes the *first* key - finds whichever
+                # connection has gone longest without a read or a write,
+                # not whichever merely arrived first (SPEC 2.15.2). A no-op
+                # for a connection no longer live (already fully torn
+                # down, or not registered by this exact `conn` object at
+                # all - a duck-typed double in a test exercising `Handler`
+                # without a full `Server`, tolerated the same way
+                # `Handler.setup()` already tolerates one lacking this
+                # method entirely).
+                with self._pending_lock:
+                    if conn in self._live_order:
+                        self._live_order.move_to_end(conn)
+
+            def _handshake_done(self, conn: Any) -> bool:
+                # Releases a connection's handshake slot, if it still holds
+                # one - called from `finish_request` below the moment
+                # `do_handshake()` returns, success or failure, so a
+                # completed handshake stops occupying a slot right away
+                # rather than for as long as the response it goes on to
+                # serve takes (SPEC 2.15.2: "a completed handshake does not
+                # occupy a slot"). Also called from `shutdown_request` below,
+                # which `socketserver` reaches even when `finish_request`
+                # never ran - a handler thread `ThreadingMixIn` failed to
+                # start - so a slot from that path is not left occupied
+                # until the next eviction happens to reclaim it. `pop(...,
+                # None)` tolerates a second call, from either caller, for
+                # the same connection.
+                #
+                # Returns whether this connection is on record as closed by
+                # this listener's own doing - by either cap in `get_request`,
+                # by `stop()`'s own drain, or by this method's own caller
+                # recognising its `HANDSHAKE_DEADLINE` running out. Only
+                # peeks at `_evicted`, never discards: a connection evicted
+                # from the live-connection cap while already past its
+                # handshake and serving a request needs this same fact
+                # available to `handle_error` too, which runs later still,
+                # so the one place that ever consumes the record is
+                # `shutdown_request` - reached exactly once per connection,
+                # after every other check that might need to read it has
+                # already had its chance (SPEC 2.15.2, #102).
+                with self._pending_lock:
+                    self._pending.pop(conn, None)
+                    was_evicted = conn in self._evicted
+                return was_evicted
+
+            def _report_expiry(self) -> None:
+                # Counts one more handshake that expired on its own (SPEC
+                # 2.15.2): a tether degraded enough that no handshake ever
+                # completes would otherwise produce nothing at all under the
+                # silence rule above, which is the owner's own symptom and
+                # the one this listener is best placed to report.
+                with self._pending_lock:
+                    self._expiry_count += 1
+                    if self._report_window is None:
+                        self._report_window = time.monotonic()
+                self._flush_closure_report()
+
+            def _report_live_eviction(self) -> None:
+                # Counts one more live connection closed under
+                # `MAX_HTTP_CONNECTIONS` (SPEC 2.15.2). The connection being
+                # closed may be the owner's own, mid-response - `_evicted`
+                # still silences that one connection's own log line (SPEC
+                # 2.15.2's eviction-is-not-an-error rule, unchanged), but a
+                # listener closing sessions to keep up is itself the
+                # owner's own symptom, and silencing it completely would be
+                # the worst diagnostic outcome this section could produce:
+                # a PWA that breaks with nothing in the log to explain it.
+                with self._pending_lock:
+                    self._live_evict_count += 1
+                    if self._report_window is None:
+                        self._report_window = time.monotonic()
+                self._flush_closure_report()
+
+            def _flush_closure_report(self, *, force: bool = False) -> None:
+                # Logs the running counts - handshakes that expired on
+                # their own, live connections evicted under
+                # `MAX_HTTP_CONNECTIONS` - but, unless `force` is set, only
+                # once `EXPIRY_REPORT_INTERVAL` has actually elapsed since
+                # the window opened, and only if there is anything to
+                # report. Measured on `time.monotonic()`, not the wall
+                # clock the unit has no RTC for, for the same reason every
+                # deadline in this section is.
+                #
+                # Called with the default, rate-limited `force=False` after
+                # either counter above counts a fresh one, and,
+                # opportunistically, from `get_request` on every new accept
+                # regardless of whether that connection itself contributes
+                # anything: a burst followed by silence would otherwise sit
+                # unreported forever, since nothing would call this again to
+                # notice the window had elapsed - there is no sweeper thread
+                # here to notice it on a clock of its own (SPEC 2.15
+                # declined one for the same reason `stop()` must never wait
+                # on a handler thread). A no-op, one lock acquisition,
+                # whenever there is nothing pending to report - a peer still
+                # cannot force more than one line every
+                # `EXPIRY_REPORT_INTERVAL` this way, however many
+                # connections it abandons or however many live ones it
+                # forces this listener to evict.
+                #
+                # Called with `force=True` only from `_shutdown_http`, which
+                # a peer has no way to trigger: a rate limit exists to bound
+                # what an unauthenticated caller can force onto this log,
+                # and `on_unload`/a reload is the owner's or pwnagotchi's
+                # own act, not the peer's. Without `force` that call would
+                # still be bound by the same elapsed-time check as every
+                # other caller and would routinely discard exactly the
+                # burst it exists to catch - a tether so degraded nothing
+                # completes in its final minute, then the plugin reloads -
+                # which is silence failing safe, not a rate-limit hole, but
+                # is still the report not doing what it is for.
+                #
+                # Both counts are numbers this plugin computed either way,
+                # never anything the peer supplied (SPEC 2.9).
+                now = time.monotonic()
+                with self._pending_lock:
+                    if self._report_window is None:
+                        return
+                    if not force and now - self._report_window < EXPIRY_REPORT_INTERVAL:
+                        return
+                    expired = self._expiry_count
+                    live_evicted = self._live_evict_count
+                    self._expiry_count = 0
+                    self._live_evict_count = 0
+                    self._report_window = None
+                if expired == 0 and live_evicted == 0:
+                    return
+                log.warning(
+                    "[companion:http] %d handshake(s) expired without completing and "
+                    "%d live connection(s) closed to make room, since the last report",
+                    expired,
+                    live_evicted,
+                )
+
+            def finish_request(self, request: Any, client_address: Any) -> None:
+                # `ThreadingMixIn.process_request` spawns this call on its own
+                # thread per connection, not on the `serve_forever` loop, so
+                # this is where the TLS handshake `get_request` deferred
+                # actually happens (#100) - `Handler` itself stays TLS-agnostic,
+                # which is also what lets it be exercised over a plain socket
+                # in tests.
+                #
+                # `settimeout` here, not a fixed attribute read by
+                # `StreamRequestHandler.setup()` later: this bounds
+                # `do_handshake()` itself, which runs before `Handler` (and
+                # therefore `setup()`) is even constructed. `HANDSHAKE_DEADLINE`
+                # is not the tight, link-measured bound §2.15 declined - it
+                # only has to be safely larger than any handshake that will
+                # ever complete, and thirty seconds is three orders of
+                # magnitude above one over BT PAN. What it buys is that no
+                # slot in `_pending` is held forever: a peer that never
+                # completes its handshake loses its slot on its own, on a
+                # clock, rather than only when something else evicts it
+                # (SPEC 2.15.2).
+                try:
+                    # `deadline` and `settimeout` both live inside this
+                    # `try`, not before it: `settimeout` on a socket another
+                    # thread has already closed - `get_request`'s own
+                    # eviction, or `stop()`'s drain, racing this handler
+                    # thread's own start - raises `OSError(9, "Bad file
+                    # descriptor")`, and that used to happen before either
+                    # line the `except` below can see, so it escaped this
+                    # method entirely and reached `handle_error` unfiltered:
+                    # exactly the log line SPEC 2.15.2 forbids for a close
+                    # this listener caused itself.
+                    deadline = time.monotonic() + HANDSHAKE_DEADLINE
+                    request.settimeout(HANDSHAKE_DEADLINE)
+                    request.do_handshake()
+                except Exception:
+                    if time.monotonic() >= deadline:
+                        # This exception could only reach here after the
+                        # full `HANDSHAKE_DEADLINE` has actually elapsed
+                        # since this call began - a fact about the clock,
+                        # not a guess from the exception's shape, and SPEC
+                        # 2.15.2 is explicit that the fact is the test ("the
+                        # test is not the shape of the exception, it is
+                        # whether this listener is the reason the socket
+                        # closed"). A peer whose handshake genuinely fails on
+                        # its own - not TLS at all, a certificate it
+                        # rejects - does so within milliseconds of
+                        # connecting, not thirty seconds later, so this
+                        # cannot mistake one for the other. Recorded into
+                        # `_evicted` - the same fact `get_request` already
+                        # tracks for its own closes - so the shared check
+                        # right below, the one every other handshake failure
+                        # already passes through, is the one place that
+                        # decides whether to log, not a second one.
+                        #
+                        # Silent at the per-connection level, but not
+                        # invisible: a tether degraded enough that no
+                        # handshake ever completes would otherwise produce
+                        # nothing at all, which is the owner's own symptom
+                        # and the one this listener is best placed to
+                        # report (SPEC 2.15.2). `_report_expiry` counts this
+                        # one and, at most once a minute, logs how many
+                        # there have been - a number this plugin computed,
+                        # not anything a peer supplied.
+                        with self._pending_lock:
+                            self._evicted.add(request)
+                        self._report_expiry()
+                    if self._handshake_done(request):
+                        # `get_request` closed this socket to make room under
+                        # the cap while its handshake was still in flight,
+                        # `stop()`'s own drain closed it while tearing this
+                        # server down, or its own `HANDSHAKE_DEADLINE` above
+                        # just ran out (SPEC 2.15.2, #102). All three are
+                        # this class's own doing, not an error, so nothing is
+                        # logged and this returns without reaching
+                        # `handle_error`.
+                        return
+                    raise
+                if self._handshake_done(request):
+                    # `do_handshake()` returned normally, but `get_request`
+                    # had already evicted this connection and force-closed
+                    # its socket concurrently (SPEC 2.15.2, #102) - a real,
+                    # narrow race, since the forced shutdown and the read
+                    # that completes a handshake can land close enough
+                    # together for the latter to win. Serving a request over
+                    # a socket the peer never gets to use would just fail
+                    # somewhere inside the handler instead, unguarded there
+                    # and logged. Treated the same as a `do_handshake()` that
+                    # raised outright: not an error, not logged.
+                    return
+                super().finish_request(request, client_address)
+
+            def shutdown_request(self, request: Any) -> None:
+                # A second call to `_handshake_done` for a connection
+                # `finish_request` already released is a no-op, so this is
+                # safe to run unconditionally on every path out - including
+                # the one `finish_request` never took at all because
+                # `ThreadingMixIn` failed to start its handler thread (SPEC
+                # 2.15.2, #102). This is also the single point every path
+                # passes through exactly once, which is why `_live_order` -
+                # populated once per accept in `get_request` - is popped
+                # here rather than wherever a connection happens to finish,
+                # and why `_evicted`'s own membership, only peeked at
+                # everywhere else, is finally consumed (discarded) right
+                # here too.
+                #
+                # Always calls `super().shutdown_request()` below,
+                # regardless of whether `get_request`'s eviction (under
+                # either cap) or `stop()`'s own drain also closed this same
+                # socket concurrently: a Python socket object invalidates
+                # its own file descriptor the moment any thread closes it,
+                # so a second `shutdown()`/`close()` on the same object -
+                # from either side of that race - raises `OSError(9, "Bad
+                # file descriptor")` rather than touching a descriptor
+                # number the kernel has since reused, and `TCPServer`'s own
+                # `shutdown_request` already swallows that `OSError`. An
+                # earlier version of this method tracked which side
+                # "claimed" a socket's teardown, to avoid exactly that
+                # double call; the claim was found unnecessary by
+                # experiment once `finish_request` stopped calling
+                # `settimeout()` outside its own `try` (see that method's
+                # comment) - it was that call, not the double close, that
+                # produced the log line the claim was built to prevent.
+                self._handshake_done(request)
+                with self._pending_lock:
+                    self._live_order.pop(request, None)
+                    self._evicted.discard(request)
+                super().shutdown_request(request)
 
             def server_bind(self) -> None:
                 # `HTTPServer.server_bind` calls `socket.getfqdn(host)` after
@@ -2720,6 +3389,12 @@ class Listeners:
                 self.server_port = port
 
             def get_request(self) -> tuple[Any, Any]:
+                # A stale, unreported closure count is flushed here too, not
+                # only from `_report_expiry`/`_report_live_eviction`
+                # themselves - see `_flush_closure_report`'s own comment for
+                # why a burst followed by silence would otherwise never be
+                # reported at all.
+                self._flush_closure_report()
                 # Wraps the *accepted* connection, not the listening socket
                 # (see `_serve_http`): `do_handshake_on_connect=False` means
                 # this only builds the SSL object around `conn`, it does not
@@ -2729,9 +3404,107 @@ class Listeners:
                 # `socketserver.TCPServer`, so this keeps resolving correctly
                 # if a mixin ever adds its own `get_request`.
                 conn, addr = super().get_request()
-                wrapped = ssl_context.wrap_socket(
-                    conn, server_side=True, do_handshake_on_connect=False
-                )
+                try:
+                    wrapped = ssl_context.wrap_socket(
+                        conn, server_side=True, do_handshake_on_connect=False
+                    )
+                except Exception:
+                    # `wrap_socket` with `do_handshake_on_connect=False` does
+                    # no I/O, so this is not peer-triggerable - but if it ever
+                    # raises, `conn` is the plain accepted socket, registered
+                    # nowhere yet, and would otherwise leak its descriptor.
+                    conn.close()
+                    raise
+                # Every accepted connection is admitted - there is no
+                # `verify_request` override here, and none is needed. An
+                # earlier version of `MAX_HTTP_CONNECTIONS` refused the
+                # newcomer once `_live_order` was full; an audit priced that
+                # against evicting the oldest live connection instead and
+                # found it fifty to a hundred times cheaper to exploit:
+                # holding forty-eight slots that each expire in thirty
+                # seconds costs one to two connections a second, sustained,
+                # from one address, with no race to win, against the
+                # eighty-to-a-hundred-and-sixty-a-second burst it takes to
+                # beat the eviction rule below, and that only
+                # probabilistically. Refusing the newcomer would have made
+                # the weaker of the two rules the one that actually governs
+                # this listener's availability (SPEC 2.15.2).
+                oldest_pending = None
+                oldest_live = None
+                with self._pending_lock:
+                    self._live_order[wrapped] = None
+                    self._pending[wrapped] = None
+                    if len(self._pending) > MAX_PENDING_HANDSHAKES:
+                        # Plain oldest-first, no source-address accounting
+                        # (SPEC 2.15.2). An earlier version of this rule
+                        # closed from whichever source address held the
+                        # most unfinished handshakes; an audit found that a
+                        # peer using many addresses simply holds one each
+                        # and is never the busiest, while the one source
+                        # that legitimately holds several at once is a real
+                        # browser - so that rule targeted the owner by
+                        # construction, on a port where addresses are free
+                        # to begin with (a host on the USB gadget interface
+                        # owns its side of a point-to-point link and can add
+                        # aliases at will). Plain oldest-first works here
+                        # only because `HANDSHAKE_DEADLINE` above makes
+                        # every slot expire on its own: the oldest
+                        # unfinished handshake is always the one nearest
+                        # that expiry anyway, so closing it early costs
+                        # nothing a few seconds would not have cost it
+                        # regardless.
+                        oldest_pending = next(iter(self._pending))
+                        del self._pending[oldest_pending]
+                        self._live_order.pop(oldest_pending, None)
+                        self._evicted.add(oldest_pending)
+                    if len(self._live_order) > MAX_HTTP_CONNECTIONS:
+                        # Least-recently-active, not oldest, over every live
+                        # connection - handshake state or already serving a
+                        # request - rather than only the pending ones
+                        # (SPEC 2.15.2, `MAX_HTTP_CONNECTIONS`). `_mark_used`
+                        # moves a connection to the end of `_live_order` on
+                        # every read and every write, so the first key is
+                        # whichever has gone longest without either, not
+                        # simply whichever arrived first: the owner's own
+                        # session, busy the whole time, is the oldest by
+                        # construction and must never be the standing first
+                        # victim of a flood that arrives and goes quiet. The
+                        # connection just accepted can never be its own
+                        # target regardless: it was only just added, with
+                        # no activity of its own yet, so it sits at the
+                        # opposite (most-recent) end.
+                        oldest_live = next(iter(self._live_order))
+                        del self._live_order[oldest_live]
+                        self._pending.pop(oldest_live, None)
+                        self._evicted.add(oldest_live)
+                if oldest_live is not None:
+                    # Counted and reported, not silenced (SPEC 2.15.2): the
+                    # connection just evicted may have been the owner's own,
+                    # mid-response, and a PWA that breaks with nothing in
+                    # the log to explain it is the worst diagnostic outcome
+                    # this section can produce. Called outside the lock,
+                    # like the two `_close_pending_socket` calls below - it
+                    # takes `self._pending_lock` itself.
+                    self._report_live_eviction()
+                if oldest_pending is not None:
+                    # Closed outside the lock: closing a socket can run
+                    # protocol teardown and must never happen while the lock
+                    # is held. `_close_pending_socket`, not a bare `close()`:
+                    # the evicted connection's own handler thread is very
+                    # likely blocked inside `do_handshake()` on this socket
+                    # at this exact moment.
+                    _close_pending_socket(oldest_pending)
+                if oldest_live is not None and oldest_live is not oldest_pending:
+                    # `oldest_live` can coincide with `oldest_pending` (the
+                    # oldest pending connection is often also the oldest
+                    # live one); closing it twice would be harmless but
+                    # pointless, so this only runs for a genuinely different
+                    # connection. `oldest_live`'s own handler thread may be
+                    # anywhere - still mid-handshake, or well into serving a
+                    # request - and `_close_pending_socket`'s `shutdown()`
+                    # unblocks whichever blocking call it is parked in
+                    # either way.
+                    _close_pending_socket(oldest_live)
                 return wrapped, addr
 
             def handle_error(self, request: Any, client_address: Any) -> None:
@@ -2746,10 +3519,26 @@ class Listeners:
                 # the exception itself is logged, one line, at debug like every
                 # other error this class logs - never the frames that produced it.
                 #
+                # A connection `get_request` evicted under `MAX_HTTP_CONNECTIONS`
+                # while it was already past its handshake and serving a
+                # request reaches here too - `finish_request`'s own check
+                # only covers a failure during the handshake itself, not one
+                # raised from deep inside `super().finish_request()` while
+                # the response is being read or written. `_evicted` is
+                # peeked, not consumed: `shutdown_request` is still the one
+                # place that discards it, reached after this method either
+                # way (SPEC 2.15.2: an eviction is not an error and is not
+                # logged, and this is the same eviction, later in the same
+                # connection's life).
+                #
                 # `%r` rather than `%s` is load-bearing, not style: `str()` of an
                 # OSError carries the path it failed on, while `repr()` drops it.
                 # This log is read, and pasted into issues, by people who are not
                 # the only ones who can reach this port.
+                with self._pending_lock:
+                    was_evicted = request in self._evicted
+                if was_evicted:
+                    return
                 log.debug(
                     "[companion:http] error handling request from %s: %r",
                     client_address,
@@ -2857,11 +3646,101 @@ class Listeners:
         """
         if server is None:
             return
+        # The drain runs after `shutdown()` returns, not before it (SPEC
+        # 2.15.2, #102): `shutdown()` only sets an event the `serve_forever`
+        # poll loop notices up to its poll interval later, so draining first
+        # races that loop - every connection accepted in that window is
+        # registered into `_pending` after the drain already cleared it, and
+        # nothing ever closes it. `server_close()` releases only the
+        # listening socket, so that leak would survive it too, accumulating
+        # across `on_unload` and every plugin reload. The inner `finally` is
+        # what keeps a `shutdown()` that raises from skipping the drain.
+        #
+        # `server_close()` is called from its own guarded block below, not
+        # chained after the drain inside the same `try`: this whole method
+        # must never fail to release what it holds, and a `shutdown()` or
+        # drain that raises must not be able to skip it by propagating past
+        # it - which the two used to share one `try` block did.
         try:
-            server.shutdown()
+            try:
+                server.shutdown()
+            finally:
+                # `getattr` rather than a direct attribute access: this is
+                # called with a real `Server` in production, which always has
+                # all three, but nothing here requires one - the same
+                # tolerance `_shutdown_ws` already has for `wait_closed`
+                # below. All three are fetched the same way, and the drain
+                # only runs if all three are present: a duck-typed double
+                # carrying the lock but not the dicts must not raise here
+                # either, which a partial `getattr` guard would still do.
+                pending_lock = getattr(server, "_pending_lock", None)
+                pending_dict = getattr(server, "_pending", None)
+                evicted_set = getattr(server, "_evicted", None)
+                have_all = pending_lock is not None and pending_dict is not None
+                have_all = have_all and evicted_set is not None
+                if have_all:
+                    with pending_lock:
+                        pending = list(pending_dict)
+                        pending_dict.clear()
+                        # Every drained connection is marked evicted here,
+                        # before it is closed below: this close is this
+                        # class's own doing exactly as much as a cap eviction
+                        # is, and `finish_request` cannot tell the two apart
+                        # unless both are recorded the same way. Without
+                        # this, a connection drained by `stop()` unblocks its
+                        # handler with a TLS end-of-file it did not cause,
+                        # and that handler - finding no eviction on record -
+                        # logs it through `handle_error`: one debug line
+                        # naming a peer this method is the one that closed,
+                        # up to a cap's worth per unload.
+                        #
+                        # `_evicted` is otherwise never cleared here, only
+                        # added to. A connection this listener evicted
+                        # moments before `stop()`, whose handler has not yet
+                        # reached `_handshake_done`, still needs its
+                        # membership here to tell that eviction apart from a
+                        # real handshake failure when it does (SPEC 2.15.2:
+                        # "the eviction wins"). Left alone, each entry -
+                        # whichever caller added it - is removed by its own
+                        # handler's own call to `_handshake_done`, bounded at
+                        # one cap's worth per unload, and the set itself
+                        # goes away with `server` once this method returns.
+                        evicted_set.update(pending)
+                    for conn in pending:
+                        # `_close_pending_socket`, not a bare `close()`: any
+                        # of these may still have a handler thread blocked
+                        # inside `do_handshake()` on it right now (SPEC
+                        # 2.15.2, #102). Closed, not joined - the thread on
+                        # the other end is daemonic, and waiting for it is
+                        # exactly what `daemon_threads = True` above exists
+                        # to avoid.
+                        _close_pending_socket(conn)
+        except Exception as err:
+            # `%r`, not `%s` (SPEC 2.15): `str()` of an `OSError` carries the
+            # path it failed on, `repr()` does not.
+            log.debug("[companion] http server shutdown failed: %r", err)
+        try:
+            # `force=True`, not left to the rate limit every other caller
+            # of this method is bound by (SPEC 2.15.2): without it, this
+            # call is still just as capable of landing inside the same
+            # `EXPIRY_REPORT_INTERVAL` window as any other, and would then
+            # discard - not delay - a burst of closures from immediately
+            # before `on_unload`, exactly the situation this report exists
+            # for: a tether so degraded that nothing completes, then the
+            # plugin reloads. `stop()` runs on the owner's or pwnagotchi's
+            # own act, never a peer's, so forcing the line here is not a
+            # lever the rate limit needs to guard against. `getattr`, not a
+            # direct call: the same duck-typed-double tolerance as
+            # `_pending_lock` etc. above.
+            flush = getattr(server, "_flush_closure_report", None)
+            if flush is not None:
+                flush(force=True)
+        except Exception as err:
+            log.debug("[companion] http server closure report flush failed: %r", err)
+        try:
             server.server_close()
         except Exception as err:
-            log.debug("[companion] http server shutdown failed: %s", err)
+            log.debug("[companion] http server close failed: %r", err)
 
     @staticmethod
     def _close_unstarted_http(server: Any) -> None:
@@ -2879,7 +3758,9 @@ class Listeners:
         try:
             server.server_close()
         except Exception as err:
-            log.debug("[companion] http server close failed: %s", err)
+            # `%r`, not `%s` (SPEC 2.15): `str()` of an `OSError` carries the
+            # path it failed on, `repr()` does not.
+            log.debug("[companion] http server close failed: %r", err)
 
     def _shutdown_ws(self, server: Any) -> None:
         """Closes a WSS server and waits for it, on the loop that owns it.

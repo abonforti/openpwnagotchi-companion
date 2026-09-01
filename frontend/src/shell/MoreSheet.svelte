@@ -123,7 +123,12 @@
   <!-- After the dialog in the DOM so the entries come first in the tab cycle,
        behind it in paint order. It is a button because a backdrop that closes
        the dialog is a control, and a div with a click handler is not one. -->
-  <button type="button" class="backdrop" data-backdrop aria-label="Close" onclick={onclose}
+  <button
+    type="button"
+    class="backdrop"
+    data-backdrop
+    aria-label="Close"
+    onclick={onclose}
   ></button>
 </div>
 
@@ -165,8 +170,8 @@
     position: absolute;
     z-index: 1;
     inset: auto 0 0 0;
-    padding: 0.5rem max(1rem, var(--safe-right)) calc(0.5rem + var(--safe-bottom))
-      max(1rem, var(--safe-left));
+    padding: 0.5rem max(1rem, var(--safe-right))
+      calc(0.5rem + var(--safe-bottom)) max(1rem, var(--safe-left));
     background: var(--surface);
     border-top: 1px solid var(--border);
     border-radius: 16px 16px 0 0;

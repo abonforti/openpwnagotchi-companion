@@ -41,11 +41,12 @@ updates:
         update-types:
           - version-update:semver-major
 
-  # Workflow actions are pinned to major tags today. A tag is mutable, so the
-  # supply chain of CI rests on whoever can move it; pinning to a full-length
-  # commit SHA would fix that, at the cost of Dependabot no longer raising
-  # vulnerability alerts for these actions. That trade is not taken here, and it
-  # is written down so the next person weighs it rather than discovering it.
+  # Workflow actions are pinned to a full-length commit SHA (issue #8), with the
+  # human-readable version in a trailing comment. A tag is mutable, so the
+  # supply chain of CI would otherwise rest on whoever can move it. Dependabot
+  # recognises the trailing comment and opens a pull request that moves both
+  # the SHA and the comment together, which is what keeps the pin from rotting
+  # into a stale commit nobody revisits.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

@@ -12,7 +12,14 @@ import type {
   OutgoingStats,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 // DASH and EMPTY_LABEL are the pre-existing SPEC 4.5.1.1 surface, not part
 // of this change: the row-level empty rule this file exercises on Nearby
 // and Captured fields is that section's own rule, restated for this view by
@@ -66,7 +73,9 @@ function accessPoint(overrides: Partial<AccessPoint> = {}): AccessPoint {
   }
 }
 
-function handshakeEntry(overrides: Partial<HandshakeEntry> = {}): HandshakeEntry {
+function handshakeEntry(
+  overrides: Partial<HandshakeEntry> = {},
+): HandshakeEntry {
   return {
     filename: 'TestNet_001_aabbccddeeff.pcapng',
     ssid: 'TestNet_001',
@@ -87,7 +96,11 @@ function handshakesListEnvelope(
   truncated = false,
   total: number | null = entries.length,
 ): OutgoingHandshakesList {
-  return { type: 'handshakes_list', timestamp: T, data: { entries, truncated, total } }
+  return {
+    type: 'handshakes_list',
+    timestamp: T,
+    data: { entries, truncated, total },
+  }
 }
 
 function battery() {
@@ -123,7 +136,12 @@ function statsData(overrides: Partial<Stats> = {}): Stats {
     lastPeer: null,
     gps: gpsReading(),
     sessionAge: 5,
-    capabilities: { pasv: true, pisugar: false, gpsSource: 'gpsd', pluginVersion: '0.1.0' },
+    capabilities: {
+      pasv: true,
+      pisugar: false,
+      gpsSource: 'gpsd',
+      pluginVersion: '0.1.0',
+    },
     ...overrides,
   }
 }
@@ -220,7 +238,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the wifi view must never send a command, only reads'))
+    return Promise.reject(
+      new Error('the wifi view must never send a command, only reads'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -230,14 +250,21 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    if (message.type === 'stats')
+      this.lastStatsValue = {
+        stats: message.data,
+        timestamp: message.timestamp,
+      }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -380,18 +407,27 @@ async function mountWifi(
   const mountTarget = target ?? document.createElement('div')
   if (!target) document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, router, target: mountTarget }
 }
 
 async function click(element: Element): Promise<void> {
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  element.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   await settle()
 }
 
 async function pressKey(element: Element, key: string): Promise<KeyboardEvent> {
-  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+  })
   element.dispatchEvent(event)
   await settle()
   return event
@@ -409,7 +445,10 @@ function root(): HTMLElement {
   // renders, which querySelector has to find inside the wrapper (SPEC 4.5
   // requires data-view="wifi" on the view root, not on whatever holds it).
   const viewRoot = container.querySelector('[data-view="wifi"]')
-  expect(viewRoot, 'expected [data-view="wifi"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="wifi"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -427,7 +466,10 @@ function panel(name: 'nearby' | 'captured'): HTMLElement {
 
 function badge(name: 'nearby' | 'captured'): HTMLElement {
   const found = tab(name).querySelector('[data-segment-badge]')
-  expect(found, `expected a data-segment-badge inside the ${name} tab`).not.toBeNull()
+  expect(
+    found,
+    `expected a data-segment-badge inside the ${name} tab`,
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -475,7 +517,10 @@ function refreshControl(): HTMLElement {
 
 function sortControl(): HTMLElement {
   const found = panel('nearby').querySelector('[data-action="sort"]')
-  expect(found, 'expected [data-action="sort"] inside the Nearby panel').not.toBeNull()
+  expect(
+    found,
+    'expected [data-action="sort"] inside the Nearby panel',
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -492,7 +537,8 @@ function accessibleName(el: Element): string {
   const ariaLabel = el.getAttribute('aria-label')
   if (ariaLabel !== null) return ariaLabel.trim()
   const labelledBy = el.getAttribute('aria-labelledby')
-  if (labelledBy !== null) return (document.getElementById(labelledBy)?.textContent ?? '').trim()
+  if (labelledBy !== null)
+    return (document.getElementById(labelledBy)?.textContent ?? '').trim()
   return ''
 }
 
@@ -623,8 +669,12 @@ describe('the segmented control is a real tablist', () => {
     // trap, which is the failure mode defaultPrevented guards against here.
     for (const key of ['a', 'Tab', 'Enter', ' ']) {
       const event = await pressKey(tab('nearby'), key)
-      expect(event.defaultPrevented, `key "${key}" must not be swallowed`).toBe(false)
-      expect(document.activeElement, `key "${key}" must not move focus`).toBe(tab('nearby'))
+      expect(event.defaultPrevented, `key "${key}" must not be swallowed`).toBe(
+        false,
+      )
+      expect(document.activeElement, `key "${key}" must not move focus`).toBe(
+        tab('nearby'),
+      )
       expect(tab('nearby').getAttribute('aria-selected')).toBe('true')
       expect(tab('captured').getAttribute('aria-selected')).toBe('false')
       expect(panel('nearby').hasAttribute('hidden')).toBe(false)
@@ -663,12 +713,14 @@ describe('the refresh: asked for on mount and by the control, both lists togethe
     expect(client.countRequestCalls('get_handshakes')).toBe(1)
   })
 
-  it("the request types match docs/schemas' own \"type\" const, not a hand-typed literal that could drift from it", async () => {
+  it('the request types match docs/schemas\' own "type" const, not a hand-typed literal that could drift from it', async () => {
     const { client } = await mountWifi()
-    const accessPointsType = (getAccessPointsSchema as { properties: { type: { const: string } } }).properties.type
-      .const
-    const handshakesType = (getHandshakesSchema as { properties: { type: { const: string } } }).properties.type
-      .const
+    const accessPointsType = (
+      getAccessPointsSchema as { properties: { type: { const: string } } }
+    ).properties.type.const
+    const handshakesType = (
+      getHandshakesSchema as { properties: { type: { const: string } } }
+    ).properties.type.const
     expect(client.requestCalls).toContain(accessPointsType)
     expect(client.requestCalls).toContain(handshakesType)
   })
@@ -728,7 +780,9 @@ describe('the refresh: asked for on mount and by the control, both lists togethe
     }
     const secondTarget = document.createElement('div')
     document.body.appendChild(secondTarget)
-    const secondInstance = svelte.mount(module.default, { target: secondTarget })
+    const secondInstance = svelte.mount(module.default, {
+      target: secondTarget,
+    })
     await settle()
 
     expect(client.countRequestCalls('get_access_points')).toBe(1)
@@ -876,7 +930,12 @@ describe('the trigger is the route becoming /wifi, not the component mounting (S
 
   it('a host switch in place - the view still mounted, the route still /wifi - asks the new unit for both lists', async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountWifi('connected', '/wifi', null, (c) => created.push(c))
+    const { client: clientA, settings } = await mountWifi(
+      'connected',
+      '/wifi',
+      null,
+      (c) => created.push(c),
+    )
     expect(created).toHaveLength(1)
     expect(clientA.countRequestCalls('get_access_points')).toBe(1)
     expect(clientA.countRequestCalls('get_handshakes')).toBe(1)
@@ -977,14 +1036,21 @@ describe('the trigger is the route becoming /wifi, not the component mounting (S
     // the read was asked for, not at send); this fake client stands in for
     // its eventual outcome by rejecting directly, since it has no timer of
     // its own to advance and the clock itself is exercised in ws.spec.ts.
-    client.rejectPending('get_access_points', new Error('simulated queue timeout'))
+    client.rejectPending(
+      'get_access_points',
+      new Error('simulated queue timeout'),
+    )
     client.rejectPending('get_handshakes', new Error('simulated queue timeout'))
     await settle()
 
     // Still offline throughout: the sentence must remain the not-connected
     // one, not flip to an empty-list reading and not throw on the rejection.
-    expect(emptyMessage('nearby')?.textContent).toBe('Not connected, so this list has not been read.')
-    expect(emptyMessage('captured')?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage('nearby')?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
+    expect(emptyMessage('captured')?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 })
 
@@ -1009,17 +1075,23 @@ describe('empty vs. not-yet-fetched, decided by connection state', () => {
     client.settle('get_access_points', accessPointsEnvelope([]))
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
-    expect(emptyMessage('nearby')?.textContent).toBe('The unit reports no access points.')
+    expect(emptyMessage('nearby')?.textContent).toBe(
+      'The unit reports no access points.',
+    )
   })
 
   it('Nearby empty while not connected: "Not connected, so this list has not been read."', async () => {
     await mountWifi('connecting')
-    expect(emptyMessage('nearby')?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage('nearby')?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('Nearby empty while offline: the same not-connected sentence', async () => {
     await mountWifi('offline')
-    expect(emptyMessage('nearby')?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage('nearby')?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('Captured empty while connected: "The unit has no captures."', async () => {
@@ -1027,12 +1099,16 @@ describe('empty vs. not-yet-fetched, decided by connection state', () => {
     client.settle('get_access_points', accessPointsEnvelope([]))
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
-    expect(emptyMessage('captured')?.textContent).toBe('The unit has no captures.')
+    expect(emptyMessage('captured')?.textContent).toBe(
+      'The unit has no captures.',
+    )
   })
 
   it('Captured empty while not connected: the not-connected sentence', async () => {
     await mountWifi('offline')
-    expect(emptyMessage('captured')?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage('captured')?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('the empty message is absent once a panel has rows', async () => {
@@ -1055,7 +1131,10 @@ describe('Nearby order is total: RSSI first, BSSID as the tie-break, stable acro
     const weak = accessPoint({ bssid: 'AA:BB:CC:DD:EE:03', rssi: -80 })
     const strong = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', rssi: -40 })
     const mid = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', rssi: -60 })
-    client.settle('get_access_points', accessPointsEnvelope([weak, strong, mid]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([weak, strong, mid]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     expect(rowKeys('nearby')).toEqual([strong.bssid, mid.bssid, weak.bssid])
@@ -1066,7 +1145,10 @@ describe('Nearby order is total: RSSI first, BSSID as the tie-break, stable acro
     const tiedB = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', rssi: -50 })
 
     const first = await mountWifi()
-    first.client.settle('get_access_points', accessPointsEnvelope([tiedA, tiedB]))
+    first.client.settle(
+      'get_access_points',
+      accessPointsEnvelope([tiedA, tiedB]),
+    )
     first.client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const orderOne = rowKeys('nearby')
@@ -1080,7 +1162,10 @@ describe('Nearby order is total: RSSI first, BSSID as the tie-break, stable acro
 
     const second = await mountWifi()
     // Same two access points, same RSSI tie, arriving in the opposite order.
-    second.client.settle('get_access_points', accessPointsEnvelope([tiedB, tiedA]))
+    second.client.settle(
+      'get_access_points',
+      accessPointsEnvelope([tiedB, tiedA]),
+    )
     second.client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const orderTwo = rowKeys('nearby')
@@ -1109,31 +1194,59 @@ describe('Nearby order is total: RSSI first, BSSID as the tie-break, stable acro
     // Deliberately disagreeing on both keys: RSSI order and channel order
     // must pick out opposite rows first, or a fixture where they happen to
     // coincide would pass even if the control did nothing.
-    const weakLowChannel = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', rssi: -80, channel: 1 })
-    const strongHighChannel = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', rssi: -40, channel: 11 })
+    const weakLowChannel = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      rssi: -80,
+      channel: 1,
+    })
+    const strongHighChannel = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:02',
+      rssi: -40,
+      channel: 11,
+    })
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([weakLowChannel, strongHighChannel]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([weakLowChannel, strongHighChannel]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
 
     // RSSI order: strongest first.
-    expect(rowKeys('nearby')).toEqual([strongHighChannel.bssid, weakLowChannel.bssid])
+    expect(rowKeys('nearby')).toEqual([
+      strongHighChannel.bssid,
+      weakLowChannel.bssid,
+    ])
     expect(sortControl().textContent).toBe('Sort by channel')
 
     await click(sortControl())
     expect(sortControl().textContent).toBe('Sort by signal')
 
     // Channel order: lowest first, exactly reversed from the RSSI order above.
-    expect(rowKeys('nearby')).toEqual([weakLowChannel.bssid, strongHighChannel.bssid])
+    expect(rowKeys('nearby')).toEqual([
+      weakLowChannel.bssid,
+      strongHighChannel.bssid,
+    ])
   })
 
   it('the BSSID tie-break is ascending, on both orders', async () => {
-    const tiedLower = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', rssi: -50, channel: 6 })
-    const tiedHigher = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', rssi: -50, channel: 6 })
+    const tiedLower = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      rssi: -50,
+      channel: 6,
+    })
+    const tiedHigher = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:02',
+      rssi: -50,
+      channel: 6,
+    })
     const { client } = await mountWifi()
     // Arrive in descending BSSID order, so an unsorted or arrival-order
     // render would read backwards from what is asserted below.
-    client.settle('get_access_points', accessPointsEnvelope([tiedHigher, tiedLower]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([tiedHigher, tiedLower]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     expect(rowKeys('nearby')).toEqual([tiedLower.bssid, tiedHigher.bssid])
@@ -1143,8 +1256,16 @@ describe('Nearby order is total: RSSI first, BSSID as the tie-break, stable acro
   })
 
   it('the channel order is also total: a RSSI-tied pair with distinct channels holds a consistent, frame-stable order once sorted by channel', async () => {
-    const chanA = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', rssi: -50, channel: 1 })
-    const chanB = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', rssi: -50, channel: 6 })
+    const chanA = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      rssi: -50,
+      channel: 1,
+    })
+    const chanB = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:02',
+      rssi: -50,
+      channel: 6,
+    })
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([chanA, chanB]))
     client.settle('get_handshakes', handshakesListEnvelope([]))
@@ -1163,14 +1284,36 @@ describe('Captured is never re-sorted: rendered in exactly the order it arrived'
     // Not sorted by mtime, not by ssid, not by bssid, not by size - so a
     // client re-sorting by any obvious key would produce a different order
     // than the one asserted below.
-    const one = handshakeEntry({ filename: 'zzz_capture.pcapng', ssid: 'zzz', bssid: 'aaaaaaaaaaaa', mtime: T + 500, size: 10 })
-    const two = handshakeEntry({ filename: 'aaa_capture.pcapng', ssid: 'aaa', bssid: 'ffffffffffff', mtime: T + 1, size: 999999 })
-    const three = handshakeEntry({ filename: 'mmm_capture.pcapng', ssid: 'mmm', bssid: 'bbbbbbbbbbbb', mtime: T + 250, size: 5 })
+    const one = handshakeEntry({
+      filename: 'zzz_capture.pcapng',
+      ssid: 'zzz',
+      bssid: 'aaaaaaaaaaaa',
+      mtime: T + 500,
+      size: 10,
+    })
+    const two = handshakeEntry({
+      filename: 'aaa_capture.pcapng',
+      ssid: 'aaa',
+      bssid: 'ffffffffffff',
+      mtime: T + 1,
+      size: 999999,
+    })
+    const three = handshakeEntry({
+      filename: 'mmm_capture.pcapng',
+      ssid: 'mmm',
+      bssid: 'bbbbbbbbbbbb',
+      mtime: T + 250,
+      size: 5,
+    })
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
     client.settle('get_handshakes', handshakesListEnvelope([one, two, three]))
     await settle()
-    expect(rowKeys('captured')).toEqual([one.filename, two.filename, three.filename])
+    expect(rowKeys('captured')).toEqual([
+      one.filename,
+      two.filename,
+      three.filename,
+    ])
   })
 })
 
@@ -1190,8 +1333,16 @@ describe('Captured is never re-sorted: rendered in exactly the order it arrived'
 // exactly these two tests and no others.
 describe('the Nearby list does not assume the BSSID is unique (SPEC 4.5.2.3)', () => {
   it('two access points reporting the same BSSID both render as separate rows', async () => {
-    const first = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', hostname: 'DuplicateOne' })
-    const second = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', hostname: 'DuplicateTwo', channel: 11, rssi: -70 })
+    const first = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      hostname: 'DuplicateOne',
+    })
+    const second = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      hostname: 'DuplicateTwo',
+      channel: 11,
+      rssi: -70,
+    })
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([first, second]))
     client.settle('get_handshakes', handshakesListEnvelope([]))
@@ -1199,7 +1350,7 @@ describe('the Nearby list does not assume the BSSID is unique (SPEC 4.5.2.3)', (
     expect(rows('nearby')).toHaveLength(2)
   })
 
-  it('two access points that both report an empty BSSID (map_access_point\'s own fallback when bettercap has no mac) both render as separate rows', async () => {
+  it("two access points that both report an empty BSSID (map_access_point's own fallback when bettercap has no mac) both render as separate rows", async () => {
     const first = accessPoint({ bssid: '', hostname: 'NoMacOne' })
     const second = accessPoint({ bssid: '', hostname: 'NoMacTwo' })
     const { client } = await mountWifi()
@@ -1215,11 +1366,14 @@ describe('the Nearby list does not assume the BSSID is unique (SPEC 4.5.2.3)', (
 // =============================================================================
 
 describe('badges and the truncation notice', () => {
-  it("each badge shows the length of the list it names", async () => {
+  it('each badge shows the length of the list it names', async () => {
     const { client } = await mountWifi()
     client.settle(
       'get_access_points',
-      accessPointsEnvelope([accessPoint({ bssid: 'AA:BB:CC:DD:EE:01' }), accessPoint({ bssid: 'AA:BB:CC:DD:EE:02' })]),
+      accessPointsEnvelope([
+        accessPoint({ bssid: 'AA:BB:CC:DD:EE:01' }),
+        accessPoint({ bssid: 'AA:BB:CC:DD:EE:02' }),
+      ]),
     )
     client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()]))
     await settle()
@@ -1241,15 +1395,23 @@ describe('badges and the truncation notice', () => {
   it('the truncation notice carries the total, and is absent when truncated is false', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()], true, 812))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry()], true, 812),
+    )
     await settle()
-    expect(truncationNotice()?.textContent).toBe('Showing the newest 500 captures of 812.')
+    expect(truncationNotice()?.textContent).toBe(
+      'Showing the newest 500 captures of 812.',
+    )
   })
 
   it('no truncation notice when truncated is false', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()], false, 1))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry()], false, 1),
+    )
     await settle()
     expect(truncationNotice()).toBeNull()
   })
@@ -1267,19 +1429,29 @@ describe('badges and the truncation notice', () => {
   it('truncated:true paired with total:null does not crash and never prints the total as the literal string "null"', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry()], true, null))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry()], true, null),
+    )
     await expect(settle()).resolves.toBeUndefined()
     expect(root().textContent).not.toContain('null')
   })
 
-  it("the Captured badge is not required to agree with stats.handshakesTotal - a frame where they differ shows both, neither hidden by the other", async () => {
+  it('the Captured badge is not required to agree with stats.handshakesTotal - a frame where they differ shows both, neither hidden by the other', async () => {
     const { client } = await mountWifi()
     // stats says a very different number of handshakes from the list itself
     // - the two arrive on separate pushes (SPEC 4.5.2) and are allowed to
     // disagree, deliberately, in this test.
     client.emitMessage(statsEnvelope({ handshakesTotal: 999, handshakes: 999 }))
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry(), handshakeEntry({ filename: 'second.pcapng' })], false, 2))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope(
+        [handshakeEntry(), handshakeEntry({ filename: 'second.pcapng' })],
+        false,
+        2,
+      ),
+    )
     await settle()
     expect(badge('captured').textContent).toBe('2')
   })
@@ -1300,7 +1472,8 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
   beforeEach(() => {
     // A canary set by a payload that escaped text rendering and actually
     // ran as script/markup. Not present in jsdom by default.
-    ;(window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned = undefined
+    ;(window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned =
+      undefined
   })
 
   // Every field here is isolated inside a <bdi> (6a below pins bssid,
@@ -1313,50 +1486,70 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
   for (const hostile of HOSTILE_STRINGS) {
     it(`Nearby hostname "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
-      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: hostile })]))
+      client.settle(
+        'get_access_points',
+        accessPointsEnvelope([accessPoint({ hostname: hostile })]),
+      )
       client.settle('get_handshakes', handshakesListEnvelope([]))
       await settle()
       const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
       expect(root().querySelector('[onerror]')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
 
     it(`Nearby bssid "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
-      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ bssid: hostile })]))
+      client.settle(
+        'get_access_points',
+        accessPointsEnvelope([accessPoint({ bssid: hostile })]),
+      )
       client.settle('get_handshakes', handshakesListEnvelope([]))
       await settle()
       const field = fieldIn(rows('nearby')[0] as HTMLElement, 'bssid')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
 
     it(`Nearby vendor "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
-      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ vendor: hostile })]))
+      client.settle(
+        'get_access_points',
+        accessPointsEnvelope([accessPoint({ vendor: hostile })]),
+      )
       client.settle('get_handshakes', handshakesListEnvelope([]))
       await settle()
       const field = fieldIn(rows('nearby')[0] as HTMLElement, 'vendor')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
 
     it(`Nearby encryption "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
       const { client } = await mountWifi()
-      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ encryption: hostile })]))
+      client.settle(
+        'get_access_points',
+        accessPointsEnvelope([accessPoint({ encryption: hostile })]),
+      )
       client.settle('get_handshakes', handshakesListEnvelope([]))
       await settle()
       const field = fieldIn(rows('nearby')[0] as HTMLElement, 'encryption')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
 
@@ -1365,13 +1558,17 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       client.settle('get_access_points', accessPointsEnvelope([]))
       client.settle(
         'get_handshakes',
-        handshakesListEnvelope([handshakeEntry({ ssid: hostile, bssid: null })]),
+        handshakesListEnvelope([
+          handshakeEntry({ ssid: hostile, bssid: null }),
+        ]),
       )
       await settle()
       const field = fieldIn(rows('captured')[0] as HTMLElement, 'ssid')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
 
@@ -1386,14 +1583,19 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
       const field = fieldIn(rows('captured')[0] as HTMLElement, 'bssid')
       expect(field.textContent).toBe(hostile)
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned).toBeUndefined()
+      expect(
+        (window as unknown as { __wifiViewPwned?: boolean }).__wifiViewPwned,
+      ).toBeUndefined()
       assertRemoteStringIsolated(field, hostile)
     })
   }
 
   it('a hostname of exactly "-" is a real reading and is not reported as empty', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: '-' })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ hostname: '-' })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
@@ -1403,7 +1605,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
 
   it('an empty hostname (the plugin failing its own fallback-to-MAC guarantee) dashes and is marked empty', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: '' })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ hostname: '' })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const row = rows('nearby')[0] as HTMLElement
@@ -1417,7 +1622,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
 
   it('an empty vendor dashes and is marked empty, the same rule as hostname (SPEC 4.5.1.1 governs every remote string on this row)', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ vendor: '' })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ vendor: '' })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const row = rows('nearby')[0] as HTMLElement
@@ -1427,7 +1635,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
 
   it('an empty encryption dashes and is marked empty, the same rule as hostname', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ encryption: '' })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ encryption: '' })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const row = rows('nearby')[0] as HTMLElement
@@ -1439,7 +1650,9 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
     const { client } = await mountWifi()
     client.settle(
       'get_access_points',
-      accessPointsEnvelope([accessPoint({ vendor: 'RealVendor', encryption: 'WPA3' })]),
+      accessPointsEnvelope([
+        accessPoint({ vendor: 'RealVendor', encryption: 'WPA3' }),
+      ]),
     )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
@@ -1457,7 +1670,12 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
     client.settle('get_access_points', accessPointsEnvelope([]))
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ bssid: null, ssid: 'a_capture_with_no_parseable_bssid' })]),
+      handshakesListEnvelope([
+        handshakeEntry({
+          bssid: null,
+          ssid: 'a_capture_with_no_parseable_bssid',
+        }),
+      ]),
     )
     await settle()
     const row = rows('captured')[0] as HTMLElement
@@ -1468,7 +1686,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
   it('a present Captured bssid renders verbatim and is not marked empty', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ bssid: 'aabbccddeeff' })]))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ bssid: 'aabbccddeeff' })]),
+    )
     await settle()
     const field = fieldIn(rows('captured')[0] as HTMLElement, 'bssid')
     expect(field.textContent).toBe('aabbccddeeff')
@@ -1478,7 +1699,10 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
   it('a Captured entry with no GPS sidecar dashes its gps field and marks it empty', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ gps: null })]))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ gps: null })]),
+    )
     await settle()
     const row = rows('captured')[0] as HTMLElement
     expect(visibleFieldText(row, 'gps')).toBe(DASH)
@@ -1491,7 +1715,9 @@ describe('every remote string renders as text, on both segments (SPEC 4.5.3)', (
     client.settle(
       'get_handshakes',
       handshakesListEnvelope([
-        handshakeEntry({ gps: { lat: 10.5, lon: -20.25, accuracy: 12, source: 'gpsd' } }),
+        handshakeEntry({
+          gps: { lat: 10.5, lon: -20.25, accuracy: 12, source: 'gpsd' },
+        }),
       ]),
     )
     await settle()
@@ -1530,7 +1756,10 @@ const RTL_SSID_HEBREW = 'רשת_בדיקה'
 describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
   it('a Nearby hostname carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: HOSTILE_BIDI_SSID })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ hostname: HOSTILE_BIDI_SSID })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
@@ -1545,7 +1774,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
   // green, since only hostname's own wrapper was ever exercised.
   it('a Nearby bssid carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ bssid: HOSTILE_BIDI_SSID })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ bssid: HOSTILE_BIDI_SSID })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const field = fieldIn(rows('nearby')[0] as HTMLElement, 'bssid')
@@ -1556,7 +1788,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
 
   it('a Nearby encryption carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ encryption: HOSTILE_BIDI_SSID })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ encryption: HOSTILE_BIDI_SSID })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const field = fieldIn(rows('nearby')[0] as HTMLElement, 'encryption')
@@ -1567,7 +1802,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
 
   it('a Nearby vendor carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
     const { client } = await mountWifi()
-    client.settle('get_access_points', accessPointsEnvelope([accessPoint({ vendor: HOSTILE_BIDI_SSID })]))
+    client.settle(
+      'get_access_points',
+      accessPointsEnvelope([accessPoint({ vendor: HOSTILE_BIDI_SSID })]),
+    )
     client.settle('get_handshakes', handshakesListEnvelope([]))
     await settle()
     const field = fieldIn(rows('nearby')[0] as HTMLElement, 'vendor')
@@ -1581,7 +1819,9 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
     client.settle('get_access_points', accessPointsEnvelope([]))
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ ssid: HOSTILE_BIDI_SSID, bssid: null })]),
+      handshakesListEnvelope([
+        handshakeEntry({ ssid: HOSTILE_BIDI_SSID, bssid: null }),
+      ]),
     )
     await settle()
     const field = fieldIn(rows('captured')[0] as HTMLElement, 'ssid')
@@ -1598,7 +1838,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
   it('a Captured bssid carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped', async () => {
     const { client } = await mountWifi()
     client.settle('get_access_points', accessPointsEnvelope([]))
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ bssid: HOSTILE_BIDI_SSID })]))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ bssid: HOSTILE_BIDI_SSID })]),
+    )
     await settle()
     const field = fieldIn(rows('captured')[0] as HTMLElement, 'bssid')
     expect(field.textContent).toBe(HOSTILE_BIDI_SSID)
@@ -1613,7 +1856,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
   for (const rtlSsid of [RTL_SSID_ARABIC, RTL_SSID_HEBREW]) {
     it(`a legitimate right-to-left hostname "${rtlSsid}" renders unmangled, not stripped or reordered`, async () => {
       const { client } = await mountWifi()
-      client.settle('get_access_points', accessPointsEnvelope([accessPoint({ hostname: rtlSsid })]))
+      client.settle(
+        'get_access_points',
+        accessPointsEnvelope([accessPoint({ hostname: rtlSsid })]),
+      )
       client.settle('get_handshakes', handshakesListEnvelope([]))
       await settle()
       const field = fieldIn(rows('nearby')[0] as HTMLElement, 'hostname')
@@ -1625,7 +1871,9 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
       client.settle('get_access_points', accessPointsEnvelope([]))
       client.settle(
         'get_handshakes',
-        handshakesListEnvelope([handshakeEntry({ ssid: rtlSsid, bssid: null })]),
+        handshakesListEnvelope([
+          handshakeEntry({ ssid: rtlSsid, bssid: null }),
+        ]),
       )
       await settle()
       const field = fieldIn(rows('captured')[0] as HTMLElement, 'ssid')
@@ -1710,7 +1958,10 @@ describe('the Captured size field, at the boundaries SPEC 4.5.2.3 fixes', () => 
     it(`${size} bytes renders as "${expected}"`, async () => {
       const { client } = await mountWifi()
       client.settle('get_access_points', accessPointsEnvelope([]))
-      client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ size })]))
+      client.settle(
+        'get_handshakes',
+        handshakesListEnvelope([handshakeEntry({ size })]),
+      )
       await settle()
       const field = fieldIn(rows('captured')[0] as HTMLElement, 'size')
       expect(field.textContent).toBe(expected)
@@ -1722,7 +1973,7 @@ describe('the Captured size field, at the boundaries SPEC 4.5.2.3 fixes', () => 
 // The refresh label copy.
 // =============================================================================
 
-describe('control copy, pinned by equality against SPEC 4.5.2.3\'s table', () => {
+describe("control copy, pinned by equality against SPEC 4.5.2.3's table", () => {
   it('the refresh control reads "Refresh"', async () => {
     await mountWifi()
     expect(refreshControl().textContent).toBe('Refresh')

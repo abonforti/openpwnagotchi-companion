@@ -5,7 +5,8 @@
 
 import { writable, type Readable } from 'svelte/store'
 
-export type ViewId = 'dashboard' | 'wifi' | 'map' | 'log' | 'peers' | 'mirror' | 'settings'
+export type ViewId =
+  'dashboard' | 'wifi' | 'map' | 'log' | 'peers' | 'mirror' | 'settings'
 
 /** Where the route is reached from: the navigation bar, or the More sheet. */
 export type RouteSlot = 'bar' | 'sheet'
@@ -22,7 +23,12 @@ export interface Route {
  * separately only so the fallback can point at the very object in `routes`
  * rather than a second copy of it that would drift on the first edit.
  */
-const DASHBOARD: Route = { id: 'dashboard', path: '/', label: 'Dashboard', slot: 'bar' }
+const DASHBOARD: Route = {
+  id: 'dashboard',
+  path: '/',
+  label: 'Dashboard',
+  slot: 'bar',
+}
 
 /** Order matters: it is the order of the bar entries and of the sheet entries. */
 export const routes: readonly Route[] = [
@@ -35,8 +41,12 @@ export const routes: readonly Route[] = [
   { id: 'settings', path: '/settings', label: 'Settings', slot: 'sheet' },
 ]
 
-export const barRoutes: readonly Route[] = routes.filter((route) => route.slot === 'bar')
-export const sheetRoutes: readonly Route[] = routes.filter((route) => route.slot === 'sheet')
+export const barRoutes: readonly Route[] = routes.filter(
+  (route) => route.slot === 'bar',
+)
+export const sheetRoutes: readonly Route[] = routes.filter(
+  (route) => route.slot === 'sheet',
+)
 
 /**
  * Reduce a URL path to the form the table above is written in. The Wi-Fi

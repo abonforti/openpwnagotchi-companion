@@ -70,7 +70,8 @@ export type UnauthorizedReason = 'rejected' | 'required'
 // reach. `socket_failed` (issue #122) is the third: `createSocket` throwing
 // from inside the reconnect chain's bare `setTimeout` callback, where a
 // `new WebSocket` that fails to open has nothing above it to catch it.
-export type LocalErrorCode = 'pong_timeout' | 'connect_timeout' | 'socket_failed'
+export type LocalErrorCode =
+  'pong_timeout' | 'connect_timeout' | 'socket_failed'
 
 /**
  * SPEC 4.3.10: what the client keeps of the last thing that went wrong,
@@ -167,7 +168,8 @@ type ReadRequest =
 // the only messages command() may ever send. Unlike a read, a state
 // command is refused outright rather than queued, see the comment in
 // command() itself.
-type StateCommand = IncomingReboot | IncomingSetMode | IncomingSetPasv | IncomingShutdown
+type StateCommand =
+  IncomingReboot | IncomingSetMode | IncomingSetPasv | IncomingShutdown
 
 /** The payload half of a read or command frame: everything but the envelope. */
 type Payload<T> = Omit<T, 'type' | 'message_id'>
@@ -175,7 +177,8 @@ type Payload<T> = Omit<T, 'type' | 'message_id'>
 // every object satisfies, so `data` may be omitted; for `set_mode` it carries a required
 // `mode`, and omitting it would put a frame on the wire that the plugin answers with
 // `bad_request` (SPEC 2.3).
-type PayloadArgs<T> = {} extends Payload<T> ? [data?: Payload<T>] : [data: Payload<T>]
+type PayloadArgs<T> =
+  {} extends Payload<T> ? [data?: Payload<T>] : [data: Payload<T>]
 
 export interface WsClient {
   connect(): void
@@ -421,7 +424,10 @@ export function createWsClient(options: WsClientOptions): WsClient {
   }
 
   function notifyDiagnostics(): void {
-    const value: Diagnostics = { lastError: lastErrorValue, latencyMs: latencyMsValue }
+    const value: Diagnostics = {
+      lastError: lastErrorValue,
+      latencyMs: latencyMsValue,
+    }
     for (const handler of [...diagnosticsHandlers]) handler(value)
   }
 
@@ -565,7 +571,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
     recordLocalError('pong_timeout')
     discardSocketSilently()
     disarmHeartbeat()
-    rejectInFlightCommands('the connection dropped while the command was in flight')
+    rejectInFlightCommands(
+      'the connection dropped while the command was in flight',
+    )
     requeueUnresolvedReads()
     connectionReady = false
     currentSocket = null
@@ -675,20 +683,26 @@ export function createWsClient(options: WsClientOptions): WsClient {
     cancelBackoffTimer()
     discardSocketSilently()
     disarmHeartbeat()
-    rejectInFlightCommands('the connection dropped while the command was in flight')
+    rejectInFlightCommands(
+      'the connection dropped while the command was in flight',
+    )
     requeueUnresolvedReads()
     connectionReady = false
     currentSocket = null
     enterOffline()
   }
 
-  function handleRestarting(data: { reason: RestartReason; mode: unknown }): void {
+  function handleRestarting(data: {
+    reason: RestartReason
+    mode: unknown
+  }): void {
     restartReasonValue = data.reason
     clearConnectingBoundTimer()
     setState('restarting')
     clearPatienceTimer()
     if (data.reason !== 'shutdown') {
-      const patienceMs = data.reason === 'reboot' ? PATIENCE_REBOOT_MS : PATIENCE_MODE_CHANGE_MS
+      const patienceMs =
+        data.reason === 'reboot' ? PATIENCE_REBOOT_MS : PATIENCE_MODE_CHANGE_MS
       patienceTimer = setTimeout(onPatienceExpired, patienceMs)
     }
   }
@@ -696,7 +710,8 @@ export function createWsClient(options: WsClientOptions): WsClient {
   function handleStats(stats: Stats, timestamp: number): void {
     lastStatsValue = stats
     lastStatsTimestampValue = timestamp
-    const fresh = stats.sessionAge !== null && stats.sessionAge < STALENESS_THRESHOLD_S
+    const fresh =
+      stats.sessionAge !== null && stats.sessionAge < STALENESS_THRESHOLD_S
     if (!firstStatsReceivedThisConnection) {
       firstStatsReceivedThisConnection = true
       closesBeforeAnyStats = 0
@@ -775,7 +790,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
       const id = queue.shift() as string
       const entry = pendingReads.get(id)
       if (!entry) continue // resolved, rejected or timed out already
-      // the envelope is written after the
+      // The envelope is written after the
       // caller's data, not before it, so a payload key named `type` or
       // `message_id` can never overwrite the frame's own. See the same
       // ordering in command() and sendGps() below.
@@ -826,7 +841,8 @@ export function createWsClient(options: WsClientOptions): WsClient {
         handleRestarting(message.data)
         break
       case 'error':
-        if (message.data.code === 'unauthorized') lastErrorWasUnauthorized = true
+        if (message.data.code === 'unauthorized')
+          lastErrorWasUnauthorized = true
         // SPEC 4.3.10: every code goes through, including the ones SPEC
         // 4.3.5 routes elsewhere -- log_unavailable has its own sentence in
         // the Log view and it is still the last error the connection saw.
@@ -859,7 +875,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
   function handleClose(event: { code: number; reason: string }): void {
     clearConnectingBoundTimer()
     disarmHeartbeat()
-    rejectInFlightCommands('the connection dropped while the command was in flight')
+    rejectInFlightCommands(
+      'the connection dropped while the command was in flight',
+    )
     requeueUnresolvedReads()
     currentSocket = null
     connectionReady = false
@@ -884,8 +902,17 @@ export function createWsClient(options: WsClientOptions): WsClient {
     // on this same connection must not suppress the drop that ends it
     // later. Same scope SPEC 4.3.1 gives the unauthorized latch, and the
     // same flag.
-    if (!stopped && currentState !== 'restarting' && !lastErrorWasUnauthorized) {
-      setLastError({ source: 'close', code: `${event.code}`, message: event.reason, at: deps.now() })
+    if (
+      !stopped &&
+      currentState !== 'restarting' &&
+      !lastErrorWasUnauthorized
+    ) {
+      setLastError({
+        source: 'close',
+        code: `${event.code}`,
+        message: event.reason,
+        at: deps.now(),
+      })
     }
 
     if (currentState === 'restarting') {
@@ -912,7 +939,11 @@ export function createWsClient(options: WsClientOptions): WsClient {
     }
 
     // Any other close, or the socket failed to open.
-    if (!effectiveToken(options) && !firstStatsReceivedThisConnection && socketOpenedThisConnection) {
+    if (
+      !effectiveToken(options) &&
+      !firstStatsReceivedThisConnection &&
+      socketOpenedThisConnection
+    ) {
       closesBeforeAnyStats += 1
       if (closesBeforeAnyStats >= 3) {
         closesBeforeAnyStats = 0
@@ -949,7 +980,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
         recordLocalError('connect_timeout')
         discardSocketSilently()
         disarmHeartbeat()
-        rejectInFlightCommands('the connection dropped while the command was in flight')
+        rejectInFlightCommands(
+          'the connection dropped while the command was in flight',
+        )
         requeueUnresolvedReads()
         connectionReady = false
         currentSocket = null
@@ -1070,7 +1103,9 @@ export function createWsClient(options: WsClientOptions): WsClient {
     return () => messageHandlers.delete(handler)
   }
 
-  function onDiagnostics(handler: (diagnostics: Diagnostics) => void): () => void {
+  function onDiagnostics(
+    handler: (diagnostics: Diagnostics) => void,
+  ): () => void {
     diagnosticsHandlers.add(handler)
     return () => diagnosticsHandlers.delete(handler)
   }
@@ -1095,7 +1130,14 @@ export function createWsClient(options: WsClientOptions): WsClient {
     const data = rest[0]
     return new Promise((resolve, reject) => {
       const id = nextMessageId()
-      const entry: PendingRead = { message_id: id, type, data, resolve, reject, timeoutHandle: null }
+      const entry: PendingRead = {
+        message_id: id,
+        type,
+        data,
+        resolve,
+        reject,
+        timeoutHandle: null,
+      }
       pendingReads.set(id, entry)
       queue.push(id)
       // SPEC 4.3.8: the clock starts here, at the call, not at the send,
@@ -1139,14 +1181,16 @@ export function createWsClient(options: WsClientOptions): WsClient {
     // states with a null socket. Folded into one guard rather than left as
     // a second branch with a message that would have read wrong.
     if (!canSendCommand(current) || !currentSocket) {
-      return Promise.reject(new Error(`'${type}' is not allowed while ${current}`))
+      return Promise.reject(
+        new Error(`'${type}' is not allowed while ${current}`),
+      )
     }
     const socket = currentSocket
     return new Promise((resolve, reject) => {
       const id = nextMessageId()
       const entry: PendingCommand = { resolve, reject, timeoutHandle: null }
       inFlightCommands.set(id, entry)
-      // the envelope is written after the
+      // The envelope is written after the
       // caller's data, not before it. See flushQueue() and sendGps().
       const frame: Record<string, unknown> = {}
       if (isRecord(data)) Object.assign(frame, data)
@@ -1167,7 +1211,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     // resent after a reconnect would misattribute a handshake captured in
     // that window.
     if (!connectionReady || !currentSocket) return
-    // the envelope is written after the
+    // The envelope is written after the
     // caller's data, not before it. See flushQueue() and command().
     const frame: Record<string, unknown> = {}
     if (isRecord(data)) Object.assign(frame, data)

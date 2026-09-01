@@ -53,7 +53,7 @@
     'Four numbers 0-255 separated by dots, such as 172.20.10.2. No hostname, no port, no scheme.'
 
   const TOKEN_HELP =
-    "Clearing this removes it from this device only. The unit keeps accepting it until its own token is changed in config.toml and it restarts."
+    'Clearing this removes it from this device only. The unit keeps accepting it until its own token is changed in config.toml and it restarts.'
 
   const CSP_NOTE =
     "This copy of the app was served by one unit, and that unit's Content-Security-Policy only " +
@@ -134,13 +134,15 @@
       updateHost(id, { label: editLabel.trim(), address })
       cancelEdit()
     } catch (err) {
-      editError = err instanceof Error ? err.message : 'Could not save this host.'
+      editError =
+        err instanceof Error ? err.message : 'Could not save this host.'
     }
   }
 
   function handleRemove(id: string): void {
     if (editingId === id) cancelEdit()
-    if (revealedTokenField?.kind === 'row' && revealedTokenField.hostId === id) revealedTokenField = null
+    if (revealedTokenField?.kind === 'row' && revealedTokenField.hostId === id)
+      revealedTokenField = null
     removeHost(id)
   }
 
@@ -187,7 +189,9 @@
   let revealedTokenField = $state<TokenField | null>(null)
 
   function toggleTokenReveal(field: TokenField): void {
-    revealedTokenField = sameTokenField(revealedTokenField, field) ? null : field
+    revealedTokenField = sameTokenField(revealedTokenField, field)
+      ? null
+      : field
   }
 
   // SPEC 4.5.2.1: choosing a sentence by rule from a value is computing,
@@ -230,10 +234,14 @@
   // formatUnauthorizedReason, ...) and is dropped here in favour of the
   // single period the whole line ends with instead.
   const lastErrorSentence = $derived(
-    conn.lastError === null ? '' : formatLastErrorCode(conn.lastError).replace(/\.$/, ''),
+    conn.lastError === null
+      ? ''
+      : formatLastErrorCode(conn.lastError).replace(/\.$/, ''),
   )
   const lastErrorMessage = $derived(
-    conn.lastError === null ? '' : formatLastErrorMessage(conn.lastError.message),
+    conn.lastError === null
+      ? ''
+      : formatLastErrorMessage(conn.lastError.message),
   )
   const lastErrorHasMessage = $derived(lastErrorMessage !== '')
   const lastErrorTimeText = $derived(
@@ -253,7 +261,9 @@
   // escape hatch SPEC 4.5.3 bans. That hatch is not named here on purpose:
   // the CI gate greps this tree for its name, and a comment saying it is
   // not used reads to a grep exactly like using it.
-  const pluginVersionText = $derived(caps === null || caps.pluginVersion === '' ? DASH : caps.pluginVersion)
+  const pluginVersionText = $derived(
+    caps === null || caps.pluginVersion === '' ? DASH : caps.pluginVersion,
+  )
   const pluginVersionEmpty = $derived(pluginVersionText === DASH)
 
   // SPEC 4.6.2: the control's own state, from lib/geo.ts, the only module
@@ -269,7 +279,11 @@
   const geoPressed = $derived(geo === 'waiting' || geo === 'sharing')
 </script>
 
-<section class="view" data-view="settings" aria-labelledby="view-title-settings">
+<section
+  class="view"
+  data-view="settings"
+  aria-labelledby="view-title-settings"
+>
   <h1 id="view-title-settings">Settings</h1>
 
   <h2>Hosts</h2>
@@ -311,18 +325,26 @@
                   required
                 />
               </label>
-              <p id={`edit-addr-help-${host.id}`} class="help">{ADDRESS_HELP}</p>
+              <p id={`edit-addr-help-${host.id}`} class="help">
+                {ADDRESS_HELP}
+              </p>
               {#if editError}
-                <p class="error" role="alert" data-field-error="address">{editError}</p>
+                <p class="error" role="alert" data-field-error="address">
+                  {editError}
+                </p>
               {/if}
               <div class="row-actions">
                 <button type="submit" data-action="save">Save</button>
-                <button type="button" data-action="cancel" onclick={cancelEdit}>Cancel</button>
+                <button type="button" data-action="cancel" onclick={cancelEdit}
+                  >Cancel</button
+                >
               </div>
             </form>
           {:else}
             <div class="host-identity">
-              <span class="host-label" data-host-field="label">{host.label}</span>
+              <span class="host-label" data-host-field="label"
+                >{host.label}</span
+              >
               {#if host.id === activeId}
                 <span class="host-active-badge">Active</span>
               {/if}
@@ -332,11 +354,19 @@
                    persisted label, because a label is never re-derived and
                    an owner renaming this entry must not delete a warning
                    tied to what the entry is, not what it is called. -->
-              <p class="host-note">Desktop only. An iPhone cannot use the USB gadget path.</p>
+              <p class="host-note">
+                Desktop only. An iPhone cannot use the USB gadget path.
+              </p>
             {/if}
-            <div class="host-address" data-host-field="address">{host.address}</div>
+            <div class="host-address" data-host-field="address">
+              {host.address}
+            </div>
             <div class="row-actions">
-              <button type="button" data-action="edit" onclick={() => startEdit(host)}>Edit</button>
+              <button
+                type="button"
+                data-action="edit"
+                onclick={() => startEdit(host)}>Edit</button
+              >
             </div>
           {/if}
 
@@ -345,7 +375,8 @@
                being edited. -->
           <div class="host-ports">
             WS <span data-host-field="wsPort">{host.wsPort}</span>
-            &middot; HTTPS <span data-host-field="httpPort">{host.httpPort}</span>
+            &middot; HTTPS
+            <span data-host-field="httpPort">{host.httpPort}</span>
           </div>
 
           <!-- SPEC 4.7: a token has no grammar to fail, so it is edited
@@ -358,18 +389,33 @@
             <div class="token-input-row">
               <input
                 id={`token-${host.id}`}
-                type={sameTokenField(revealedTokenField, { kind: 'row', hostId: host.id }) ? 'text' : 'password'}
+                type={sameTokenField(revealedTokenField, {
+                  kind: 'row',
+                  hostId: host.id,
+                })
+                  ? 'text'
+                  : 'password'}
                 data-host-field="token"
                 value={host.token ?? ''}
                 autocomplete="off"
-                onchange={(event) => commitToken(host.id, (event.currentTarget as HTMLInputElement).value)}
+                onchange={(event) =>
+                  commitToken(
+                    host.id,
+                    (event.currentTarget as HTMLInputElement).value,
+                  )}
               />
               <button
                 type="button"
                 data-action="reveal"
-                onclick={() => toggleTokenReveal({ kind: 'row', hostId: host.id })}
+                onclick={() =>
+                  toggleTokenReveal({ kind: 'row', hostId: host.id })}
               >
-                {sameTokenField(revealedTokenField, { kind: 'row', hostId: host.id }) ? 'Hide' : 'Show'}
+                {sameTokenField(revealedTokenField, {
+                  kind: 'row',
+                  hostId: host.id,
+                })
+                  ? 'Hide'
+                  : 'Show'}
               </button>
             </div>
           </label>
@@ -377,11 +423,20 @@
 
           <div class="row-actions">
             {#if host.id !== activeId}
-              <button type="button" data-action="activate" onclick={() => handleActivate(host.id)}>
+              <button
+                type="button"
+                data-action="activate"
+                onclick={() => handleActivate(host.id)}
+              >
                 Connect
               </button>
             {/if}
-            <button type="button" class="danger" data-action="remove" onclick={() => handleRemove(host.id)}>
+            <button
+              type="button"
+              class="danger"
+              data-action="remove"
+              onclick={() => handleRemove(host.id)}
+            >
               Remove
             </button>
           </div>
@@ -400,7 +455,12 @@
   >
     <label for="add-label">
       Label (optional)
-      <input id="add-label" type="text" data-add-field="label" bind:value={addLabel} />
+      <input
+        id="add-label"
+        type="text"
+        data-add-field="label"
+        bind:value={addLabel}
+      />
     </label>
     <label for="add-address">
       Address
@@ -419,7 +479,9 @@
       <div class="token-input-row">
         <input
           id="add-token"
-          type={sameTokenField(revealedTokenField, { kind: 'add' }) ? 'text' : 'password'}
+          type={sameTokenField(revealedTokenField, { kind: 'add' })
+            ? 'text'
+            : 'password'}
           data-add-field="token"
           bind:value={addToken}
           autocomplete="off"
@@ -429,7 +491,9 @@
           data-action="reveal"
           onclick={() => toggleTokenReveal({ kind: 'add' })}
         >
-          {sameTokenField(revealedTokenField, { kind: 'add' }) ? 'Hide' : 'Show'}
+          {sameTokenField(revealedTokenField, { kind: 'add' })
+            ? 'Hide'
+            : 'Show'}
         </button>
       </div>
     </label>
@@ -468,7 +532,9 @@
   <div class="fields">
     <div class="field">
       <span class="field-label">Connection</span>
-      <span class="field-value" data-field="connectionState">{connectionLabel}</span>
+      <span class="field-value" data-field="connectionState"
+        >{connectionLabel}</span
+      >
     </div>
     <div class="field">
       <span class="field-label">Plugin version</span>
@@ -477,28 +543,49 @@
         data-field="pluginVersion"
         data-empty={pluginVersionEmpty ? 'true' : undefined}
       >
-        <bdi>{pluginVersionText}</bdi>{#if pluginVersionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+        <bdi>{pluginVersionText}</bdi>{#if pluginVersionEmpty}<span
+            class="visually-hidden"
+          >
+            {EMPTY_LABEL}</span
+          >{/if}
       </span>
     </div>
     <div class="field">
       <span class="field-label">Last error</span>
-      <span class="field-value" data-field="lastError" data-empty={lastErrorEmpty ? 'true' : undefined}>
+      <span
+        class="field-value"
+        data-field="lastError"
+        data-empty={lastErrorEmpty ? 'true' : undefined}
+      >
         <!-- SPEC 4.5.3 (issue #219): only lastErrorMessage is remote, so
              only it sits in a <bdi> -- the sentence and the time are this
              client's own text and stay outside the isolate. -->
-        {#if lastErrorEmpty}{DASH}{:else}{lastErrorSentence}{#if lastErrorHasMessage}: <bdi>{lastErrorMessage}</bdi>{/if} at {lastErrorTimeText}.{/if}{#if lastErrorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+        {#if lastErrorEmpty}{DASH}{:else}{lastErrorSentence}{#if lastErrorHasMessage}:
+            <bdi>{lastErrorMessage}</bdi>{/if} at {lastErrorTimeText}.{/if}{#if lastErrorEmpty}<span
+            class="visually-hidden"
+          >
+            {EMPTY_LABEL}</span
+          >{/if}
       </span>
     </div>
     <div class="field">
       <span class="field-label">Latency</span>
-      <span class="field-value" data-field="latency" data-empty={latencyEmpty ? 'true' : undefined}>
-        {latencyText}{#if latencyEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <span
+        class="field-value"
+        data-field="latency"
+        data-empty={latencyEmpty ? 'true' : undefined}
+      >
+        {latencyText}{#if latencyEmpty}<span class="visually-hidden">
+            {EMPTY_LABEL}</span
+          >{/if}
       </span>
     </div>
     {#if unauthorizedReasonText !== null}
       <div class="field">
         <span class="field-label">Unauthorized reason</span>
-        <span class="field-value" data-field="unauthorizedReason">{unauthorizedReasonText}</span>
+        <span class="field-value" data-field="unauthorizedReason"
+          >{unauthorizedReasonText}</span
+        >
       </div>
     {/if}
   </div>

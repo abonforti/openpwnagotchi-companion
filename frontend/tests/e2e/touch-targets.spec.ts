@@ -113,14 +113,19 @@ function dominantAxis(rects: Rect[]): 'horizontal' | 'vertical' {
 }
 
 test.describe('every navigation target is at least 44px', () => {
-  test('the bar or rail entries, including More', async ({ page }, testInfo) => {
+  test('the bar or rail entries, including More', async ({
+    page,
+  }, testInfo) => {
     const orientation = orientationOf(testInfo)
     const layout = expectedLayout(orientation)
     await gotoView(page, 'dashboard')
 
     for (const slot of BAR_SLOTS) {
       const entry = page.locator(`[data-nav="${slot}"]`)
-      await expect(entry, `the ${layout} is missing the ${slot} entry`).toHaveCount(1)
+      await expect(
+        entry,
+        `the ${layout} is missing the ${slot} entry`,
+      ).toHaveCount(1)
 
       const rect = await rectOf(entry)
       expect(
@@ -152,7 +157,10 @@ test.describe('every navigation target is at least 44px', () => {
 
     for (const slot of SHEET_SLOTS) {
       const entry = page.locator(`[data-sheet="${slot}"]`)
-      await expect(entry, `the More sheet is missing the ${slot} entry`).toHaveCount(1)
+      await expect(
+        entry,
+        `the More sheet is missing the ${slot} entry`,
+      ).toHaveCount(1)
 
       const rect = await rectOf(entry)
       expect(
@@ -175,7 +183,10 @@ test.describe('every navigation target is at least 44px', () => {
     // so that an overlap and a merely absent gap fail with different names.
     const rects = []
     for (const slot of BAR_SLOTS) {
-      rects.push({ slot, rect: await rectOf(page.locator(`[data-nav="${slot}"]`)) })
+      rects.push({
+        slot,
+        rect: await rectOf(page.locator(`[data-nav="${slot}"]`)),
+      })
     }
 
     for (const a of rects) {
@@ -186,14 +197,17 @@ test.describe('every navigation target is at least 44px', () => {
           b.rect.left < a.rect.right - EPSILON_OVERLAP &&
           a.rect.top < b.rect.bottom - EPSILON_OVERLAP &&
           b.rect.top < a.rect.bottom - EPSILON_OVERLAP
-        expect(overlaps, `entries "${a.slot}" and "${b.slot}" have overlapping hit boxes`).toBe(
-          false,
-        )
+        expect(
+          overlaps,
+          `entries "${a.slot}" and "${b.slot}" have overlapping hit boxes`,
+        ).toBe(false)
       }
     }
   })
 
-  test('adjacent navigation entries are held apart by the gap', async ({ page }, testInfo) => {
+  test('adjacent navigation entries are held apart by the gap', async ({
+    page,
+  }, testInfo) => {
     const orientation = orientationOf(testInfo)
     const layout = expectedLayout(orientation)
     await gotoView(page, 'dashboard')
@@ -206,14 +220,20 @@ test.describe('every navigation target is at least 44px', () => {
     // entry can be one that reboots the unit.
     const entries: LabeledRect[] = []
     for (const slot of BAR_SLOTS) {
-      entries.push({ label: slot, rect: await rectOf(page.locator(`[data-nav="${slot}"]`)) })
+      entries.push({
+        label: slot,
+        rect: await rectOf(page.locator(`[data-nav="${slot}"]`)),
+      })
     }
 
     // The bar lays its entries out along x, the rail along y -- known from
     // `expectedLayout` here, unlike the controls below, which have no such
     // declared layout to read.
     const axis = layout === 'bar' ? 'horizontal' : 'vertical'
-    assertHeldApart(entries, axis, { plural: `${layout} entries`, singular: `${layout} entry` })
+    assertHeldApart(entries, axis, {
+      plural: `${layout} entries`,
+      singular: `${layout} entry`,
+    })
   })
 })
 
@@ -240,12 +260,19 @@ test.describe('the state controls of SPEC 4.5.2.2 respect the floor and the gap'
   // (SPEC 4.5.2.2); PASV is not, for the reason above.
   const RENDERED_CONTROLS = ['mode', 'reboot', 'shutdown'] as const
 
-  test('every rendered control clears 44px in both dimensions', async ({ page }) => {
+  test('every rendered control clears 44px in both dimensions', async ({
+    page,
+  }) => {
     await gotoView(page, 'dashboard')
 
     for (const control of RENDERED_CONTROLS) {
-      const button = page.locator(`[data-control="${control}"] [data-action="request"]`)
-      await expect(button, `the ${control} control has no [data-action="request"]`).toHaveCount(1)
+      const button = page.locator(
+        `[data-control="${control}"] [data-action="request"]`,
+      )
+      await expect(
+        button,
+        `the ${control} control has no [data-action="request"]`,
+      ).toHaveCount(1)
 
       const rect = await rectOf(button)
       expect(
@@ -268,7 +295,9 @@ test.describe('the state controls of SPEC 4.5.2.2 respect the floor and the gap'
     for (const control of RENDERED_CONTROLS) {
       items.push({
         label: control,
-        rect: await rectOf(page.locator(`[data-control="${control}"] [data-action="request"]`)),
+        rect: await rectOf(
+          page.locator(`[data-control="${control}"] [data-action="request"]`),
+        ),
       })
     }
 

@@ -191,10 +191,12 @@ def clamp_interval(
         except (TypeError, ValueError):
             numeric = None
     if numeric is None or _finite(numeric) is None:
+        # The key is named and the value is not: this warning is served to a
+        # client by `get_log` (SPEC 2.9), and echoing the value would put the
+        # owner's configuration on the wire to explain a typo (SPEC 2.3.0).
         log.warning(
-            "[companion] %s is not a usable number (%r); using default %s",
+            "[companion] %s is not a usable number; using default %s",
             name,
-            value,
             default,
         )
         return default, False
@@ -261,7 +263,10 @@ def parse_bind_entry(value: Any) -> ipaddress.IPv4Address | ipaddress.IPv4Networ
         try:
             block = ipaddress.IPv4Network(value, strict=False)
         except ValueError as err:
-            raise ValueError(str(err)) from err
+            # Not `str(err)`: `ipaddress` embeds the rejected value in its own
+            # message, and that message reaches `parse_bind_addresses`'s log,
+            # which `get_log` (SPEC 2.9) serves to a client (SPEC 2.3.0).
+            raise ValueError("not a bindable IPv4 network") from err
         if block.network_address.is_unspecified:
             # The network address is the lowest address of a block, so a block
             # holds 0.0.0.0 exactly when its network address is the wildcard -
@@ -286,14 +291,18 @@ def parse_bind_addresses(entries: Any) -> list[ipaddress.IPv4Address | ipaddress
     for, which is the exposure D5.1 exists to close.
     """
     if not isinstance(entries, list):
-        log.error("[companion] bind_addresses is not a list: %r", entries)
+        # The key is named and the value is not, for the same reason as the
+        # `gpsd_host` and port refusals: this log is served to a client by
+        # `get_log` (SPEC 2.9), and echoing it would put the owner's
+        # configuration on the wire to explain a typo (SPEC 2.3.0).
+        log.error("[companion] bind_addresses is not a list")
         return []
     selectors: list[ipaddress.IPv4Address | ipaddress.IPv4Network] = []
     for entry in entries:
         try:
             selectors.append(parse_bind_entry(entry))
         except ValueError as err:
-            log.error("[companion] ignoring bind_addresses entry %r: %s", entry, err)
+            log.error("[companion] ignoring an unusable bind_addresses entry: %s", err)
     if not selectors:
         log.error("[companion] no usable entry in bind_addresses: nothing will be bound")
     return selectors
@@ -1102,6 +1111,13 @@ class GpsResolver:
         self._browser: dict | None = None
         self._browser_at: float = 0.0
         self._gpsd: dict | None = None
+        # Set once the gpsd_port refusal below has been logged, so a
+        # standing misconfiguration is named once rather than once per poll
+        # (SPEC 2.3.0): refresh_gpsd runs on a timer, and get_log (SPEC 2.9)
+        # serves a bounded log, so a message repeated every pass would push
+        # everything else out of it. Cleared as soon as a pass sees a valid
+        # port again, so a fix - or a fresh refusal after one - is reported.
+        self._gpsd_port_refusal_logged = False
         # Refused when the config is read (SPEC 2.12, issue #163), not when
         # first polled: this disables the gpsd source alone, the same way an
         # unusable bind_addresses entry is dropped rather than taking the
@@ -1148,11 +1164,33 @@ class GpsResolver:
         if not is_gpsd_host_literal(host):
             self._gpsd = None
             return
+        # gpsd_port is a port too (SPEC 2.3.0, issue #16): validated here, on
+        # the value the poll will use, for the same reason gpsd_host is
+        # re-read and re-checked above rather than at construction only.
+        port = valid_port(option(self._options, "gpsd_port"))
+        if port is None:
+            # The key is named and the value is not (SPEC 2.3.0): this log is
+            # served to a client by `get_log` (SPEC 2.9). Logged once, not
+            # once per pass, or the message would drown everything else in
+            # that bounded log for as long as the misconfiguration stands.
+            if not self._gpsd_port_refusal_logged:
+                log.error(
+                    "[companion] gpsd_port is not a valid port (1-65535); the gpsd poll is "
+                    "skipped"
+                )
+                self._gpsd_port_refusal_logged = True
+            self._gpsd = None
+            return
+        self._gpsd_port_refusal_logged = False
         tpv = None
         try:
-            tpv = self._deps.read_gpsd(host, int(option(self._options, "gpsd_port")), 2.0)
+            tpv = self._deps.read_gpsd(host, port, 2.0)
         except Exception as err:
-            log.debug("[companion] gpsd poll failed: %s", err)
+            # `err` is not logged: `ipaddress` and similar libraries embed
+            # the rejected value in their own exception text (SPEC 2.3.0),
+            # and `host` here is itself a configuration value. The exception
+            # class name is diagnostic without being one.
+            log.debug("[companion] gpsd poll failed: %s", type(err).__name__)
         self._gpsd = gps_from_gpsd(tpv, self._deps.now())
 
     def current(self) -> dict:
@@ -1529,8 +1567,12 @@ class HandshakeStore:
         try:
             with open(path, "wt", encoding="utf-8") as handle:
                 json.dump(sidecar_payload(gps, now), handle)
-        except OSError as err:
-            log.error("[companion] could not write %s: %s", path, err)
+        except OSError:
+            # Neither the path nor the exception text is logged: the path is
+            # built from `handshake_dir` and an SSID-derived filename, both
+            # remote-influenced, and this log is served to a client by
+            # `get_log` (SPEC 2.9).
+            log.error("[companion] could not write the GPS sidecar")
             return None
         return path
 
@@ -2150,28 +2192,54 @@ def build_ssl_context(cert_path: str, key_path: str) -> ssl.SSLContext | None:
     being down - iOS requires TLS, so a plaintext server would not serve the app
     and would quietly expose the socket instead (D4).
     """
-    for label, path in (("certificate", cert_path), ("key", key_path)):
+    # The key is named and the path never printed, for the same reason as the
+    # `gpsd_host` refusal: this log is served to a client by `get_log` (SPEC
+    # 2.9), and a path is a filesystem description of the owner's device. The
+    # key is enough to say which of the two is the problem.
+    for key, path in (("tls_cert", cert_path), ("tls_key", key_path)):
         if not path:
-            log.error("[companion] no TLS %s configured; refusing to start any listener", label)
+            log.error("[companion] %s is not configured; refusing to start any listener", key)
             return None
         if not os.path.isfile(path):
             log.error(
-                "[companion] TLS %s %s does not exist; refusing to start any listener",
-                label,
-                path,
+                "[companion] %s does not point to a file; refusing to start any listener", key
             )
             return None
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(cert_path, key_path)
-    except (ssl.SSLError, OSError, ValueError) as err:
-        log.error("[companion] TLS material unusable (%s); refusing to start any listener", err)
+    except (ssl.SSLError, OSError, ValueError):
+        # The exception text is not logged either: OSError embeds the path it
+        # failed on, the same way ipaddress does for a bad address.
+        log.error(
+            "[companion] tls_cert/tls_key could not be loaded; refusing to start any listener"
+        )
         return None
     return context
 
 
-def content_security_policy(bound_addresses: Sequence[str], ws_port: int) -> str:
+def valid_port(value: Any) -> int | None:
+    """Returns `value` as a port number in 1-65535, or None if it is not one.
+
+    Zero is refused along with everything outside the range and anything not
+    a whole number - `ws_port = 0` would otherwise reach `socket.bind` and let
+    the operating system assign a port nobody chose (SPEC 2.3.0, issue #16).
+
+    `value` must already be an `int`, and not the `bool` that is one in
+    Python: TOML keeps floats and integers distinct, so `8082.0` is a type
+    mismatch rather than a value to coerce, and `isinstance(True, int)` would
+    otherwise let `ws_port = true` through as port 1, an accident of the
+    language rather than a port the owner chose.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if not 1 <= value <= 65535:
+        return None
+    return value
+
+
+def content_security_policy(bound_addresses: Sequence[str], ws_port: int | None) -> str:
     """Builds the Content-Security-Policy header value for one response.
 
     `connect-src` names `'self'` plus one `wss://<address>:<ws_port>` origin
@@ -2181,9 +2249,15 @@ def content_security_policy(bound_addresses: Sequence[str], ws_port: int) -> str
     an IPv4 literal - `Listeners` enforces that on both sides of the address
     seam (SPEC 2.3.1) - so none needs the bracket an IPv6 literal would need
     in a URL authority.
+
+    `ws_port` is `None` when SPEC 2.3.0 refused it: no WSS listener ever
+    starts on any address in that case, so no `wss://` origin is reachable,
+    and naming one anyway would describe a listener the header's own point
+    is to describe accurately. `connect-src` then names `'self'` alone.
     """
     connect_src = " ".join(
-        ["'self'"] + [f"wss://{ip}:{ws_port}" for ip in bound_addresses]
+        ["'self'"]
+        + ([f"wss://{ip}:{ws_port}" for ip in bound_addresses] if ws_port is not None else [])
     )
     return (
         "default-src 'self'; "
@@ -2202,7 +2276,7 @@ def content_security_policy(bound_addresses: Sequence[str], ws_port: int) -> str
 def make_http_handler(
     web_root: str,
     bound_addresses: Callable[[], Sequence[str]],
-    ws_port: int,
+    ws_port: int | None,
 ) -> type:
     """Builds the request handler class serving `web_root` over HTTPS.
 
@@ -2314,7 +2388,8 @@ class Listeners:
     than a one-off. The state is keyed on the address itself, which is what
     lets a new DHCP lease converge without a plugin reload:
 
-        selected address, nothing bound    bind both listeners
+        selected address, nothing bound    bind both listeners, or whichever
+                                            of the two has a valid port
         bound address gone from the host   close both, drop its clients
         another address in the same block  a new selection: bind it, drop the old
         nothing matches                    skip quietly after the first log
@@ -2343,6 +2418,40 @@ class Listeners:
             # name says which device, not which network, and bnep numbering
             # follows the order peers connected rather than the owner's intent.
             log.warning("[companion] the `interfaces` option is ignored, use `bind_addresses`")
+        # SPEC 2.3.0, issue #16: a port is a number the owner chose. Validated
+        # once, here, rather than at each of the several places below that
+        # used to call `int(option(self._options, "ws_port"))` and trust it -
+        # `ws_port = 0` reached `socket.bind` and the OS assigned a port
+        # nobody chose and nothing announces. None means "do not start this
+        # listener"; the other one is unaffected, so a typo in one still
+        # leaves the PWA served, or the WSS link up, on the address that
+        # still has a port.
+        #
+        # Read with a plain `.get`, not `option()`: `option()` folds an
+        # explicit `null` into "key absent, use the default" (its own
+        # docstring, for a pwnagotchi merge that drops a key rather than a
+        # value), which is right for a config that omits `ws_port` entirely
+        # but wrong here - a key present and holding `null` is a value the
+        # owner wrote, and it is exactly as invalid a port as `0` or `"8082"`.
+        _options = options or {}
+        raw_ws_port = _options.get("ws_port", DEFAULTS["ws_port"])
+        self._ws_port = valid_port(raw_ws_port)
+        if self._ws_port is None:
+            # The key is named and the value is not, for the same reason as
+            # the `gpsd_host` refusal above: this log is served to a client
+            # by `get_log` (SPEC 2.9), and echoing the value would put the
+            # owner's configuration on the wire to explain a typo.
+            log.error(
+                "[companion] ws_port is not a valid port (1-65535); the WSS listener will "
+                "not start"
+            )
+        raw_http_port = _options.get("http_port", DEFAULTS["http_port"])
+        self._http_port = valid_port(raw_http_port)
+        if self._http_port is None:
+            log.error(
+                "[companion] http_port is not a valid port (1-65535); the HTTPS listener "
+                "will not start"
+            )
         self._selectors = parse_bind_addresses(bind_addresses_option(options))
         # ip -> (ws_server, http_server)
         self._bound: dict[str, tuple[Any, Any]] = {}
@@ -2452,7 +2561,11 @@ class Listeners:
         return sorted(self._bound)
 
     def _open(self, ip: str) -> None:
-        """Binds both listeners on one address. A failure is logged, never fatal.
+        """Binds one address's listeners. A failure is logged, never fatal.
+
+        Both listeners, unless SPEC 2.3.0 has already refused one of their
+        ports at construction - in which case only the other one comes up
+        here, and nothing is bound at all if both were refused.
 
         Precondition: `ip` came out of `select_bind_addresses`, which is where
         D5.1 is enforced - it drops anything that is not a literal, bindable
@@ -2484,42 +2597,51 @@ class Listeners:
             # background thread and now costs `stop()`, i.e. `on_unload`.
             self._close_unstarted_http(http_server)
             return
-        self._bound[ip] = (ws_server, http_server)
-        try:
-            self._start_http(http_server, ip)
-        except Exception as err:
-            # `threading.Thread.start()` can refuse - `RuntimeError: can't
-            # start new thread` under memory pressure, routine on the
-            # reference hardware - after both sockets are already bound and
-            # `self._bound[ip]` already set. Left as it stood, that entry
-            # would hold an HTTPS server whose `serve_forever` never ran, and
-            # the next `stop()` would hang in `_shutdown_http` exactly as the
-            # `OSError` path above used to (see its comment). Unwind the same
-            # way: pop the entry, close the WSS server that did start, and
-            # release the HTTPS socket without `shutdown()`.
-            #
-            # Popping before closing is the opposite of `_close`'s ordering,
-            # which is load-bearing there (#67, see its docstring): a request
-            # already in flight must still find its address in `self._bound`
-            # so the CSP header it receives is not missing the one it arrived
-            # on. That does not apply here - this server never served, so no
-            # request was ever dispatched on it to render a header - which is
-            # exactly why popping first is safe on this path and would not be
-            # on `_close`'s.
-            log.warning(
-                "[companion] could not start the HTTPS serving thread on %s: %s", ip, err
-            )
-            self._bound.pop(ip, None)
-            self._shutdown_ws(ws_server)
-            self._close_unstarted_http(http_server)
+        if http_server is None and ws_server is None:
+            # Both ports were refused (SPEC 2.3.0), or this is a harness with
+            # no client handler and nothing to bind at all. Nothing to
+            # register; the next reconcile pass tries again, cheaply, since
+            # neither read touches the network.
             return
-        log.info(
-            "[companion] listening on wss://%s:%s and https://%s:%s",
-            ip,
-            option(self._options, "ws_port"),
-            ip,
-            option(self._options, "http_port"),
-        )
+        self._bound[ip] = (ws_server, http_server)
+        if http_server is not None:
+            try:
+                self._start_http(http_server, ip)
+            except Exception as err:
+                # `threading.Thread.start()` can refuse - `RuntimeError: can't
+                # start new thread` under memory pressure, routine on the
+                # reference hardware - after both sockets are already bound and
+                # `self._bound[ip]` already set. Left as it stood, that entry
+                # would hold an HTTPS server whose `serve_forever` never ran, and
+                # the next `stop()` would hang in `_shutdown_http` exactly as the
+                # `OSError` path above used to (see its comment). Unwind the same
+                # way: pop the entry, close the WSS server that did start, and
+                # release the HTTPS socket without `shutdown()`.
+                #
+                # Popping before closing is the opposite of `_close`'s ordering,
+                # which is load-bearing there (#67, see its docstring): a request
+                # already in flight must still find its address in `self._bound`
+                # so the CSP header it receives is not missing the one it arrived
+                # on. That does not apply here - this server never served, so no
+                # request was ever dispatched on it to render a header - which is
+                # exactly why popping first is safe on this path and would not be
+                # on `_close`'s.
+                log.warning(
+                    "[companion] could not start the HTTPS serving thread on %s: %s", ip, err
+                )
+                self._bound.pop(ip, None)
+                self._shutdown_ws(ws_server)
+                self._close_unstarted_http(http_server)
+                return
+        # Named individually rather than always both: SPEC 2.3.0 keeps a
+        # refused port from taking the other listener down with it, so the
+        # log has to say which of the two actually started on this address.
+        listening_on = []
+        if ws_server is not None:
+            listening_on.append(f"wss://{ip}:{self._ws_port}")
+        if http_server is not None:
+            listening_on.append(f"https://{ip}:{self._http_port}")
+        log.info("[companion] listening on %s", " and ".join(listening_on))
 
     def _serve_http(self, ip: str) -> Any:
         """Creates the HTTPS static server. Does not serve yet, and does not
@@ -2548,6 +2670,8 @@ class Listeners:
         its socket alive for the life of the process, and each further silent
         peer adds one more of each. Tracked separately as its own defect: #102.
         """
+        if self._http_port is None:
+            return None
         import http.server
         import socketserver
 
@@ -2557,7 +2681,10 @@ class Listeners:
             # the locked reconcile/stop path, and a header a moment stale is
             # harmless (see the note on `self._lock` in `__init__`).
             lambda: sorted(self._bound),
-            int(option(self._options, "ws_port")),
+            # `None` when ws_port was refused (SPEC 2.3.0): no WSS listener
+            # ever starts, and `content_security_policy` omits the `wss://`
+            # origin entirely rather than name one nothing can serve.
+            self._ws_port,
         )
         ssl_context = self._ssl
 
@@ -2629,7 +2756,7 @@ class Listeners:
                     sys.exc_info()[1],
                 )
 
-        server = Server((ip, int(option(self._options, "http_port"))), handler)
+        server = Server((ip, self._http_port), handler)
         return server
 
     @staticmethod
@@ -2651,13 +2778,13 @@ class Listeners:
 
     def _serve_ws(self, ip: str) -> Any:
         """Starts the WSS server on the shared asyncio loop."""
-        if self._client_handler is None:
+        if self._client_handler is None or self._ws_port is None:
             return None
         import asyncio
 
         loop = self._ensure_loop()
         serve = resolve_ws_serve()
-        port = int(option(self._options, "ws_port"))
+        port = self._ws_port
         handler = self._client_handler
         ssl_context = self._ssl
 

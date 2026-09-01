@@ -1,0 +1,20 @@
+# Generated from docs/schemas by tools/gen-protocol-types.mjs and committed as
+# the generator wrote it (single quotes and no semicolons are the rest of the
+# tree's convention, not the generator's). Reformatting it here would only
+# fight `node tools/gen-protocol-types.mjs --check` in CI.
+src/lib/protocol.ts
+
+# Build output and dependencies, not source.
+node_modules/
+dist/
+dev-dist/
+coverage/
+test-results/
+playwright-report/
+.svelte-kit/
+
+# npm manages this file's formatting, not Prettier.
+package-lock.json
+
+# Static assets, not source.
+public/

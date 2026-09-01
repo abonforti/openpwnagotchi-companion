@@ -33,7 +33,14 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, LastError, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  LastError,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+} from '../lib/ws'
 import {
   accessPoints,
   capabilities,
@@ -69,7 +76,13 @@ function battery(overrides: Partial<Battery> = {}): Battery {
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'gpsd', pluginVersion: '0.1.0', ...overrides }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'gpsd',
+    pluginVersion: '0.1.0',
+    ...overrides,
+  }
 }
 
 function gpsReading(overrides: Partial<Gps> = {}): Gps {
@@ -120,7 +133,9 @@ function accessPoint(overrides: Partial<AccessPoint> = {}): AccessPoint {
   }
 }
 
-function handshakeEntry(overrides: Partial<HandshakeEntry> = {}): HandshakeEntry {
+function handshakeEntry(
+  overrides: Partial<HandshakeEntry> = {},
+): HandshakeEntry {
   return {
     filename: 'TestNet_001_aabbccddeeff.pcapng',
     ssid: 'TestNet_001',
@@ -182,10 +197,16 @@ function handshakesListEnvelope(
   truncated = false,
   total = entries.length,
 ): OutgoingHandshakesList {
-  return { type: 'handshakes_list', timestamp: T, data: handshakesPayload(entries, truncated, total) }
+  return {
+    type: 'handshakes_list',
+    timestamp: T,
+    data: handshakesPayload(entries, truncated, total),
+  }
 }
 
-function handshakePushEnvelope(overrides: Partial<OutgoingHandshake['data']> = {}): OutgoingHandshake {
+function handshakePushEnvelope(
+  overrides: Partial<OutgoingHandshake['data']> = {},
+): OutgoingHandshake {
   return {
     type: 'handshake',
     timestamp: T,
@@ -207,7 +228,10 @@ function peerDetectedEnvelope(entry: Peer): OutgoingPeerDetected {
   return { type: 'peer_detected', timestamp: T, data: entry }
 }
 
-function logLinesEnvelope(lines: string[], path = '/tmp/pwnagotchi.log'): OutgoingLogLines {
+function logLinesEnvelope(
+  lines: string[],
+  path = '/tmp/pwnagotchi.log',
+): OutgoingLogLines {
   return { type: 'log_lines', timestamp: T, data: { lines, path } }
 }
 
@@ -219,7 +243,10 @@ function faceStatusEnvelope(entry: FaceStatus): OutgoingFaceStatus {
   return { type: 'face_status', timestamp: T, data: entry }
 }
 
-function statusChangeEnvelope(status: string, mood: 'bored' | 'excited' | 'lonely' | 'sad'): OutgoingStatusChange {
+function statusChangeEnvelope(
+  status: string,
+  mood: 'bored' | 'excited' | 'lonely' | 'sad',
+): OutgoingStatusChange {
   return { type: 'status_change', timestamp: T, data: { status, mood } }
 }
 
@@ -248,10 +275,17 @@ function errorEnvelope(code: ErrorCode, message = 'an error'): OutgoingError {
 }
 
 function screenImageEnvelope(): OutgoingScreenImage {
-  return { type: 'screen_image', timestamp: T, data: { png: 'aGVsbG8=', mtime: T } }
+  return {
+    type: 'screen_image',
+    timestamp: T,
+    data: { png: 'aGVsbG8=', mtime: T },
+  }
 }
 
-function restartingEnvelope(reason: RestartReason, mode: Mode | null): OutgoingRestarting {
+function restartingEnvelope(
+  reason: RestartReason,
+  mode: Mode | null,
+): OutgoingRestarting {
   return { type: 'restarting', timestamp: T, data: { reason, mode } }
 }
 
@@ -341,7 +375,11 @@ class FakeWsClient implements WsClient {
   }
 
   command(_type: string, ..._rest: unknown[]): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the store layer must never issue a command of its own (SPEC 4.4)'))
+    return Promise.reject(
+      new Error(
+        'the store layer must never issue a command of its own (SPEC 4.4)',
+      ),
+    )
   }
 
   sendGps(_data: unknown): void {
@@ -359,7 +397,10 @@ class FakeWsClient implements WsClient {
   }
 
   /** Test-only: simulates the client entering a new state, exactly as onState would deliver it. */
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -367,10 +408,15 @@ class FakeWsClient implements WsClient {
 
   /** Test-only: simulates a frame arriving from the plugin, on the same stream a request's reply would also arrive on. */
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    if (message.type === 'stats')
+      this.lastStatsValue = {
+        stats: message.data,
+        timestamp: message.timestamp,
+      }
     // Mirrors ws.ts's own handleRestarting: the reason is captured off the
     // wire frame itself, before the state transition that follows it.
-    if (message.type === 'restarting') this.restartReasonValue = message.data.reason
+    if (message.type === 'restarting')
+      this.restartReasonValue = message.data.reason
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -390,7 +436,8 @@ class FakeWsClient implements WsClient {
    */
   settleOldestRequest(reply: OutgoingMessage): void {
     const entry = this.pendingRequests.shift()
-    if (!entry) throw new Error('settleOldestRequest: no pending request to settle')
+    if (!entry)
+      throw new Error('settleOldestRequest: no pending request to settle')
     this.emitMessage(reply)
     entry.resolve(reply)
   }
@@ -398,7 +445,8 @@ class FakeWsClient implements WsClient {
   /** Test-only: rejects the oldest still-pending request() call, as a request timeout or a close() would (SPEC 4.3.8, 4.3). */
   rejectOldestRequest(error: Error): void {
     const entry = this.pendingRequests.shift()
-    if (!entry) throw new Error('rejectOldestRequest: no pending request to reject')
+    if (!entry)
+      throw new Error('rejectOldestRequest: no pending request to reject')
     entry.reject(error)
   }
 }
@@ -434,16 +482,34 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     fake.currentState = 'degraded'
     mount(fake)
-    expect(get(connection)).toEqual({ state: 'degraded', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'degraded',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 
   it('carries every connection state through unchanged', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'restarting']
+    const states: ConnectionState[] = [
+      'connecting',
+      'connected',
+      'degraded',
+      'offline',
+      'restarting',
+    ]
     for (const state of states) {
       fake.emitState(state)
-      expect(get(connection)).toEqual({ state, unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+      expect(get(connection)).toEqual({
+        state,
+        unauthorizedReason: null,
+        restartReason: null,
+        lastError: null,
+        latencyMs: null,
+      })
     }
   })
 
@@ -451,9 +517,21 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'rejected', restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'unauthorized',
+      unauthorizedReason: 'rejected',
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'unauthorized',
+      unauthorizedReason: 'required',
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 
   it('clears the reason once the client leaves unauthorized, rather than keeping it stale', () => {
@@ -461,10 +539,16 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     mount(fake)
     fake.emitState('unauthorized', 'rejected')
     fake.emitState('connecting')
-    expect(get(connection)).toEqual({ state: 'connecting', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'connecting',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 
-  it('reads offline once no client is attached, not the client\'s last reported state (SPEC 4.4.2)', () => {
+  it("reads offline once no client is attached, not the client's last reported state (SPEC 4.4.2)", () => {
     // Not the module-initial value: without the rule under test, deleting
     // the previous client's own report ("connected") would still leave
     // this reading connected, since nothing else ever writes to
@@ -474,11 +558,23 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('connected')
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'connected',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
 
     teardown?.()
 
-    expect(get(connection)).toEqual({ state: 'offline', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'offline',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 })
 
@@ -533,7 +629,10 @@ describe('connection: the restarting reason reaches the store, and only there (S
     mount(fake)
     fake.emitMessage(restartingEnvelope('mode_change', 'MANUAL'))
     fake.emitState('restarting')
-    expect(get(connection)).toMatchObject({ state: 'restarting', restartReason: 'mode_change' })
+    expect(get(connection)).toMatchObject({
+      state: 'restarting',
+      restartReason: 'mode_change',
+    })
   })
 
   it('carries reboot through to the store', () => {
@@ -541,7 +640,10 @@ describe('connection: the restarting reason reaches the store, and only there (S
     mount(fake)
     fake.emitMessage(restartingEnvelope('reboot', null))
     fake.emitState('restarting')
-    expect(get(connection)).toMatchObject({ state: 'restarting', restartReason: 'reboot' })
+    expect(get(connection)).toMatchObject({
+      state: 'restarting',
+      restartReason: 'reboot',
+    })
   })
 
   it('carries shutdown through, distinct from reboot - the value a view needs to tell the terminal case apart', () => {
@@ -593,7 +695,13 @@ describe('connection: the restarting reason reaches the store, and only there (S
 type WireLastError = Extract<LastError, { source: 'frame' | 'close' }>
 
 function sampleLastError(overrides: Partial<WireLastError> = {}): LastError {
-  return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000123, ...overrides }
+  return {
+    source: 'frame',
+    code: 'internal_error',
+    message: 'a sample failure',
+    at: 1700000123,
+    ...overrides,
+  }
 }
 
 describe('connection: the diagnostics pair mirrors the client, not a second opinion (SPEC 4.3.10)', () => {
@@ -622,7 +730,11 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitState('connected')
-    const error = sampleLastError({ source: 'close', code: '1006', message: '' })
+    const error = sampleLastError({
+      source: 'close',
+      code: '1006',
+      message: '',
+    })
     fake.emitDiagnostics({ lastError: error, latencyMs: 88 })
     expect(get(connection)).toEqual({
       state: 'connected',
@@ -645,7 +757,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
     expect(get(connection).latencyMs).not.toBeNull()
   })
 
-  it('reads a null lastError and null latencyMs once no client is attached, not the client\'s last reported diagnostics (SPEC 4.4.2)', () => {
+  it("reads a null lastError and null latencyMs once no client is attached, not the client's last reported diagnostics (SPEC 4.4.2)", () => {
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitDiagnostics({ lastError: sampleLastError(), latencyMs: 15 })
@@ -688,7 +800,9 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it('a state transition composes the connection object from a fresh read of diagnostics(), not a stale cached copy (inferred from the "mirror, not a second opinion" principle - see report)', () => {
     class StateLinkedDiagnosticsClient extends FakeWsClient {
       diagnostics(): Diagnostics {
-        return this.currentState === 'connected' ? { lastError: null, latencyMs: 999 } : { lastError: null, latencyMs: null }
+        return this.currentState === 'connected'
+          ? { lastError: null, latencyMs: 999 }
+          : { lastError: null, latencyMs: null }
       }
     }
     const fake = new StateLinkedDiagnosticsClient()
@@ -762,7 +876,11 @@ describe('capabilities: derived from stats, no writer of its own', () => {
   it('mirrors the capabilities object carried inside the last stats message', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const caps = capabilitiesData({ pasv: false, gpsSource: 'none', pluginVersion: '0.2.0' })
+    const caps = capabilitiesData({
+      pasv: false,
+      gpsSource: 'none',
+      pluginVersion: '0.2.0',
+    })
     fake.emitMessage(statsEnvelope({ capabilities: caps }))
     expect(get(capabilities)).toEqual(caps)
   })
@@ -805,11 +923,21 @@ describe('channel: derived, and stats is never patched to hold it', () => {
 // four tests give hop and stats independent timestamps for that reason.
 // ---------------------------------------------------------------------------
 
-function statsEnvelopeAt(timestamp: number, channelValue: number): OutgoingStats {
-  return { type: 'stats', timestamp, data: statsData({ channel: channelValue }) }
+function statsEnvelopeAt(
+  timestamp: number,
+  channelValue: number,
+): OutgoingStats {
+  return {
+    type: 'stats',
+    timestamp,
+    data: statsData({ channel: channelValue }),
+  }
 }
 
-function channelHopEnvelopeAt(timestamp: number, value: number): OutgoingChannelHop {
+function channelHopEnvelopeAt(
+  timestamp: number,
+  value: number,
+): OutgoingChannelHop {
   return { type: 'channel_hop', timestamp, data: { channel: value } }
 }
 
@@ -851,11 +979,20 @@ describe('accessPoints: replaced whole, never merged', () => {
   it('replaces the list on wifi_update, dropping an access point absent from the new one', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const first = accessPoint({ bssid: 'AA:BB:CC:DD:EE:01', hostname: 'TestNet_001' })
-    const second = accessPoint({ bssid: 'AA:BB:CC:DD:EE:02', hostname: 'TestNet_002' })
+    const first = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:01',
+      hostname: 'TestNet_001',
+    })
+    const second = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:02',
+      hostname: 'TestNet_002',
+    })
     fake.emitMessage(wifiUpdateEnvelope([first, second]))
     expect(get(accessPoints)).toEqual([first, second])
-    const third = accessPoint({ bssid: 'AA:BB:CC:DD:EE:03', hostname: 'TestNet_003' })
+    const third = accessPoint({
+      bssid: 'AA:BB:CC:DD:EE:03',
+      hostname: 'TestNet_003',
+    })
     fake.emitMessage(wifiUpdateEnvelope([third]))
     expect(get(accessPoints)).toEqual([third])
   })
@@ -875,11 +1012,19 @@ describe('handshakes: written by the list reply only, holding the whole payload'
   it('replaces the store with the whole handshakes_list payload, not the entries alone', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const first = handshakeEntry({ filename: 'TestNet_001_aabbccddeeff.pcapng' })
-    const second = handshakeEntry({ filename: 'TestNet_004_aabbccdd0004.pcapng' })
+    const first = handshakeEntry({
+      filename: 'TestNet_001_aabbccddeeff.pcapng',
+    })
+    const second = handshakeEntry({
+      filename: 'TestNet_004_aabbccdd0004.pcapng',
+    })
     fake.emitMessage(handshakesListEnvelope([first, second], true, 750))
-    expect(get(handshakes)).toEqual(handshakesPayload([first, second], true, 750))
-    const third = handshakeEntry({ filename: 'TestNet_005_aabbccdd0005.pcapng' })
+    expect(get(handshakes)).toEqual(
+      handshakesPayload([first, second], true, 750),
+    )
+    const third = handshakeEntry({
+      filename: 'TestNet_005_aabbccdd0005.pcapng',
+    })
     fake.emitMessage(handshakesListEnvelope([third]))
     expect(get(handshakes)).toEqual(handshakesPayload([third]))
   })
@@ -887,7 +1032,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
   it('keeps truncated and total distinct from entries.length - the fields a truncation notice and a 500+ badge read', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const entries = [handshakeEntry({ filename: 'TestNet_001_aabbccddeeff.pcapng' })]
+    const entries = [
+      handshakeEntry({ filename: 'TestNet_001_aabbccddeeff.pcapng' }),
+    ]
     fake.emitMessage(handshakesListEnvelope(entries, true, 812))
     const stored = get(handshakes)
     expect(stored.entries).toHaveLength(1)
@@ -898,16 +1045,22 @@ describe('handshakes: written by the list reply only, holding the whole payload'
   it('a handshake push does not itself carry data into the store - it is a filename-and-macs shape, not a HandshakeEntry', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitMessage(handshakesListEnvelope([handshakeEntry({ filename: 'existing.pcapng' })]))
+    fake.emitMessage(
+      handshakesListEnvelope([handshakeEntry({ filename: 'existing.pcapng' })]),
+    )
     fake.emitMessage(handshakePushEnvelope({ filename: 'brand_new.pcapng' }))
     // Only the get_handshakes round trip below is allowed to change the
     // store; the push by itself must not insert a fabricated entry.
-    expect(get(handshakes)).toEqual(handshakesPayload([handshakeEntry({ filename: 'existing.pcapng' })]))
+    expect(get(handshakes)).toEqual(
+      handshakesPayload([handshakeEntry({ filename: 'existing.pcapng' })]),
+    )
     // Release the coalescing flag this push started: SPEC 4.4.1 says a
     // refresh belongs to the client that asked for it, and this fake stays
     // attached for the rest of the test, so leaving it in flight here would
     // leak into the next test.
-    fake.settleOldestRequest(handshakesListEnvelope([handshakeEntry({ filename: 'existing.pcapng' })]))
+    fake.settleOldestRequest(
+      handshakesListEnvelope([handshakeEntry({ filename: 'existing.pcapng' })]),
+    )
   })
 
   it('a handshake push causes exactly one get_handshakes request', () => {
@@ -932,7 +1085,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
   it('the reply to the refresh replaces the store, exactly like an ordinary handshakes_list', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitMessage(handshakesListEnvelope([handshakeEntry({ filename: 'before.pcapng' })]))
+    fake.emitMessage(
+      handshakesListEnvelope([handshakeEntry({ filename: 'before.pcapng' })]),
+    )
     fake.emitMessage(handshakePushEnvelope({ filename: 'after.pcapng' }))
     const refreshed = [handshakeEntry({ filename: 'after.pcapng' })]
     fake.settleOldestRequest(handshakesListEnvelope(refreshed))
@@ -971,7 +1126,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
     expect(fake.requestCalls).toHaveLength(1)
     fake.rejectOldestRequest(new Error('simulated request timeout'))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    fake.emitMessage(handshakePushEnvelope({ filename: 'after_failure.pcapng' }))
+    fake.emitMessage(
+      handshakePushEnvelope({ filename: 'after_failure.pcapng' }),
+    )
     expect(fake.requestCalls).toHaveLength(2)
     fake.settleOldestRequest(handshakesListEnvelope([]))
   })
@@ -985,7 +1142,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
     stop()
     teardown = null
     mount(fake) // same client, re-attached without the first request ever settling
-    fake.emitMessage(handshakePushEnvelope({ filename: 'after_remount.pcapng' }))
+    fake.emitMessage(
+      handshakePushEnvelope({ filename: 'after_remount.pcapng' }),
+    )
     expect(fake.requestCalls).toHaveLength(1) // still coalesced, not reset by the remount
     // Release the flag so it does not leak into the next test: SPEC 4.4.1
     // says a refresh belongs to the client that asked for it, and this
@@ -1009,7 +1168,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
     // does not count as in flight for B: B issues its own request rather
     // than losing this push because A's reply can never reach a store.
     expect(clientB.requestCalls).toHaveLength(1)
-    clientB.settleOldestRequest(handshakesListEnvelope([handshakeEntry({ filename: 'from_b.pcapng' })]))
+    clientB.settleOldestRequest(
+      handshakesListEnvelope([handshakeEntry({ filename: 'from_b.pcapng' })]),
+    )
   })
 
   it("A's own refresh settling late, after B has already taken over, does not release B's in-flight owner", async () => {
@@ -1033,7 +1194,9 @@ describe('handshakes: written by the list reply only, holding the whole payload'
     // Still coalesced into B's own outstanding refresh - A's late settle
     // must not have cleared an owner that was never A's to clear.
     expect(clientB.requestCalls).toHaveLength(1)
-    clientB.settleOldestRequest(handshakesListEnvelope([handshakeEntry({ filename: 'from_b.pcapng' })]))
+    clientB.settleOldestRequest(
+      handshakesListEnvelope([handshakeEntry({ filename: 'from_b.pcapng' })]),
+    )
   })
 })
 
@@ -1055,7 +1218,11 @@ describe("peers: list replaces, a push upserts on fingerprint, never on name or 
     const p1 = peer({ fingerprint: 'fp-0001', name: 'unit-one', rssi: -60 })
     const p2 = peer({ fingerprint: 'fp-0002', name: 'unit-two', rssi: -70 })
     fake.emitMessage(peersListEnvelope([p1, p2]))
-    const updatedP1 = peer({ fingerprint: 'fp-0001', name: 'unit-one', rssi: -40 })
+    const updatedP1 = peer({
+      fingerprint: 'fp-0001',
+      name: 'unit-one',
+      rssi: -40,
+    })
     fake.emitMessage(peerDetectedEnvelope(updatedP1))
     const result = get(peers)
     expect(result).toHaveLength(2)
@@ -1086,14 +1253,25 @@ describe("peers: list replaces, a push upserts on fingerprint, never on name or 
     expect(result).toHaveLength(2)
     // SPEC 4.4.1 leaves list order to the view, so this checks membership,
     // not position.
-    expect(result.map((entry) => entry.fingerprint).sort()).toEqual(['fp-aaaa', 'fp-bbbb'])
+    expect(result.map((entry) => entry.fingerprint).sort()).toEqual([
+      'fp-aaaa',
+      'fp-bbbb',
+    ])
   })
 
   it("never matches on the default identity '???': two peers that both report it are two entries, not one collapsed row", () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const anonymousOne = peer({ fingerprint: '???', name: 'unit-one', rssi: -50 })
-    const anonymousTwo = peer({ fingerprint: '???', name: 'unit-two', rssi: -80 })
+    const anonymousOne = peer({
+      fingerprint: '???',
+      name: 'unit-one',
+      rssi: -50,
+    })
+    const anonymousTwo = peer({
+      fingerprint: '???',
+      name: 'unit-two',
+      rssi: -80,
+    })
     fake.emitMessage(peerDetectedEnvelope(anonymousOne))
     fake.emitMessage(peerDetectedEnvelope(anonymousTwo))
     const result = get(peers)
@@ -1138,7 +1316,11 @@ describe('face: face_status writes the whole shape, status_change writes only it
   it('holds the whole face_status payload', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    const entry = faceStatusData({ face: '(o_o)', status: 'scanning', mode: 'AUTO' })
+    const entry = faceStatusData({
+      face: '(o_o)',
+      status: 'scanning',
+      mode: 'AUTO',
+    })
     fake.emitMessage(faceStatusEnvelope(entry))
     expect(get(face)).toEqual(entry)
   })
@@ -1146,9 +1328,17 @@ describe('face: face_status writes the whole shape, status_change writes only it
   it('a status_change updates only the status text, leaving face and mode as they were', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitMessage(faceStatusEnvelope(faceStatusData({ face: '(o_o)', status: 'scanning', mode: 'AUTO' })))
+    fake.emitMessage(
+      faceStatusEnvelope(
+        faceStatusData({ face: '(o_o)', status: 'scanning', mode: 'AUTO' }),
+      ),
+    )
     fake.emitMessage(statusChangeEnvelope('feeling lonely', 'lonely'))
-    expect(get(face)).toEqual({ face: '(o_o)', status: 'feeling lonely', mode: 'AUTO' })
+    expect(get(face)).toEqual({
+      face: '(o_o)',
+      status: 'feeling lonely',
+      mode: 'AUTO',
+    })
   })
 
   it('a status_change with no face_status ever received is dropped, not turned into a partial shape', () => {
@@ -1253,7 +1443,13 @@ describe('unauthorized clears every data store', () => {
     mount(fake)
     populateEverything(fake)
     fake.emitState('unauthorized', 'required')
-    expect(get(connection)).toEqual({ state: 'unauthorized', unauthorizedReason: 'required', restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'unauthorized',
+      unauthorizedReason: 'required',
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 })
 
@@ -1293,7 +1489,13 @@ describe('resetStores: the explicit clear a caller reaches for around close()', 
     // SPEC 4.4.2: connection is a mirror of the client (4.4.1); resetStores
     // must not report offline while the client is still connected, which
     // would be the second opinion that row forbids.
-    expect(get(connection)).toEqual({ state: 'connected', unauthorizedReason: null, restartReason: null, lastError: null, latencyMs: null })
+    expect(get(connection)).toEqual({
+      state: 'connected',
+      unauthorizedReason: null,
+      restartReason: null,
+      lastError: null,
+      latencyMs: null,
+    })
   })
 
   it('is safe to call with no client ever connected, and every data store starts from that same cleared shape', () => {

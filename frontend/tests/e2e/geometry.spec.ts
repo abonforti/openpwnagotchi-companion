@@ -90,7 +90,11 @@ async function pointsNotOwnedByTheShell(page: import('@playwright/test').Page) {
       for (const y of ys) {
         const element = document.elementFromPoint(x, y)
         if (!element || !shellRoot || !shellRoot.contains(element)) {
-          orphans.push({ x, y, tag: element ? element.tagName.toLowerCase() : null })
+          orphans.push({
+            x,
+            y,
+            tag: element ? element.tagName.toLowerCase() : null,
+          })
         }
       }
     }
@@ -100,7 +104,11 @@ async function pointsNotOwnedByTheShell(page: import('@playwright/test').Page) {
     const bottomCentre = document.elementFromPoint(Math.floor(w / 2), h - 1)
     return {
       orphans,
-      bottomCentreInsideNav: !!(bottomCentre && navRoot && navRoot.contains(bottomCentre)),
+      bottomCentreInsideNav: !!(
+        bottomCentre &&
+        navRoot &&
+        navRoot.contains(bottomCentre)
+      ),
       bottomCentreTag: bottomCentre ? bottomCentre.tagName.toLowerCase() : null,
     }
   })
@@ -108,7 +116,9 @@ async function pointsNotOwnedByTheShell(page: import('@playwright/test').Page) {
 
 test.describe('the shell fills the viewport and nothing is painted below it', () => {
   for (const view of VIEWS) {
-    test(`${view}: no strip of the viewport is left unowned`, async ({ page }, testInfo) => {
+    test(`${view}: no strip of the viewport is left unowned`, async ({
+      page,
+    }, testInfo) => {
       const orientation = orientationOf(testInfo)
       await gotoView(page, view)
 
@@ -129,8 +139,12 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       // The shell is the whole app: the document does not scroll behind it.
       // A document taller than the viewport is the other shape the band takes,
       // because the navigation then sits above content nobody can reach.
-      expect(viewport.scrollHeight).toBeLessThanOrEqual(viewport.innerHeight + EPSILON)
-      expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.innerWidth + EPSILON)
+      expect(viewport.scrollHeight).toBeLessThanOrEqual(
+        viewport.innerHeight + EPSILON,
+      )
+      expect(viewport.scrollWidth).toBeLessThanOrEqual(
+        viewport.innerWidth + EPSILON,
+      )
 
       // The view is laid out inside the shell horizontally, and starts inside
       // it vertically. SPEC 4.5 says landscape exists for the Log and the Map
@@ -150,7 +164,9 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       // The current view lives inside it, which is what makes the edges below
       // statements about where content can go and not about an empty box.
       await expect(viewsRegion(page)).toHaveCount(1)
-      await expect(viewsRegion(page).locator(`[data-view="${view}"]`)).toHaveCount(1)
+      await expect(
+        viewsRegion(page).locator(`[data-view="${view}"]`),
+      ).toHaveCount(1)
       const areaRect = await viewsContentBox(page)
 
       // Where the view's overflow, if any, belongs: to the views area and to
@@ -160,7 +176,9 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       // is checked against the area's scroll box, not against the shell or the
       // viewport, precisely because a view taller than either of those is the
       // case SPEC 10.5 says is allowed.
-      const areaScrollHeight = await viewsRegion(page).evaluate((element) => element.scrollHeight)
+      const areaScrollHeight = await viewsRegion(page).evaluate(
+        (element) => element.scrollHeight,
+      )
       expect(
         areaScrollHeight,
         `the views area scrolls to ${areaScrollHeight}px but the view is ${viewRect.height}px tall`,
@@ -176,7 +194,9 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
       if (orientation === 'portrait') {
         // The bottom bar is flush with the bottom of the shell, full width
         // (SPEC 4.2: "a bottom navigation bar for the home indicator").
-        expect(navRect.bottom).toBeGreaterThanOrEqual(shellRect.bottom - EPSILON)
+        expect(navRect.bottom).toBeGreaterThanOrEqual(
+          shellRect.bottom - EPSILON,
+        )
         expect(navRect.left).toBeLessThanOrEqual(shellRect.left + EPSILON)
         expect(navRect.right).toBeGreaterThanOrEqual(shellRect.right - EPSILON)
 
@@ -187,13 +207,19 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
           Math.abs(areaRect.bottom - navRect.top),
           `the views area ends at ${areaRect.bottom} and the bar begins at ${navRect.top}`,
         ).toBeLessThanOrEqual(EPSILON)
-        expect(Math.abs(areaRect.left - shellRect.left)).toBeLessThanOrEqual(EPSILON)
-        expect(Math.abs(areaRect.right - shellRect.right)).toBeLessThanOrEqual(EPSILON)
+        expect(Math.abs(areaRect.left - shellRect.left)).toBeLessThanOrEqual(
+          EPSILON,
+        )
+        expect(Math.abs(areaRect.right - shellRect.right)).toBeLessThanOrEqual(
+          EPSILON,
+        )
       } else {
         // The rail runs the full height of the shell on the leading edge
         // (SPEC 4.5: "a 72px rail on the leading edge").
         expect(navRect.top).toBeLessThanOrEqual(shellRect.top + EPSILON)
-        expect(navRect.bottom).toBeGreaterThanOrEqual(shellRect.bottom - EPSILON)
+        expect(navRect.bottom).toBeGreaterThanOrEqual(
+          shellRect.bottom - EPSILON,
+        )
         expect(navRect.left).toBeLessThanOrEqual(shellRect.left + EPSILON)
 
         // The views area and the rail account for the shell between them: the
@@ -203,8 +229,12 @@ test.describe('the shell fills the viewport and nothing is painted below it', ()
           Math.abs(areaRect.left - navRect.right),
           `the rail ends at ${navRect.right} and the views area begins at ${areaRect.left}`,
         ).toBeLessThanOrEqual(EPSILON)
-        expect(Math.abs(areaRect.right - shellRect.right)).toBeLessThanOrEqual(EPSILON)
-        expect(Math.abs(areaRect.bottom - shellRect.bottom)).toBeLessThanOrEqual(EPSILON)
+        expect(Math.abs(areaRect.right - shellRect.right)).toBeLessThanOrEqual(
+          EPSILON,
+        )
+        expect(
+          Math.abs(areaRect.bottom - shellRect.bottom),
+        ).toBeLessThanOrEqual(EPSILON)
       }
 
       // And the part no box arithmetic can answer: every sampled point of the
@@ -245,9 +275,14 @@ test.describe('the navigation takes the form its orientation requires', () => {
     await expect(nav(page)).toHaveAttribute('data-layout', expected)
   })
 
-  test('the rail is 72px of content on the leading edge', async ({ page }, testInfo) => {
+  test('the rail is 72px of content on the leading edge', async ({
+    page,
+  }, testInfo) => {
     const orientation = orientationOf(testInfo)
-    test.skip(orientation !== 'landscape', 'the rail exists only in the landscape range')
+    test.skip(
+      orientation !== 'landscape',
+      'the rail exists only in the landscape range',
+    )
     await gotoView(page, 'dashboard')
 
     const navRect = await rectOf(nav(page))
@@ -271,7 +306,10 @@ test.describe('the navigation takes the form its orientation requires', () => {
     // as zero, so here the total width and the content width coincide; that
     // the rail clears a non-zero inset is only observable on the device, and
     // SPEC 4.2.1 records it as a hardware check for that reason.
-    expect(insets.left, 'a desktop engine is expected to report a zero leading inset').toBe(0)
+    expect(
+      insets.left,
+      'a desktop engine is expected to report a zero leading inset',
+    ).toBe(0)
     expect(navRect.width - insets.left).toBeCloseTo(72, 0)
   })
 })
@@ -319,7 +357,9 @@ test.describe('the map leaves somewhere to drag the app', () => {
     ).toBeLessThan(areaRect.height - EPSILON)
   })
 
-  test('the Map is a laid-out view inside the shell, not a full-bleed escape', async ({ page }) => {
+  test('the Map is a laid-out view inside the shell, not a full-bleed escape', async ({
+    page,
+  }) => {
     await gotoView(page, 'map')
 
     // What is structurally true while the Map is a placeholder: it is a view
@@ -345,7 +385,10 @@ test.describe('the map leaves somewhere to drag the app', () => {
       const bad: string[] = []
       for (const entry of Array.from(navRoot.querySelectorAll('[data-nav]'))) {
         const r = entry.getBoundingClientRect()
-        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        const hit = document.elementFromPoint(
+          r.left + r.width / 2,
+          r.top + r.height / 2,
+        )
         if (!hit || !entry.contains(hit)) {
           bad.push(
             `${entry.getAttribute('data-nav')} -> <${hit ? hit.tagName.toLowerCase() : 'none'}>`,
@@ -354,7 +397,10 @@ test.describe('the map leaves somewhere to drag the app', () => {
       }
       return bad
     })
-    expect(covered, 'navigation entries covered while the Map view is showing').toEqual([])
+    expect(
+      covered,
+      'navigation entries covered while the Map view is showing',
+    ).toEqual([])
     expect(navRect.width).toBeGreaterThan(0)
   })
 })
@@ -372,7 +418,9 @@ test.describe('the log fills what is left and stops where the views area does (i
   // views area specifically, with the log both empty and full; this suite
   // has no unit to attach (see the second test below), so only the empty
   // half is measured here.
-  test('the log lines container never exceeds the views area, empty buffer', async ({ page }) => {
+  test('the log lines container never exceeds the views area, empty buffer', async ({
+    page,
+  }) => {
     await gotoView(page, 'log')
 
     // SPEC 4.5.2.5: "the container is always present, empty buffer or not" --
@@ -384,7 +432,10 @@ test.describe('the log fills what is left and stops where the views area does (i
     // this container both exist, and a guard that skipped on a zero count
     // would hide exactly the defect this test exists to catch.
     const linesLocator = page.locator('[data-log-lines]')
-    await expect(linesLocator, 'SPEC 4.5.2.5 requires this container to always be present').toHaveCount(1)
+    await expect(
+      linesLocator,
+      'SPEC 4.5.2.5 requires this container to always be present',
+    ).toHaveCount(1)
 
     const areaRect = await viewsContentBox(page)
     const linesRect = await rectOf(linesLocator)

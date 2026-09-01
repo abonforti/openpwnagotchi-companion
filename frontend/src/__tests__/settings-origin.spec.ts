@@ -92,12 +92,14 @@ describe('first run derives the active entry from the origin (SPEC 4.7, issue #1
     const defaults = defaultHosts()
     for (const expected of defaults) {
       const found = result.hosts.find((h) => h.id === expected.id)
-      expect(found, `expected the prefilled host ${expected.id}`).toEqual(expected)
+      expect(found, `expected the prefilled host ${expected.id}`).toEqual(
+        expected,
+      )
     }
     expect(result.hosts).toHaveLength(3)
   })
 
-  it("is the whole point of issue #134: a hotspot address that is not .2 becomes the active host with nobody editing localStorage", async () => {
+  it('is the whole point of issue #134: a hotspot address that is not .2 becomes the active host with nobody editing localStorage', async () => {
     // The Personal Hotspot subnet is always 172.20.10.0/28 (SPEC 2.3.1), and
     // the host part is assigned by the phone's DHCP server, so a unit that
     // did not get .2 is exactly the case the literal default got wrong.
@@ -166,21 +168,27 @@ describe('a hostname that is not an IPv4 literal falls back to the two prefilled
   const INVALID_HOSTNAMES: Array<[label: string, hostname: string]> = [
     ['a desktop dev server, plain "localhost"', 'localhost'],
     ['a unit reached by name', 'pwnagotchi.local'],
-    ['an IPv6 literal, bracketed the way location.hostname reports one', '[fe80::1]'],
+    [
+      'an IPv6 literal, bracketed the way location.hostname reports one',
+      '[fe80::1]',
+    ],
     ['the unspecified address', '0.0.0.0'],
     ['the limited broadcast address', '255.255.255.255'],
     ['an octal-looking octet', '010.0.0.2'],
   ]
 
-  it.each(INVALID_HOSTNAMES)('%s (%s) yields exactly the shipped defaults', async (_label, hostname) => {
-    const { loadSettings, defaultHosts } = await loadModule()
+  it.each(INVALID_HOSTNAMES)(
+    '%s (%s) yields exactly the shipped defaults',
+    async (_label, hostname) => {
+      const { loadSettings, defaultHosts } = await loadModule()
 
-    const result = loadSettings(hostnameOf(hostname))
+      const result = loadSettings(hostnameOf(hostname))
 
-    expect(result.hosts).toEqual(defaultHosts())
-    expect(result.hosts.some((h) => h.id === 'origin')).toBe(false)
-    expect(result.activeHostId).toBe('bluetooth')
-  })
+      expect(result.hosts).toEqual(defaultHosts())
+      expect(result.hosts.some((h) => h.id === 'origin')).toBe(false)
+      expect(result.activeHostId).toBe('bluetooth')
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -193,7 +201,9 @@ describe('the origin entry is derived exactly once (SPEC 4.7)', () => {
   it('does not re-derive on a second load from a different hostname', async () => {
     const first = await loadModule()
     const firstResult = first.loadSettings(hostnameOf('172.20.10.9'))
-    expect(firstResult.hosts.find((h) => h.id === 'origin')?.address).toBe('172.20.10.9')
+    expect(firstResult.hosts.find((h) => h.id === 'origin')?.address).toBe(
+      '172.20.10.9',
+    )
 
     // Simulate a later visit from a different address on the same
     // transport, e.g. a different DHCP lease from the phone. The storage
@@ -202,7 +212,9 @@ describe('the origin entry is derived exactly once (SPEC 4.7)', () => {
     const second = await loadModule()
     const secondResult = second.loadSettings(hostnameOf('172.20.10.13'))
 
-    expect(secondResult.hosts.find((h) => h.id === 'origin')?.address).toBe('172.20.10.9')
+    expect(secondResult.hosts.find((h) => h.id === 'origin')?.address).toBe(
+      '172.20.10.9',
+    )
     expect(secondResult.hosts.filter((h) => h.id === 'origin')).toHaveLength(1)
   })
 

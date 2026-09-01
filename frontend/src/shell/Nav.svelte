@@ -4,7 +4,12 @@
 </script>
 
 <script lang="ts">
-  import { barRoutes, currentRoute, followLink, sheetRoutes } from '../lib/router'
+  import {
+    barRoutes,
+    currentRoute,
+    followLink,
+    sheetRoutes,
+  } from '../lib/router'
   import { inertWhen } from './MoreSheet.svelte'
 
   interface Props {
@@ -62,7 +67,12 @@
 
 <!-- A nav, not a tablist: the fifth slot opens a dialog rather than switching a
      panel, so tab semantics would be a lie (SPEC 4.5). -->
-<nav class="nav" data-layout={layout} aria-label="Primary" use:inertWhen={inert}>
+<nav
+  class="nav"
+  data-layout={layout}
+  aria-label="Primary"
+  use:inertWhen={inert}
+>
   <ul>
     {#each barRoutes as route (route.id)}
       <li>

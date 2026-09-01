@@ -20,7 +20,12 @@
     type WifiSegment,
   } from '../lib/format'
   import { hasListDataArrived } from '../lib/lists'
-  import { accessPoints, connection, handshakes, refreshWifiLists } from '../lib/stores'
+  import {
+    accessPoints,
+    connection,
+    handshakes,
+    refreshWifiLists,
+  } from '../lib/stores'
   import { watchViewRefresh } from '../lib/viewRefresh'
   import { sortAccessPoints, type NearbySortOrder } from '../lib/wifi'
   import Segmented, { type SegmentTab } from '../shell/Segmented.svelte'
@@ -55,10 +60,14 @@
   // one thing here that can be wrong, so lib/format.ts decides it rather
   // than a ternary in this file. Nearby has no cap and so never truncates.
   const nearbyBadge = $derived(formatSegmentBadge(nearbyList.length, false))
-  const capturedBadge = $derived(formatSegmentBadge(capturedList.length, capturedTruncated))
+  const capturedBadge = $derived(
+    formatSegmentBadge(capturedList.length, capturedTruncated),
+  )
 
   const nearbyEmptyText = $derived(formatWifiEmptyMessage('nearby', fetched))
-  const capturedEmptyText = $derived(formatWifiEmptyMessage('captured', fetched))
+  const capturedEmptyText = $derived(
+    formatWifiEmptyMessage('captured', fetched),
+  )
   const truncationText = $derived(formatTruncationNotice(capturedTotal))
   const sortLabel = $derived(formatWifiSortLabel(sortOrder))
 
@@ -92,8 +101,16 @@
   {@const encryptionEmpty = isRemoteStringUnknown(ap.encryption)}
   {@const vendorEmpty = isRemoteStringUnknown(ap.vendor)}
   <li class="row" data-row="nearby" data-row-key={ap.bssid}>
-    <span class="row-field" data-field="hostname" data-empty={hostnameEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(ap.hostname)}</bdi>{#if hostnameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="hostname"
+      data-empty={hostnameEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(ap.hostname)}</bdi>{#if hostnameEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
     <!-- SPEC 4.5.3 (issue #219): the BSSID is attacker-chosen like every
          other field on this row and is isolated the same way, even though
@@ -110,10 +127,22 @@
       data-field="encryption"
       data-empty={encryptionEmpty ? 'true' : undefined}
     >
-      <bdi>{formatRemoteString(ap.encryption)}</bdi>{#if encryptionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(ap.encryption)}</bdi>{#if encryptionEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="vendor" data-empty={vendorEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(ap.vendor)}</bdi>{#if vendorEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="vendor"
+      data-empty={vendorEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(ap.vendor)}</bdi>{#if vendorEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
     <span class="row-field" data-field="clients">{ap.clients}</span>
   </li>
@@ -124,13 +153,30 @@
   {@const gpsEmpty = formatGpsPin(entry.gps) === DASH}
   <li class="row" data-row="captured" data-row-key={entry.filename}>
     <span class="row-field" data-field="ssid"><bdi>{entry.ssid}</bdi></span>
-    <span class="row-field" data-field="bssid" data-empty={bssidEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(entry.bssid)}</bdi>{#if bssidEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="bssid"
+      data-empty={bssidEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(entry.bssid)}</bdi>{#if bssidEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="time">{formatUnitTime(entry.mtime)}</span>
-    <span class="row-field" data-field="size">{formatByteSize(entry.size)}</span>
-    <span class="row-field" data-field="gps" data-empty={gpsEmpty ? 'true' : undefined}>
-      {formatGpsPin(entry.gps)}{#if gpsEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span class="row-field" data-field="time"
+      >{formatUnitTime(entry.mtime)}</span
+    >
+    <span class="row-field" data-field="size">{formatByteSize(entry.size)}</span
+    >
+    <span
+      class="row-field"
+      data-field="gps"
+      data-empty={gpsEmpty ? 'true' : undefined}
+    >
+      {formatGpsPin(entry.gps)}{#if gpsEmpty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
   </li>
 {/snippet}
@@ -159,10 +205,14 @@
     {#snippet panel(t)}
       {#if t.id === 'nearby'}
         <div class="panel-toolbar">
-          <button type="button" data-action="sort" onclick={toggleSort}>{sortLabel}</button>
+          <button type="button" data-action="sort" onclick={toggleSort}
+            >{sortLabel}</button
+          >
         </div>
         {#if nearbyList.length === 0}
-          <p class="empty-message" data-empty-message role="status">{nearbyEmptyText}</p>
+          <p class="empty-message" data-empty-message role="status">
+            {nearbyEmptyText}
+          </p>
         {:else}
           <!-- SPEC 4.5.2.3 names the BSSID as data-row-key and as the sort
                tie-break, never as a claim of uniqueness -- it contrasts it
@@ -187,10 +237,14 @@
         {/if}
       {:else}
         {#if capturedTruncated}
-          <p class="truncation-notice" data-truncation-notice>{truncationText}</p>
+          <p class="truncation-notice" data-truncation-notice>
+            {truncationText}
+          </p>
         {/if}
         {#if capturedList.length === 0}
-          <p class="empty-message" data-empty-message role="status">{capturedEmptyText}</p>
+          <p class="empty-message" data-empty-message role="status">
+            {capturedEmptyText}
+          </p>
         {:else}
           <ul class="row-list">
             {#each capturedList as entry (entry.filename)}

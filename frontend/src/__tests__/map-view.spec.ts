@@ -10,7 +10,13 @@ import type {
   OutgoingHandshakesList,
   OutgoingMessage,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 // Written from SPEC 4.5.2.7 ("The Map, the one external origin, and a
 // viewport that has to survive", issue #198), plus 4.5.2.3/4.5.2.4 (the
@@ -51,7 +57,9 @@ function handshakeGps(overrides: Partial<HandshakeGps> = {}): HandshakeGps {
 }
 
 let bssidCounter = 0
-function handshakeEntry(overrides: Partial<HandshakeEntry> = {}): HandshakeEntry {
+function handshakeEntry(
+  overrides: Partial<HandshakeEntry> = {},
+): HandshakeEntry {
   bssidCounter += 1
   const bssid = `aabbccddee${String(bssidCounter % 10)}${String(Math.floor(bssidCounter / 10) % 10)}`
   return {
@@ -70,7 +78,11 @@ function handshakesListEnvelope(
   truncated = false,
   total: number | null = entries.length,
 ): OutgoingHandshakesList {
-  return { type: 'handshakes_list', timestamp: T, data: { entries, truncated, total } }
+  return {
+    type: 'handshakes_list',
+    timestamp: T,
+    data: { entries, truncated, total },
+  }
 }
 
 function gpsFix(overrides: Partial<Gps> = {}): Gps {
@@ -116,7 +128,12 @@ function extractLatLng(value: unknown): LatLngLike | null {
   if (Array.isArray(value) && value.length >= 2) {
     return { lat: Number(value[0]), lng: Number(value[1]) }
   }
-  if (value !== null && typeof value === 'object' && 'lat' in value && 'lng' in value) {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'lat' in value &&
+    'lng' in value
+  ) {
     const candidate = value as { lat: unknown; lng: unknown }
     return { lat: Number(candidate.lat), lng: Number(candidate.lng) }
   }
@@ -208,7 +225,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the map view must never send a command, only a read'))
+    return Promise.reject(
+      new Error('the map view must never send a command, only a read'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -218,7 +237,10 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -377,18 +399,28 @@ async function setupLeafletSpies(): Promise<{
     return this
   })
 
-  vi.spyOn(L.Map.prototype, 'setView').mockImplementation(function (this: any, center: unknown) {
+  vi.spyOn(L.Map.prototype, 'setView').mockImplementation(function (
+    this: any,
+    center: unknown,
+  ) {
     const ll = extractLatLng(center)
     if (ll) setViewCalls.push(ll)
     return this
   })
 
-  vi.spyOn(L.Map.prototype, 'invalidateSize').mockImplementation(function (this: any) {
+  vi.spyOn(L.Map.prototype, 'invalidateSize').mockImplementation(function (
+    this: any,
+  ) {
     invalidateSizeCalls += 1
     return this
   })
 
-  return { addToCalls, bindPopupCalls, setViewCalls, invalidateSizeCallCount: () => invalidateSizeCalls }
+  return {
+    addToCalls,
+    bindPopupCalls,
+    setViewCalls,
+    invalidateSizeCallCount: () => invalidateSizeCalls,
+  }
 }
 
 async function mountMap(
@@ -427,7 +459,10 @@ async function mountMap(
   const mountTarget = document.createElement('div')
   document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, router, leaflet }
 }
@@ -435,7 +470,10 @@ async function mountMap(
 function root(): HTMLElement {
   if (!container) throw new Error('Map view is not mounted')
   const viewRoot = container.querySelector('[data-view="map"]')
-  expect(viewRoot, 'expected [data-view="map"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="map"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -466,10 +504,11 @@ describe('the refresh: route becoming /map, a host switch in place, and no timer
     expect(client.countRequestCalls('get_handshakes')).toBe(1)
   })
 
-  it("the request type matches docs/schemas' own \"type\" const, not a hand-typed literal", async () => {
+  it('the request type matches docs/schemas\' own "type" const, not a hand-typed literal', async () => {
     const { client } = await mountMap()
-    const requestType = (getHandshakesSchema as { properties: { type: { const: string } } })
-      .properties.type.const
+    const requestType = (
+      getHandshakesSchema as { properties: { type: { const: string } } }
+    ).properties.type.const
     expect(client.requestCalls).toContain(requestType)
   })
 
@@ -503,7 +542,11 @@ describe('the refresh: route becoming /map, a host switch in place, and no timer
 
   it('a host switch in place - the view still mounted, the route still /map - asks the new unit for its own list', async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountMap('connected', '/map', (c) => created.push(c))
+    const { client: clientA, settings } = await mountMap(
+      'connected',
+      '/map',
+      (c) => created.push(c),
+    )
     expect(created).toHaveLength(1)
     expect(clientA.countRequestCalls('get_handshakes')).toBe(1)
 
@@ -562,11 +605,14 @@ describe('three empty states, not two (SPEC 4.5.2.7)', () => {
     expect(emptyMessage()?.textContent).toBe(NO_CAPTURES_MESSAGE)
   })
 
-  it("connected, a reply whose captures all carry gps: null: \"None of the unit's captures has a position.\"", async () => {
+  it('connected, a reply whose captures all carry gps: null: "None of the unit\'s captures has a position."', async () => {
     const { client } = await mountMap('connected')
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ gps: null }), handshakeEntry({ gps: null })]),
+      handshakesListEnvelope([
+        handshakeEntry({ gps: null }),
+        handshakeEntry({ gps: null }),
+      ]),
     )
     await settle()
     expect(emptyMessage()?.textContent).toBe(NO_POSITION_MESSAGE)
@@ -582,7 +628,10 @@ describe('three empty states, not two (SPEC 4.5.2.7)', () => {
     const { client } = await mountMap('connected')
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ gps: null }), handshakeEntry({ gps: handshakeGps() })]),
+      handshakesListEnvelope([
+        handshakeEntry({ gps: null }),
+        handshakeEntry({ gps: handshakeGps() }),
+      ]),
     )
     await settle()
     expect(emptyMessage()).toBeNull()
@@ -600,10 +649,12 @@ describe('three empty states, not two (SPEC 4.5.2.7)', () => {
 // =============================================================================
 
 describe('the caption counts only finite, non-null positions (issue #109)', () => {
-  it('the section\'s own worked example: 12 captures, 3 with a position', async () => {
+  it("the section's own worked example: 12 captures, 3 with a position", async () => {
     const { client } = await mountMap('connected')
     const entries = [
-      ...Array.from({ length: 3 }, () => handshakeEntry({ gps: handshakeGps() })),
+      ...Array.from({ length: 3 }, () =>
+        handshakeEntry({ gps: handshakeGps() }),
+      ),
       ...Array.from({ length: 4 }, () => handshakeEntry({ gps: null })),
       handshakeEntry({ gps: handshakeGps({ lat: Number.NaN }) }),
       handshakeEntry({ gps: handshakeGps({ lat: Number.NaN }) }),
@@ -612,7 +663,9 @@ describe('the caption counts only finite, non-null positions (issue #109)', () =
       // A string that satisfies the schema's "type: number" in name only -
       // the schema cannot see this at runtime once the value is already
       // handed to the client as JS (issue #109).
-      handshakeEntry({ gps: handshakeGps({ lat: '10.5' as unknown as number }) }),
+      handshakeEntry({
+        gps: handshakeGps({ lat: '10.5' as unknown as number }),
+      }),
     ]
     expect(entries).toHaveLength(12)
     client.settle('get_handshakes', handshakesListEnvelope(entries))
@@ -682,14 +735,23 @@ describe('the caption tells a null total (no directory) apart from a real zero (
     const { client } = await mountMap('connected')
     client.settle('get_handshakes', handshakesListEnvelope([], false, null))
     await settle()
-    expect(root().textContent).toContain('Capture count unavailable, 0 with a position.')
+    expect(root().textContent).toContain(
+      'Capture count unavailable, 0 with a position.',
+    )
   })
 
   it('the second clause - how many carry a position - stays a real count even when total is null (SPEC: "that one is true either way")', async () => {
     const { client } = await mountMap('connected')
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ gps: handshakeGps() }), handshakeEntry({ gps: null })], false, null),
+      handshakesListEnvelope(
+        [
+          handshakeEntry({ gps: handshakeGps() }),
+          handshakeEntry({ gps: null }),
+        ],
+        false,
+        null,
+      ),
     )
     await settle()
     expect(root().textContent).toContain('1 with a position.')
@@ -708,9 +770,17 @@ describe('the caption tells a null total (no directory) apart from a real zero (
 // =============================================================================
 
 describe('the current-location marker comes from the gps store, never from the browser directly', () => {
-  it('a gps_update with a fix produces a plotted layer at the unit\'s coordinates', async () => {
+  it("a gps_update with a fix produces a plotted layer at the unit's coordinates", async () => {
     const { client, leaflet } = await mountMap()
-    client.emitMessage(gpsUpdateEnvelope({ source: 'gpsd', piFix: true, fix: true, lat: 10.1, lon: -30.2 }))
+    client.emitMessage(
+      gpsUpdateEnvelope({
+        source: 'gpsd',
+        piFix: true,
+        fix: true,
+        lat: 10.1,
+        lon: -30.2,
+      }),
+    )
     await settle()
     const plotted = leaflet.addToCalls.some(
       (ll) => closeTo(ll.lat, 10.1) && closeTo(ll.lng, -30.2),
@@ -723,15 +793,27 @@ describe('the current-location marker comes from the gps store, never from the b
 
   it('a browser-sourced fix relayed through the gps store is plotted the same way', async () => {
     const { client, leaflet } = await mountMap()
-    client.emitMessage(gpsUpdateEnvelope({ source: 'browser', piFix: false, fix: true, lat: 10.1, lon: -30.2 }))
+    client.emitMessage(
+      gpsUpdateEnvelope({
+        source: 'browser',
+        piFix: false,
+        fix: true,
+        lat: 10.1,
+        lon: -30.2,
+      }),
+    )
     await settle()
-    const plotted = leaflet.addToCalls.some((ll) => closeTo(ll.lat, 10.1) && closeTo(ll.lng, -30.2))
+    const plotted = leaflet.addToCalls.some(
+      (ll) => closeTo(ll.lat, 10.1) && closeTo(ll.lng, -30.2),
+    )
     expect(plotted).toBe(true)
   })
 
   it('mounting the view, and receiving a gps_update, never calls navigator.geolocation', async () => {
     const { client } = await mountMap()
-    client.emitMessage(gpsUpdateEnvelope({ source: 'browser', piFix: false, fix: true }))
+    client.emitMessage(
+      gpsUpdateEnvelope({ source: 'browser', piFix: false, fix: true }),
+    )
     await settle()
     expect(getCurrentPositionSpy).not.toHaveBeenCalled()
     expect(watchPositionSpy).not.toHaveBeenCalled()
@@ -740,9 +822,19 @@ describe('the current-location marker comes from the gps store, never from the b
   it('a gps store with no fix at all does not throw while captures are present', async () => {
     const { client } = await mountMap()
     client.emitMessage(
-      gpsUpdateEnvelope({ enabled: false, piFix: false, fix: false, lat: null, lon: null, source: null }),
+      gpsUpdateEnvelope({
+        enabled: false,
+        piFix: false,
+        fix: false,
+        lat: null,
+        lon: null,
+        source: null,
+      }),
     )
-    client.settle('get_handshakes', handshakesListEnvelope([handshakeEntry({ gps: handshakeGps() })]))
+    client.settle(
+      'get_handshakes',
+      handshakesListEnvelope([handshakeEntry({ gps: handshakeGps() })]),
+    )
     await expect(settle()).resolves.toBeUndefined()
   })
 })
@@ -758,18 +850,24 @@ describe('the current-location marker comes from the gps store, never from the b
 
 describe("a pin's popup content is an element with its text assigned, never a string handed to Leaflet (SPEC 4.5.3 via 4.5.2.7)", () => {
   beforeEach(() => {
-    ;(window as unknown as { __mapViewPwned?: boolean }).__mapViewPwned = undefined
+    ;(window as unknown as { __mapViewPwned?: boolean }).__mapViewPwned =
+      undefined
   })
 
   it('a hostile SSID reaches bindPopup as an element whose text is the hostile string, not as a string Leaflet would parse', async () => {
     const { client, leaflet } = await mountMap('connected')
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ ssid: HOSTILE_SSID, gps: handshakeGps() })]),
+      handshakesListEnvelope([
+        handshakeEntry({ ssid: HOSTILE_SSID, gps: handshakeGps() }),
+      ]),
     )
     await settle()
 
-    expect(leaflet.bindPopupCalls.length, 'expected at least one bindPopup() call').toBeGreaterThan(0)
+    expect(
+      leaflet.bindPopupCalls.length,
+      'expected at least one bindPopup() call',
+    ).toBeGreaterThan(0)
     const sawEscaped = leaflet.bindPopupCalls.some((content) => {
       if (typeof content === 'string') return false
       const node = content as { nodeType?: number; textContent?: string | null }
@@ -787,7 +885,9 @@ describe("a pin's popup content is an element with its text assigned, never a st
     // the string into markup either.
     expect(document.querySelector('script')).toBeNull()
     expect(document.querySelector('[onerror]')).toBeNull()
-    expect((window as unknown as { __mapViewPwned?: boolean }).__mapViewPwned).toBeUndefined()
+    expect(
+      (window as unknown as { __mapViewPwned?: boolean }).__mapViewPwned,
+    ).toBeUndefined()
   })
 })
 
@@ -823,7 +923,10 @@ describe('an empty sentence never appears over a map that is still showing pins 
       handshakesListEnvelope([handshakeEntry({ gps: handshakeGps() })]),
     )
     await settle()
-    expect(emptyMessage(), 'expected no empty message once a capture is plotted').toBeNull()
+    expect(
+      emptyMessage(),
+      'expected no empty message once a capture is plotted',
+    ).toBeNull()
 
     client.emitState('offline')
     await settle()
@@ -835,9 +938,12 @@ describe('an empty sentence never appears over a map that is still showing pins 
 })
 
 describe('the caption counts what the unit has, not what arrived (SPEC 4.5.2.7)', () => {
-  it('a truncated reply\'s caption uses total, not the length of the returned entries', async () => {
+  it("a truncated reply's caption uses total, not the length of the returned entries", async () => {
     const { client } = await mountMap('connected')
-    const entries = [handshakeEntry({ gps: handshakeGps() }), handshakeEntry({ gps: handshakeGps() })]
+    const entries = [
+      handshakeEntry({ gps: handshakeGps() }),
+      handshakeEntry({ gps: handshakeGps() }),
+    ]
     client.settle('get_handshakes', handshakesListEnvelope(entries, true, 500))
     await settle()
     expect(root().textContent).toContain('500 captures,')
@@ -852,10 +958,20 @@ describe('which source centres the map is decided by availability, not by which 
     // section names as the failure a naive "first data wins" effect has.
     client.settle(
       'get_handshakes',
-      handshakesListEnvelope([handshakeEntry({ gps: handshakeGps({ lat: 5, lon: 5 }) })]),
+      handshakesListEnvelope([
+        handshakeEntry({ gps: handshakeGps({ lat: 5, lon: 5 }) }),
+      ]),
     )
     await settle()
-    client.emitMessage(gpsUpdateEnvelope({ source: 'gpsd', piFix: true, fix: true, lat: 10.1, lon: -30.2 }))
+    client.emitMessage(
+      gpsUpdateEnvelope({
+        source: 'gpsd',
+        piFix: true,
+        fix: true,
+        lat: 10.1,
+        lon: -30.2,
+      }),
+    )
     await settle()
 
     const centredOnUnit = leaflet.setViewCalls.some(

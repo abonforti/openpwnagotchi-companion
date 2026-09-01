@@ -1,7 +1,15 @@
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AccessPoint, OutgoingAccessPoints, OutgoingLogLines, OutgoingMessage, OutgoingPeersList, Peer, Stats } from '../lib/protocol'
+import type {
+  AccessPoint,
+  OutgoingAccessPoints,
+  OutgoingLogLines,
+  OutgoingMessage,
+  OutgoingPeersList,
+  Peer,
+  Stats,
+} from '../lib/protocol'
 import type { Host } from '../lib/settings'
 import type {
   ConnectionState,
@@ -110,7 +118,10 @@ function newHost(overrides: Partial<Omit<Host, 'id'>> = {}): Omit<Host, 'id'> {
  * instead of relying on that default by accident.
  */
 function seedNoActiveHost(): void {
-  fakeStorage.setItem(SETTINGS_KEY, JSON.stringify({ hosts: [], activeHostId: null }))
+  fakeStorage.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({ hosts: [], activeHostId: null }),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +172,10 @@ function peersListEnvelope(entries: Peer[]): OutgoingPeersList {
   return { type: 'peers_list', timestamp: T, data: { entries } }
 }
 
-function logLinesEnvelope(lines: string[], path = '/tmp/pwnagotchi.log'): OutgoingLogLines {
+function logLinesEnvelope(
+  lines: string[],
+  path = '/tmp/pwnagotchi.log',
+): OutgoingLogLines {
   return { type: 'log_lines', timestamp: T, data: { lines, path } }
 }
 
@@ -191,7 +205,12 @@ function minimalStats(uptime: number): Stats {
       updated: null,
     },
     sessionAge: null,
-    capabilities: { pasv: false, pisugar: false, gpsSource: 'auto', pluginVersion: '0.1.0' },
+    capabilities: {
+      pasv: false,
+      pisugar: false,
+      gpsSource: 'auto',
+      pluginVersion: '0.1.0',
+    },
   }
 }
 
@@ -201,7 +220,13 @@ async function withOneClient() {
   const { loadSettings, addHost, activateHost, startSession } = mods
   seedNoActiveHost()
   loadSettings()
-  const host = addHost(newHost({ label: 'Original label', address: '172.20.10.9', token: 'tok-a' }))
+  const host = addHost(
+    newHost({
+      label: 'Original label',
+      address: '172.20.10.9',
+      token: 'tok-a',
+    }),
+  )
   const created: FakeWsClient[] = []
   const stop = startSession({
     createClient: (options) => {
@@ -230,7 +255,9 @@ class FakeWsClient implements WsClient {
   private reasonValue: UnauthorizedReason | null = null
   private lastStatsValue: StatsSnapshot | null = null
   private readonly stateHandlers = new Set<(state: ConnectionState) => void>()
-  private readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
+  private readonly messageHandlers = new Set<
+    (message: OutgoingMessage) => void
+  >()
 
   constructor(options: WsClientOptions) {
     this.options = options
@@ -287,7 +314,9 @@ class FakeWsClient implements WsClient {
   }
 
   command(): Promise<never> {
-    return Promise.reject(new Error('session.spec: no test in this file issues a command'))
+    return Promise.reject(
+      new Error('session.spec: no test in this file issues a command'),
+    )
   }
 
   sendGps(): void {
@@ -310,7 +339,10 @@ class FakeWsClient implements WsClient {
   }
 
   /** Test-only: simulates the client entering a new state, exactly as onState would deliver it. */
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -365,7 +397,8 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('creates exactly one client when a host becomes active after start, and currentClient() is it', async () => {
-    const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession, currentClient } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost({ label: 'Unit A' }))
@@ -395,7 +428,14 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('is null again after stop(), and stop() releases the client', async () => {
-    const { loadSettings, addHost, activateHost, startSession, currentClient, connection } = await loadModules()
+    const {
+      loadSettings,
+      addHost,
+      activateHost,
+      startSession,
+      currentClient,
+      connection,
+    } = await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
@@ -424,7 +464,8 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('calling the same stop twice is harmless: no second teardown, no throw, the client released exactly once', async () => {
-    const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession, currentClient } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
@@ -447,7 +488,8 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('a stale stop from a previous session does not tear down the session started after it', async () => {
-    const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession, currentClient } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
@@ -489,7 +531,15 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('stop() clears real data the session accumulated, not just an attach-time seed (SPEC 4.4.2: the caller resets after an explicit close())', async () => {
-    const { loadSettings, addHost, activateHost, startSession, peers, accessPoints, log } = await loadModules()
+    const {
+      loadSettings,
+      addHost,
+      activateHost,
+      startSession,
+      peers,
+      accessPoints,
+      log,
+    } = await loadModules()
     loadSettings()
     const host = addHost(newHost())
     let latest: FakeWsClient | null = null
@@ -524,7 +574,8 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
   })
 
   it('starting twice refuses loudly rather than building a second client, matching connectStores', async () => {
-    const { loadSettings, addHost, activateHost, startSession } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const host = addHost(newHost())
@@ -562,7 +613,7 @@ describe('currentClient() and who is allowed to create one (4.8)', () => {
 // an internal call order.
 // ---------------------------------------------------------------------------
 
-describe("loadSettings() runs before the activeHost subscription (4.8, issue #134)", () => {
+describe('loadSettings() runs before the activeHost subscription (4.8, issue #134)', () => {
   it('a stored host that is not the Bluetooth default is what gets built -- not a transient client for the module default the wrong order would open first', async () => {
     const { startSession, currentClient } = await loadModules()
     // Written straight to storage, deliberately without this test calling
@@ -572,7 +623,16 @@ describe("loadSettings() runs before the activeHost subscription (4.8, issue #13
     fakeStorage.setItem(
       SETTINGS_KEY,
       JSON.stringify({
-        hosts: [{ id: 'unit-real', label: 'Unit A', address: '172.20.10.9', wsPort: 8082, httpPort: 8443, token: null }],
+        hosts: [
+          {
+            id: 'unit-real',
+            label: 'Unit A',
+            address: '172.20.10.9',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+          },
+        ],
         activeHostId: 'unit-real',
       }),
     )
@@ -611,7 +671,8 @@ describe("loadSettings() runs before the activeHost subscription (4.8, issue #13
 
 describe('switching hosts: teardown, then resetStores(), then attach, in that order (4.4.2, 4.8)', () => {
   it('pins the order: reordering either boundary is independently observable', async () => {
-    const { loadSettings, addHost, activateHost, startSession, stats } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession, stats } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
@@ -637,7 +698,11 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
 
     const order: string[] = []
     const unsubscribe = stats.subscribe((value) => {
-      order.push(value === null ? 'stats:null' : `stats:${(value as { uptime: number }).uptime}`)
+      order.push(
+        value === null
+          ? 'stats:null'
+          : `stats:${(value as { uptime: number }).uptime}`,
+      )
     })
     order.length = 0 // drop the immediate replay of the current value
 
@@ -659,7 +724,8 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
   })
 
   it('the old client is fully detached: a state it emits after the switch reaches nobody', async () => {
-    const { loadSettings, addHost, activateHost, startSession, connection } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession, connection } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
@@ -691,7 +757,8 @@ describe('switching hosts: teardown, then resetStores(), then attach, in that or
 
 describe('rebuild trigger: connection-shaped fields only (4.8)', () => {
   it('renaming the active host leaves the client alone', async () => {
-    const { updateHost, host, created, currentClient, stop } = await withOneClient()
+    const { updateHost, host, created, currentClient, stop } =
+      await withOneClient()
 
     updateHost(host.id, { label: 'Renamed' })
 
@@ -702,7 +769,8 @@ describe('rebuild trigger: connection-shaped fields only (4.8)', () => {
   })
 
   it('changing the address rebuilds', async () => {
-    const { updateHost, host, created, currentClient, stop } = await withOneClient()
+    const { updateHost, host, created, currentClient, stop } =
+      await withOneClient()
 
     updateHost(host.id, { address: '172.20.10.6' })
 
@@ -722,7 +790,8 @@ describe('rebuild trigger: connection-shaped fields only (4.8)', () => {
   })
 
   it('changing the http port leaves the client alone: httpPort is where the app was served from, not part of the socket', async () => {
-    const { updateHost, host, created, currentClient, stop } = await withOneClient()
+    const { updateHost, host, created, currentClient, stop } =
+      await withOneClient()
 
     updateHost(host.id, { httpPort: 9443 })
 
@@ -742,10 +811,15 @@ describe('rebuild trigger: connection-shaped fields only (4.8)', () => {
   })
 
   it('editing an inactive host never rebuilds the active one', async () => {
-    const { addHost, updateHost, created, currentClient, stop } = await withOneClient()
+    const { addHost, updateHost, created, currentClient, stop } =
+      await withOneClient()
     const other = addHost(newHost({ label: 'Unit B', address: '172.20.10.4' }))
 
-    updateHost(other.id, { address: '172.20.10.5', wsPort: 9999, token: 'tok-other' })
+    updateHost(other.id, {
+      address: '172.20.10.5',
+      wsPort: 9999,
+      token: 'tok-other',
+    })
 
     expect(created).toHaveLength(1)
     expect(currentClient()).toBe(asClient(created[0]!))
@@ -762,7 +836,16 @@ describe('rebuild trigger: connection-shaped fields only (4.8)', () => {
 
 describe('the active host disappearing (4.7, 4.8)', () => {
   it('removing the active host tears down, resets the stores, and attaches nothing', async () => {
-    const { removeHost, host, created, currentClient, connection, stats, peers, stop } = await withOneClient()
+    const {
+      removeHost,
+      host,
+      created,
+      currentClient,
+      connection,
+      stats,
+      peers,
+      stop,
+    } = await withOneClient()
     const client = created[0]!
     client.primeLastStats(minimalStats(1))
     client.emitState('connected')
@@ -781,7 +864,8 @@ describe('the active host disappearing (4.7, 4.8)', () => {
   })
 
   it('emptying the list the same way (removing every host) also attaches nothing afterwards', async () => {
-    const { addHost, removeHost, host, created, currentClient, stop } = await withOneClient()
+    const { addHost, removeHost, host, created, currentClient, stop } =
+      await withOneClient()
     const other = addHost(newHost({ label: 'Unit B', address: '172.20.10.4' }))
 
     removeHost(host.id)
@@ -794,7 +878,15 @@ describe('the active host disappearing (4.7, 4.8)', () => {
   })
 
   it('activating a host again after the active one was removed builds a fresh client', async () => {
-    const { addHost, activateHost, removeHost, host, created, currentClient, stop } = await withOneClient()
+    const {
+      addHost,
+      activateHost,
+      removeHost,
+      host,
+      created,
+      currentClient,
+      stop,
+    } = await withOneClient()
     const other = addHost(newHost({ label: 'Unit B', address: '172.20.10.4' }))
     removeHost(host.id)
     expect(currentClient()).toBeNull()
@@ -830,11 +922,26 @@ describe('a failure while building or connecting never throws out of the activeH
     // host's client down before the second host's build ever starts --
     // there is no second client, so no attach-time seed to fall back on
     // either (contrast the connect()-throws test below, which has one).
-    const { loadSettings, addHost, activateHost, startSession, currentClient, connection, settings, peers, resetStores } =
-      await loadModules()
+    const {
+      loadSettings,
+      addHost,
+      activateHost,
+      startSession,
+      currentClient,
+      connection,
+      settings,
+      peers,
+      resetStores,
+    } = await loadModules()
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
-    const hostB = addHost(newHost({ label: 'Unit B (bad port)', address: '172.20.10.3', wsPort: 1 }))
+    const hostB = addHost(
+      newHost({
+        label: 'Unit B (bad port)',
+        address: '172.20.10.3',
+        wsPort: 1,
+      }),
+    )
 
     let firstClient: FakeWsClient | null = null
     startSession({
@@ -858,7 +965,9 @@ describe('a failure while building or connecting never throws out of the activeH
     // that proves nothing either way. This is what makes the count below a
     // real assertion about delivery rather than an accident of the fixture.
     const peersNotifications: unknown[] = []
-    const unsubscribePeers = peers.subscribe((value) => peersNotifications.push(value))
+    const unsubscribePeers = peers.subscribe((value) =>
+      peersNotifications.push(value),
+    )
     peersNotifications.length = 0 // drop the immediate replay of the current value
 
     expect(() => activateHost(hostB.id)).not.toThrow()
@@ -897,11 +1006,25 @@ describe('a failure while building or connecting never throws out of the activeH
     // construction (createClient succeeding), so this is the realistic
     // shape: the first host connects normally, the switch to the second
     // is the one whose connect() fails.
-    const { loadSettings, addHost, activateHost, startSession, connection, settings, peers, resetStores } =
-      await loadModules()
+    const {
+      loadSettings,
+      addHost,
+      activateHost,
+      startSession,
+      connection,
+      settings,
+      peers,
+      resetStores,
+    } = await loadModules()
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))
-    const hostB = addHost(newHost({ label: 'Unit B (bad port)', address: '172.20.10.3', wsPort: 1 }))
+    const hostB = addHost(
+      newHost({
+        label: 'Unit B (bad port)',
+        address: '172.20.10.3',
+        wsPort: 1,
+      }),
+    )
 
     let firstClient: FakeWsClient | null = null
     startSession({
@@ -926,7 +1049,9 @@ describe('a failure while building or connecting never throws out of the activeH
     // regardless of content, where stats (null before and after) would not
     // and would prove nothing either way.
     const peersNotifications: unknown[] = []
-    const unsubscribePeers = peers.subscribe((value) => peersNotifications.push(value))
+    const unsubscribePeers = peers.subscribe((value) =>
+      peersNotifications.push(value),
+    )
     peersNotifications.length = 0
 
     expect(() => activateHost(hostB.id)).not.toThrow()
@@ -974,10 +1099,16 @@ describe('a failure while building or connecting never throws out of the activeH
 
 describe('the rebuild identity and the token (4.8, corrected)', () => {
   it('activating a different host entry with the same address, ws port and token keeps the socket', async () => {
-    const { addHost, activateHost, created, currentClient, stop } = await withOneClient()
+    const { addHost, activateHost, created, currentClient, stop } =
+      await withOneClient()
     // withOneClient's host: address 172.20.10.9, wsPort 8082, token 'tok-a'.
     const sameConnection = addHost(
-      newHost({ label: 'Same unit, different entry', address: '172.20.10.9', wsPort: 8082, token: 'tok-a' }),
+      newHost({
+        label: 'Same unit, different entry',
+        address: '172.20.10.9',
+        wsPort: 8082,
+        token: 'tok-a',
+      }),
     )
 
     activateHost(sameConnection.id)
@@ -989,10 +1120,13 @@ describe('the rebuild identity and the token (4.8, corrected)', () => {
   })
 
   it('the client is never built with a token option: the session leaves companion.token as the only source', async () => {
-    const { loadSettings, addHost, activateHost, startSession } = await loadModules()
+    const { loadSettings, addHost, activateHost, startSession } =
+      await loadModules()
     seedNoActiveHost() // reached deliberately (4.7): nothing active until this test activates its own host
     loadSettings()
-    const host = addHost(newHost({ label: 'Has a token', token: 'tok-should-not-be-forwarded' }))
+    const host = addHost(
+      newHost({ label: 'Has a token', token: 'tok-should-not-be-forwarded' }),
+    )
     const created: FakeWsClient[] = []
     const stop = startSession({
       createClient: (options) => {
@@ -1035,8 +1169,14 @@ describe('the rebuild identity and the token (4.8, corrected)', () => {
 // ---------------------------------------------------------------------------
 
 function setVisibility(state: DocumentVisibilityState): void {
-  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
-  Object.defineProperty(document, 'hidden', { value: state !== 'visible', configurable: true })
+  Object.defineProperty(document, 'visibilityState', {
+    value: state,
+    configurable: true,
+  })
+  Object.defineProperty(document, 'hidden', {
+    value: state !== 'visible',
+    configurable: true,
+  })
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
@@ -1126,7 +1266,9 @@ describe('page lifecycle: pagehide releases, pageshow rebuilds, visibilitychange
     loadSettings()
     const stop = startSession({
       createClient: () => {
-        throw new Error('must not be called: no host is active, so nothing should ever try to build one')
+        throw new Error(
+          'must not be called: no host is active, so nothing should ever try to build one',
+        )
       },
     })
     expect(currentClient()).toBeNull()
@@ -1199,8 +1341,9 @@ describe('page lifecycle: pagehide releases, pageshow rebuilds, visibilitychange
   // with two live clients or a client currentClient() cannot see - and
   // flags the interpretation, since nothing in SPEC.md names this ordering
   // directly (see the report).
-  it('a pagehide reentrant from inside a host switch\'s own client teardown does not throw and leaves the session releasable', async () => {
-    const { loadSettings, addHost, activateHost, startSession, currentClient } = await loadModules()
+  it("a pagehide reentrant from inside a host switch's own client teardown does not throw and leaves the session releasable", async () => {
+    const { loadSettings, addHost, activateHost, startSession, currentClient } =
+      await loadModules()
     seedNoActiveHost()
     loadSettings()
     const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.9' }))

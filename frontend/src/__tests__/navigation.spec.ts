@@ -1,4 +1,12 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
 // --- storage stub -------------------------------------------------------
 
@@ -107,7 +115,10 @@ class FakeMediaQueryList {
     }
   }
 
-  removeEventListener(type: string, listener: (event: ChangeLike) => void): void {
+  removeEventListener(
+    type: string,
+    listener: (event: ChangeLike) => void,
+  ): void {
     if (type === 'change') {
       this.listeners.delete(listener)
     }
@@ -150,7 +161,8 @@ function installMatchMedia(): void {
   window.matchMedia = ((query: string) => {
     matchMediaCalls.push(query)
     const list = new FakeMediaQueryList(query)
-    list.matches = normaliseQuery(query) === normaliseQuery(RAIL_QUERY) && railMatches
+    list.matches =
+      normaliseQuery(query) === normaliseQuery(RAIL_QUERY) && railMatches
     mediaLists.push(list)
     return list
   }) as unknown as typeof window.matchMedia
@@ -190,7 +202,10 @@ async function renderShell(path: string): Promise<HTMLElement> {
   }
   container = document.createElement('div')
   document.body.appendChild(container)
-  instance = svelte.mount(module.default, { target: container }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: container }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return container
 }
@@ -207,8 +222,15 @@ async function settle(): Promise<void> {
   await svelte?.tick()
 }
 
-async function click(element: Element, init: MouseEventInit = {}): Promise<MouseEvent> {
-  const event = new MouseEvent('click', { bubbles: true, cancelable: true, ...init })
+async function click(
+  element: Element,
+  init: MouseEventInit = {},
+): Promise<MouseEvent> {
+  const event = new MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  })
   element.dispatchEvent(event)
   await settle()
   return event
@@ -218,20 +240,36 @@ async function click(element: Element, init: MouseEventInit = {}): Promise<Mouse
 // a browser does, so the wait is for the traversal and not for Svelte.
 async function goBack(expected: string): Promise<void> {
   window.history.back()
-  for (let attempt = 0; attempt < 50 && window.location.pathname !== expected; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 50 && window.location.pathname !== expected;
+    attempt += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   await settle()
 }
 
-async function pressKey(element: Element, key: string, init: KeyboardEventInit = {}): Promise<void> {
-  element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }))
+async function pressKey(
+  element: Element,
+  key: string,
+  init: KeyboardEventInit = {},
+): Promise<void> {
+  element.dispatchEvent(
+    new KeyboardEvent('keydown', {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    }),
+  )
   await settle()
 }
 
 // --- queries ----------------------------------------------------------------
 
-const INTERACTIVE = 'a, button, [role="link"], [role="button"], [role="menuitem"]'
+const INTERACTIVE =
+  'a, button, [role="link"], [role="button"], [role="menuitem"]'
 
 function accessibleName(element: Element): string {
   const label = element.getAttribute('aria-label')
@@ -264,9 +302,14 @@ function navBar(): HTMLElement {
   const candidates = [...shell().querySelectorAll('nav')]
   expect(candidates.length, 'SPEC 4.5: the bar is a <nav>').toBeGreaterThan(0)
   const withMore = candidates.find((element) =>
-    [...element.querySelectorAll(INTERACTIVE)].some((child) => sameName(accessibleName(child), 'More')),
+    [...element.querySelectorAll(INTERACTIVE)].some((child) =>
+      sameName(accessibleName(child), 'More'),
+    ),
   )
-  expect(withMore, 'the bar carrying the More control must be a <nav>').toBeDefined()
+  expect(
+    withMore,
+    'the bar carrying the More control must be a <nav>',
+  ).toBeDefined()
   return withMore as HTMLElement
 }
 
@@ -327,8 +370,14 @@ function sheetEntry(name: string): HTMLElement {
 }
 
 function focusablesIn(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]')].filter(
-    (element) => element.getAttribute('tabindex') !== '-1' && !element.hasAttribute('disabled'),
+  return [
+    ...root.querySelectorAll<HTMLElement>(
+      'a[href], button, input, select, textarea, [tabindex]',
+    ),
+  ].filter(
+    (element) =>
+      element.getAttribute('tabindex') !== '-1' &&
+      !element.hasAttribute('disabled'),
   )
 }
 
@@ -465,7 +514,12 @@ describe('the seven routes', () => {
   // thing", and an app that swallows them has an anchor that lies about being
   // one. SPEC 4.5 chose anchors over buttons deliberately, so honouring the
   // modified click is part of that choice rather than a nicety.
-  for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) {
+  for (const modifier of [
+    'metaKey',
+    'ctrlKey',
+    'shiftKey',
+    'altKey',
+  ] as const) {
     it(`leaves a ${modifier} click to the browser`, async () => {
       await renderShell('/')
 
@@ -549,7 +603,9 @@ describe('the seven routes', () => {
   it('carries the route in the href of every bar entry that is a view', async () => {
     await renderShell('/')
 
-    for (const route of ROUTES.filter((candidate) => candidate.entry !== 'More')) {
+    for (const route of ROUTES.filter(
+      (candidate) => candidate.entry !== 'More',
+    )) {
       const entry = barEntry(route.entry)
       expect(entry.tagName).toBe('A')
       expect(entry.getAttribute('href')).toBe(route.path)
@@ -590,7 +646,9 @@ describe('the bar is site navigation, not a tab control', () => {
     await renderShell('/')
 
     const names = [...navBar().querySelectorAll(INTERACTIVE)]
-      .filter((element) => BAR_ENTRIES.some((name) => sameName(accessibleName(element), name)))
+      .filter((element) =>
+        BAR_ENTRIES.some((name) => sameName(accessibleName(element), name)),
+      )
       .map((element) => accessibleName(element))
 
     expect(names).toHaveLength(BAR_ENTRIES.length)
@@ -617,7 +675,9 @@ describe('the bar is site navigation, not a tab control', () => {
 
   it('moves the indicator when navigation happens', async () => {
     await renderShell('/')
-    expect(currentEntryNames().map((name) => sameName(name, 'Dashboard'))).toEqual([true])
+    expect(
+      currentEntryNames().map((name) => sameName(name, 'Dashboard')),
+    ).toEqual([true])
 
     await click(barEntry('Log'))
 
@@ -693,7 +753,9 @@ describe('the More sheet as a dialog', () => {
     // SPEC names a backdrop but does not say which element carries it, so the
     // dismissal is driven the way a user drives it: a click that lands outside
     // the dialog.
-    const backdrop = shell().querySelector('[data-backdrop], .backdrop, [class*="backdrop"]')
+    const backdrop = shell().querySelector(
+      '[data-backdrop], .backdrop, [class*="backdrop"]',
+    )
     if (backdrop) {
       await click(backdrop)
     }
@@ -798,14 +860,18 @@ describe('the landscape rail', () => {
   it('switches to the rail when the device is rotated into the range', async () => {
     railMatches = false
     await renderShell('/')
-    expect(sameName((barEntry('Map').textContent ?? '').trim(), 'Map')).toBe(true)
+    expect(sameName((barEntry('Map').textContent ?? '').trim(), 'Map')).toBe(
+      true,
+    )
 
     await setRail(true)
 
     // Rotation is the whole reason the query exists; a rail that only appears
     // when the app launches already rotated is not the behaviour SPEC asks for.
     expect((barEntry('Map').textContent ?? '').trim()).toBe('')
-    expect(sameName(barEntry('Map').getAttribute('aria-label') ?? '', 'Map')).toBe(true)
+    expect(
+      sameName(barEntry('Map').getAttribute('aria-label') ?? '', 'Map'),
+    ).toBe(true)
   })
 
   it('goes back to the bottom bar when the device is rotated out of the range', async () => {
@@ -814,7 +880,9 @@ describe('the landscape rail', () => {
 
     await setRail(false)
 
-    expect(sameName((barEntry('Map').textContent ?? '').trim(), 'Map')).toBe(true)
+    expect(sameName((barEntry('Map').textContent ?? '').trim(), 'Map')).toBe(
+      true,
+    )
   })
 
   it('keeps navigation working in the rail', async () => {
@@ -841,20 +909,29 @@ describe('views stay mounted when navigated away from', () => {
 
     // SPEC 4.5: "The Map keeps its viewport and zoom, and the Log keeps its
     // buffer and scroll position, rather than re-initialising on every visit."
-    const map = views().find((element) => element.getAttribute('data-view') === 'map')
-    expect(map, 'the Map view must still be mounted after navigating away').toBeDefined()
+    const map = views().find(
+      (element) => element.getAttribute('data-view') === 'map',
+    )
+    expect(
+      map,
+      'the Map view must still be mounted after navigating away',
+    ).toBeDefined()
     expect(presentedViews()).toEqual(['log'])
   })
 
   it('returns to the same element rather than a rebuilt one', async () => {
     await renderShell('/map')
-    const first = views().find((element) => element.getAttribute('data-view') === 'map')
+    const first = views().find(
+      (element) => element.getAttribute('data-view') === 'map',
+    )
     expect(first).toBeDefined()
 
     await click(barEntry('Log'))
     await click(barEntry('Map'))
 
-    const second = views().find((element) => element.getAttribute('data-view') === 'map')
+    const second = views().find(
+      (element) => element.getAttribute('data-view') === 'map',
+    )
     // Element identity is the observable form of "not re-initialised": a
     // Leaflet instance rebuilt on every visit re-centres, which reads as a bug.
     expect(second).toBe(first)

@@ -23,7 +23,12 @@
     formatUptime,
     type ControlId,
   } from '../lib/format'
-  import { cancelControl, confirmControl, controls, requestControl } from '../lib/controls'
+  import {
+    cancelControl,
+    confirmControl,
+    controls,
+    requestControl,
+  } from '../lib/controls'
   import { channel, connection, face, gps, stats } from '../lib/stores'
 
   const s = $derived($stats)
@@ -124,10 +129,14 @@
     s === null ? DASH : formatBatteryPercent(s.battery.percent),
   )
   const batteryPercentEmpty = $derived(batteryPercentValue === DASH)
-  const chargingValue = $derived(s === null ? DASH : formatCharging(s.battery.charging))
+  const chargingValue = $derived(
+    s === null ? DASH : formatCharging(s.battery.charging),
+  )
   const chargingEmpty = $derived(chargingValue === DASH)
 
-  const temperatureValue = $derived(s === null ? DASH : formatTemperature(s.temperature))
+  const temperatureValue = $derived(
+    s === null ? DASH : formatTemperature(s.temperature),
+  )
   const temperatureEmpty = $derived(temperatureValue === DASH)
 
   // SPEC 4.4.1/4.5.1.1: the channel is the first of the two exceptions to
@@ -168,7 +177,9 @@
   // side of the ternary is never rendered -- this row only appears behind
   // {#if showHandshakesOnUnit} below -- and exists only because the
   // expression needs some value on that branch.
-  const handshakesOnUnitValue = $derived(showHandshakesOnUnit ? `${s!.handshakes}` : DASH)
+  const handshakesOnUnitValue = $derived(
+    showHandshakesOnUnit ? `${s!.handshakes}` : DASH,
+  )
 
   // SPEC 4.5.1.1: named, not merely timed -- the ssid and the peer name are
   // the two hostile strings on this card (SPEC 4.5.3), next to face and
@@ -187,7 +198,9 @@
   const lastHandshakeHasName = $derived(
     lastHandshakeName !== null && lastHandshakeName !== '',
   )
-  const lastHandshakeTimeText = $derived(formatUnitTime(s?.lastHandshake?.mtime ?? null))
+  const lastHandshakeTimeText = $derived(
+    formatUnitTime(s?.lastHandshake?.mtime ?? null),
+  )
   const lastHandshakeHasTime = $derived(lastHandshakeTimeText !== DASH)
   const lastHandshakeEmpty = $derived(
     s === null ||
@@ -196,13 +209,16 @@
   )
   const lastPeerName = $derived(s?.lastPeer?.name ?? null)
   const lastPeerHasName = $derived(lastPeerName !== null && lastPeerName !== '')
-  const lastPeerTimeText = $derived(formatUnitTime(s?.lastPeer?.lastSeen ?? null))
+  const lastPeerTimeText = $derived(
+    formatUnitTime(s?.lastPeer?.lastSeen ?? null),
+  )
   const lastPeerHasTime = $derived(lastPeerTimeText !== DASH)
   const lastPeerEmpty = $derived(
     s === null ||
       s.lastPeer === null ||
       (s.lastPeer.name === '' &&
-        (s.lastPeer.lastSeen === null || !Number.isFinite(s.lastPeer.lastSeen))),
+        (s.lastPeer.lastSeen === null ||
+          !Number.isFinite(s.lastPeer.lastSeen))),
   )
 
   // SPEC 4.4.1/4.5.1.1: the second and last exception to the one-snapshot
@@ -210,12 +226,16 @@
   // push, so reading stats.gps here would leave a fix acquired between two
   // broadcasts invisible for up to 20 s while a channel hop appeared at
   // once -- the asymmetry the amended section exists to remove.
-  const gpsFixValue = $derived(gpsReading === null ? DASH : formatGpsFix(gpsReading))
+  const gpsFixValue = $derived(
+    gpsReading === null ? DASH : formatGpsFix(gpsReading),
+  )
   // `off` is a known answer, not a missing one (SPEC 4.5.1.1), and
   // formatGpsFix never itself returns DASH, so comparing its answer to
   // DASH only fires before any gps reading has arrived at all.
   const gpsFixEmpty = $derived(gpsFixValue === DASH)
-  const gpsSourceValue = $derived(gpsReading === null ? DASH : formatGpsSource(gpsReading))
+  const gpsSourceValue = $derived(
+    gpsReading === null ? DASH : formatGpsSource(gpsReading),
+  )
   // gpsSource decides emptiness from the value, not the string (see the
   // comment above lastHandshakeEmpty): a null or empty source and a
   // formatted DASH happen to coincide here, but the rule is which one this
@@ -241,54 +261,73 @@
   )
   const statusEmpty = $derived(faceStatus === null || faceStatus.status === '')
 
-  const primaryFields = $derived.by(
-    (): FieldRow[] => [
-      { id: 'uptime', label: 'Uptime', value: uptimeValue, empty: uptimeEmpty },
-      { id: 'battery', label: 'Battery', value: batteryPercentValue, empty: batteryPercentEmpty },
-      { id: 'charging', label: 'Charging', value: chargingValue, empty: chargingEmpty },
-      { id: 'temperature', label: 'Temperature', value: temperatureValue, empty: temperatureEmpty },
-      { id: 'channel', label: 'Channel', value: channelValue, empty: channelEmpty },
-    ],
-  )
+  const primaryFields = $derived.by((): FieldRow[] => [
+    { id: 'uptime', label: 'Uptime', value: uptimeValue, empty: uptimeEmpty },
+    {
+      id: 'battery',
+      label: 'Battery',
+      value: batteryPercentValue,
+      empty: batteryPercentEmpty,
+    },
+    {
+      id: 'charging',
+      label: 'Charging',
+      value: chargingValue,
+      empty: chargingEmpty,
+    },
+    {
+      id: 'temperature',
+      label: 'Temperature',
+      value: temperatureValue,
+      empty: temperatureEmpty,
+    },
+    {
+      id: 'channel',
+      label: 'Channel',
+      value: channelValue,
+      empty: channelEmpty,
+    },
+  ])
 
-  const counterFields = $derived.by(
-    (): FieldRow[] => [
-      {
-        id: 'accessPoints',
-        label: 'Access points',
-        value: accessPointsValue,
-        empty: accessPointsEmpty,
-      },
-      { id: 'handshakes', label: 'Handshakes', value: handshakesValue, empty: handshakesEmpty },
-      { id: 'peers', label: 'Peers', value: peersValue, empty: peersEmpty },
-    ],
-  )
+  const counterFields = $derived.by((): FieldRow[] => [
+    {
+      id: 'accessPoints',
+      label: 'Access points',
+      value: accessPointsValue,
+      empty: accessPointsEmpty,
+    },
+    {
+      id: 'handshakes',
+      label: 'Handshakes',
+      value: handshakesValue,
+      empty: handshakesEmpty,
+    },
+    { id: 'peers', label: 'Peers', value: peersValue, empty: peersEmpty },
+  ])
 
   // SPEC 4.5.3 (issue #219): rendered by the namedEventField snippet below,
   // not by field/counterFields, because only the name half of each is
   // wrapped in <bdi>.
-  const namedEventFields = $derived.by(
-    (): NamedEventRow[] => [
-      {
-        id: 'lastHandshake',
-        label: 'Last handshake',
-        name: lastHandshakeName,
-        hasName: lastHandshakeHasName,
-        time: lastHandshakeTimeText,
-        hasTime: lastHandshakeHasTime,
-        empty: lastHandshakeEmpty,
-      },
-      {
-        id: 'lastPeer',
-        label: 'Last peer',
-        name: lastPeerName,
-        hasName: lastPeerHasName,
-        time: lastPeerTimeText,
-        hasTime: lastPeerHasTime,
-        empty: lastPeerEmpty,
-      },
-    ],
-  )
+  const namedEventFields = $derived.by((): NamedEventRow[] => [
+    {
+      id: 'lastHandshake',
+      label: 'Last handshake',
+      name: lastHandshakeName,
+      hasName: lastHandshakeHasName,
+      time: lastHandshakeTimeText,
+      hasTime: lastHandshakeHasTime,
+      empty: lastHandshakeEmpty,
+    },
+    {
+      id: 'lastPeer',
+      label: 'Last peer',
+      name: lastPeerName,
+      hasName: lastPeerHasName,
+      time: lastPeerTimeText,
+      hasTime: lastPeerHasTime,
+      empty: lastPeerEmpty,
+    },
+  ])
 
   // SPEC 4.5.1.1: gpsSource and gpsFix are two fields, not one -- which
   // provider resolved the position, and whether there is currently a
@@ -301,9 +340,9 @@
   // are rendered with remoteField for. gpsFix never echoes anything the
   // unit sent; formatGpsFix returns one of its own literal strings, so it
   // stays in this array and is rendered plain.
-  const gpsFields = $derived.by(
-    (): FieldRow[] => [{ id: 'gpsFix', label: 'GPS fix', value: gpsFixValue, empty: gpsFixEmpty }],
-  )
+  const gpsFields = $derived.by((): FieldRow[] => [
+    { id: 'gpsFix', label: 'GPS fix', value: gpsFixValue, empty: gpsFixEmpty },
+  ])
 
   // SPEC 4.5.1.1: the banner is one element that always exists and carries
   // the state, with copy only where the state has something to say.
@@ -339,7 +378,8 @@
         // reason is never null while conn.state is 'unauthorized'
         // (SPEC 4.3.1), but the type admits it and there is no third
         // sentence to fall back to.
-        const reason = conn.unauthorizedReason === 'rejected' ? 'rejected' : 'required'
+        const reason =
+          conn.unauthorizedReason === 'rejected' ? 'rejected' : 'required'
         return `${formatUnauthorizedReason(reason)} ${formatUnauthorizedCallToAction(reason)}`
       }
       case 'restarting':
@@ -348,7 +388,9 @@
         // but this one (SPEC 4.3.1 never leaves it null here), so the
         // distinct copy for mode_change/reboot and for shutdown lives in
         // one place, formatRestartReason, rather than being retyped here.
-        return conn.restartReason === null ? '' : formatRestartReason(conn.restartReason)
+        return conn.restartReason === null
+          ? ''
+          : formatRestartReason(conn.restartReason)
     }
   })
   const bannerHasCopy = $derived(bannerText !== '')
@@ -357,8 +399,14 @@
 {#snippet field(row: FieldRow)}
   <div class="field">
     <span class="field-label">{row.label}</span>
-    <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}>
-      {row.value}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="field-value"
+      data-field={row.id}
+      data-empty={row.empty ? 'true' : undefined}
+    >
+      {row.value}{#if row.empty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
   </div>
 {/snippet}
@@ -370,8 +418,13 @@
 {#snippet remoteField(row: FieldRow)}
   <div class="field">
     <span class="field-label">{row.label}</span>
-    <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}
-      ><bdi>{row.value}</bdi>{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
+    <span
+      class="field-value"
+      data-field={row.id}
+      data-empty={row.empty ? 'true' : undefined}
+      ><bdi>{row.value}</bdi>{#if row.empty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}</span
     >
   </div>
 {/snippet}
@@ -382,8 +435,16 @@
 {#snippet namedEventField(row: NamedEventRow)}
   <div class="field">
     <span class="field-label">{row.label}</span>
-    <span class="field-value" data-field={row.id} data-empty={row.empty ? 'true' : undefined}
-      >{#if row.hasName}<bdi>{row.name}</bdi>{#if row.hasTime}{' at '}{row.time}{/if}{:else}{row.time}{/if}{#if row.empty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}</span
+    <span
+      class="field-value"
+      data-field={row.id}
+      data-empty={row.empty ? 'true' : undefined}
+      >{#if row.hasName}<bdi>{row.name}</bdi
+        >{#if row.hasTime}{' at '}{row.time}{/if}{:else}{row.time}{/if}{#if row.empty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}</span
     >
   </div>
 {/snippet}
@@ -397,7 +458,11 @@
     <div class="control" data-control={id} data-control-state={c.state}>
       {#if c.state === 'armed'}
         <div class="control-actions">
-          <button type="button" data-action="confirm" onclick={() => confirmControl(id)}>
+          <button
+            type="button"
+            data-action="confirm"
+            onclick={() => confirmControl(id)}
+          >
             {c.confirmLabel}
           </button>
           <button
@@ -413,7 +478,9 @@
              this same data-control-message element, which data-control-state
              already says is carrying it. A second hook would exist only so
              a test could ask the question the state attribute answers. -->
-        <p class="control-message" data-control-message role="alert">{c.consequence}</p>
+        <p class="control-message" data-control-message role="alert">
+          {c.consequence}
+        </p>
       {:else}
         <button
           type="button"
@@ -424,14 +491,20 @@
           {c.requestLabel}
         </button>
         {#if c.message !== null}
-          <p class="control-message" data-control-message role="alert">{c.message}</p>
+          <p class="control-message" data-control-message role="alert">
+            {c.message}
+          </p>
         {/if}
       {/if}
     </div>
   {/if}
 {/snippet}
 
-<section class="view" data-view="dashboard" aria-labelledby="view-title-dashboard">
+<section
+  class="view"
+  data-view="dashboard"
+  aria-labelledby="view-title-dashboard"
+>
   <h1 id="view-title-dashboard">Dashboard</h1>
 
   <!-- Live region so a state change (SPEC 4.3.1) is announced on its own,
@@ -446,16 +519,28 @@
     data-banner={conn.state}
     role="status"
     aria-live="polite"
-    >{bannerText}</p
   >
+    {bannerText}
+  </p>
 
   <div class="identity">
-    <span class="mode-badge" data-field="mode" data-empty={modeEmpty ? 'true' : undefined}>
-      {modeValue}{#if modeEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="mode-badge"
+      data-field="mode"
+      data-empty={modeEmpty ? 'true' : undefined}
+    >
+      {modeValue}{#if modeEmpty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
 
     <div class="face-card">
-      {@render remoteField({ id: 'face', label: 'Face', value: faceValue, empty: faceEmpty })}
+      {@render remoteField({
+        id: 'face',
+        label: 'Face',
+        value: faceValue,
+        empty: faceEmpty,
+      })}
       {@render remoteField({
         id: 'status',
         label: 'Status',

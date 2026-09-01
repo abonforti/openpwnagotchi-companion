@@ -254,12 +254,16 @@ function reconcileClientIdentity(): void {
  * by way of that entry's `disabled` field -- reads the same fact instead of
  * restating it.
  */
-function staticDisabledReasonFor(id: ControlId, s: Stats | null): string | null {
+function staticDisabledReasonFor(
+  id: ControlId,
+  s: Stats | null,
+): string | null {
   // SPEC 4.5.2.2: disabled when the mode is not AUTO or PASV, including a
   // null mode -- the opposite of the mode switch above, and for the
   // opposite reason: entering PASV on a unit with no agent is not a rescue,
   // it is a request the unit will refuse.
-  if (id === 'pasv' && !isAutoOrPasv(s?.mode ?? null)) return PASV_DISABLED_REASON
+  if (id === 'pasv' && !isAutoOrPasv(s?.mode ?? null))
+    return PASV_DISABLED_REASON
   return null
 }
 
@@ -277,10 +281,18 @@ interface BaseComputed {
  * sentence that survives that last case. Pure: no mutation of `armed` or
  * `pending` happens here, only a read of them.
  */
-function computeBase(id: ControlId, sendable: boolean, s: Stats | null): BaseComputed {
+function computeBase(
+  id: ControlId,
+  sendable: boolean,
+  s: Stats | null,
+): BaseComputed {
   const isPending = pending !== null && controlOf(pending.kind) === id
   if (isPending) {
-    return { state: 'pending', disabled: true, message: pendingMessageFor((pending as Pending).kind) }
+    return {
+      state: 'pending',
+      disabled: true,
+      message: pendingMessageFor((pending as Pending).kind),
+    }
   }
 
   const staticDisabledReason = staticDisabledReasonFor(id, s)
@@ -292,7 +304,10 @@ function computeBase(id: ControlId, sendable: boolean, s: Stats | null): BaseCom
   // where it applies, then the last message -- which is shown regardless of
   // why (or whether) the control is currently disabled, because a failure
   // or an abandonment outlives the control being disabled.
-  const message = sendable && staticDisabledReason !== null ? staticDisabledReason : lastMessage[id]
+  const message =
+    sendable && staticDisabledReason !== null
+      ? staticDisabledReason
+      : lastMessage[id]
 
   return { state, disabled, message }
 }
@@ -311,7 +326,11 @@ function buildMode(s: Stats | null, sendable: boolean): ControlEntry {
   }
 }
 
-function buildPasv(s: Stats | null, sendable: boolean, caps: Capabilities | null): ControlEntry {
+function buildPasv(
+  s: Stats | null,
+  sendable: boolean,
+  caps: Capabilities | null,
+): ControlEntry {
   const target = pasvTarget(s)
   const currentlyOn = target === 'off'
   const base = computeBase('pasv', sendable, s)
@@ -371,7 +390,11 @@ function buildEntry(
   }
 }
 
-function buildView(s: Stats | null, sendable: boolean, caps: Capabilities | null): ControlsView {
+function buildView(
+  s: Stats | null,
+  sendable: boolean,
+  caps: Capabilities | null,
+): ControlsView {
   return {
     mode: buildEntry('mode', s, sendable, caps),
     pasv: buildEntry('pasv', s, sendable, caps),
@@ -406,7 +429,9 @@ function currentView(): ControlsView {
 
 const controlsWritable = writable<ControlsView>(currentView())
 
-export const controls: Readable<ControlsView> = { subscribe: controlsWritable.subscribe }
+export const controls: Readable<ControlsView> = {
+  subscribe: controlsWritable.subscribe,
+}
 
 function render(): void {
   reconcileClientIdentity()
@@ -421,7 +446,10 @@ function render(): void {
   // armed control, not the whole view: `disabled` and `visible` do not
   // depend on `armed` (only `state` does), so this is safe to compute before
   // deciding whether to clear it.
-  if (armed !== null && !isControlAvailable(buildEntry(armed, s, sendable, caps))) {
+  if (
+    armed !== null &&
+    !isControlAvailable(buildEntry(armed, s, sendable, caps))
+  ) {
     armed = null
   }
   controlsWritable.set(buildView(s, sendable, caps))

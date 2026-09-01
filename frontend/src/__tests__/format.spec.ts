@@ -216,7 +216,7 @@ describe('formatMode', () => {
     expect(formatMode('PASV')).toBe('PASV')
   })
 
-  it('renders MANUAL as MANU, matching the word on the unit\'s own display', () => {
+  it("renders MANUAL as MANU, matching the word on the unit's own display", () => {
     expect(formatMode('MANUAL')).toBe('MANU')
   })
 
@@ -249,15 +249,21 @@ function gpsReading(overrides: Partial<Gps> = {}): Gps {
 
 describe('formatGpsFix', () => {
   it('reads "off" when gps.enabled is false, regardless of fix', () => {
-    expect(formatGpsFix(gpsReading({ enabled: false, fix: false, source: null }))).toBe('off')
+    expect(
+      formatGpsFix(gpsReading({ enabled: false, fix: false, source: null })),
+    ).toBe('off')
     // Even if fix were somehow true alongside enabled: false, "off" still
     // wins: nobody is looking is a fact about the source, not about whether
     // a fix happens to be cached.
-    expect(formatGpsFix(gpsReading({ enabled: false, fix: true, source: null }))).toBe('off')
+    expect(
+      formatGpsFix(gpsReading({ enabled: false, fix: true, source: null })),
+    ).toBe('off')
   })
 
   it('reads "no fix" when enabled but not fixed', () => {
-    expect(formatGpsFix(gpsReading({ enabled: true, fix: false }))).toBe('no fix')
+    expect(formatGpsFix(gpsReading({ enabled: true, fix: false }))).toBe(
+      'no fix',
+    )
   })
 
   it('reads "fix" when enabled and fixed', () => {
@@ -272,13 +278,21 @@ describe('formatGpsSource', () => {
     // case a formatGpsSource that copies formatGpsFix's "off" branch gets
     // wrong: source: null with enabled: false must still be DASH here, not
     // "off", even though formatGpsFix on the same reading is "off".
-    expect(formatGpsSource(gpsReading({ enabled: false, source: null }))).toBe(DASH)
+    expect(formatGpsSource(gpsReading({ enabled: false, source: null }))).toBe(
+      DASH,
+    )
   })
 
   it('renders the source name as it arrived when enabled', () => {
-    expect(formatGpsSource(gpsReading({ enabled: true, source: 'gpsd' }))).toBe('gpsd')
-    expect(formatGpsSource(gpsReading({ enabled: true, source: 'bettercap' }))).toBe('bettercap')
-    expect(formatGpsSource(gpsReading({ enabled: true, source: 'browser' }))).toBe('browser')
+    expect(formatGpsSource(gpsReading({ enabled: true, source: 'gpsd' }))).toBe(
+      'gpsd',
+    )
+    expect(
+      formatGpsSource(gpsReading({ enabled: true, source: 'bettercap' })),
+    ).toBe('bettercap')
+    expect(
+      formatGpsSource(gpsReading({ enabled: true, source: 'browser' })),
+    ).toBe('browser')
   })
 })
 
@@ -317,9 +331,16 @@ describe('formatChannel', () => {
 
 // Finds the first "H:MM" or "HH:MM" run in the string and returns it parsed,
 // along with whether the string appears to carry a 12-hour meridiem marker.
-function extractClock(text: string): { hour: number; minute: number; hasMeridiem: boolean } {
+function extractClock(text: string): {
+  hour: number
+  minute: number
+  hasMeridiem: boolean
+} {
   const match = /(\d{1,2}):(\d{2})/.exec(text)
-  expect(match, `expected an "H:MM" clock time in ${JSON.stringify(text)}`).not.toBeNull()
+  expect(
+    match,
+    `expected an "H:MM" clock time in ${JSON.stringify(text)}`,
+  ).not.toBeNull()
   const [, h, m] = match as RegExpExecArray
   return {
     hour: Number(h),
@@ -331,7 +352,10 @@ function extractClock(text: string): { hour: number; minute: number; hasMeridiem
 // True when the rendered hour is consistent with the Date's local hour,
 // allowing for a 12-hour clock (where local hour 0 or 12 both render as 12,
 // and 13-23 render as 1-11).
-function hourMatches(rendered: { hour: number; hasMeridiem: boolean }, date: Date): boolean {
+function hourMatches(
+  rendered: { hour: number; hasMeridiem: boolean },
+  date: Date,
+): boolean {
   const local = date.getHours()
   if (rendered.hour === local) return true
   if (rendered.hasMeridiem) {
@@ -374,7 +398,7 @@ describe('formatUnitTime', () => {
     expect(formatUnitTime(base)).toBe(formatUnitTime(base + 45))
   })
 
-  it('still renders a time of day, not a relative-future phrase, for a timestamp in the phone\'s future', () => {
+  it("still renders a time of day, not a relative-future phrase, for a timestamp in the phone's future", () => {
     // SPEC.md: "A timestamp in the phone's future still renders its time of
     // day, which is the whole point of the rule above." A unit with no RTC
     // can stamp an event hours ahead of the phone's own clock; the rule this
@@ -443,31 +467,41 @@ describe('formatUnitTime', () => {
     it('renders the bare clock, no date and no year, for an instant today', () => {
       fakeNow()
       const today0914 = new Date(2026, 7, 15, 9, 14, 0)
-      expect(formatUnitTime(Math.floor(today0914.getTime() / 1000))).toBe('09:14')
+      expect(formatUnitTime(Math.floor(today0914.getTime() / 1000))).toBe(
+        '09:14',
+      )
     })
 
     it('renders the unpadded day and month, no year, for an earlier instant this year', () => {
       fakeNow()
       const earlierThisYear = new Date(2026, 7, 5, 9, 14, 0) // 5 Aug 2026, same year as "now"
-      expect(formatUnitTime(Math.floor(earlierThisYear.getTime() / 1000))).toBe('5 Aug 09:14')
+      expect(formatUnitTime(Math.floor(earlierThisYear.getTime() / 1000))).toBe(
+        '5 Aug 09:14',
+      )
     })
 
     it('renders the unpadded day, month and year for an instant in another year', () => {
       fakeNow()
       const lastAugust = new Date(2025, 7, 5, 9, 14, 0) // 5 Aug 2025, a year before "now"
-      expect(formatUnitTime(Math.floor(lastAugust.getTime() / 1000))).toBe('5 Aug 2025 09:14')
+      expect(formatUnitTime(Math.floor(lastAugust.getTime() / 1000))).toBe(
+        '5 Aug 2025 09:14',
+      )
     })
 
     it('does not zero-pad a double-digit day either: the rule is "no padding", not "pad to two only for single digits"', () => {
       fakeNow()
       const midMonthLastYear = new Date(2025, 7, 15, 9, 14, 0) // 15 Aug 2025
-      expect(formatUnitTime(Math.floor(midMonthLastYear.getTime() / 1000))).toBe('15 Aug 2025 09:14')
+      expect(
+        formatUnitTime(Math.floor(midMonthLastYear.getTime() / 1000)),
+      ).toBe('15 Aug 2025 09:14')
     })
 
     it('still pads the hour and minute even where the day is bare', () => {
       fakeNow()
       const earlySingleDigitClock = new Date(2026, 7, 5, 3, 4, 0) // 5 Aug 2026, 03:04
-      expect(formatUnitTime(Math.floor(earlySingleDigitClock.getTime() / 1000))).toBe('5 Aug 03:04')
+      expect(
+        formatUnitTime(Math.floor(earlySingleDigitClock.getTime() / 1000)),
+      ).toBe('5 Aug 03:04')
     })
 
     it('treats "this year" by calendar year, not by a 365-day window: 1 Jan this year carries no year, 31 Dec last year does', () => {
@@ -480,8 +514,12 @@ describe('formatUnitTime', () => {
       // but would mishandle a "now" nearer the turn of the year; asserted
       // directly against the calendar-year rule instead of relying on that
       // coincidence.
-      expect(formatUnitTime(Math.floor(jan1ThisYear.getTime() / 1000))).toBe('1 Jan 09:14')
-      expect(formatUnitTime(Math.floor(dec31LastYear.getTime() / 1000))).toBe('31 Dec 2025 09:14')
+      expect(formatUnitTime(Math.floor(jan1ThisYear.getTime() / 1000))).toBe(
+        '1 Jan 09:14',
+      )
+      expect(formatUnitTime(Math.floor(dec31LastYear.getTime() / 1000))).toBe(
+        '31 Dec 2025 09:14',
+      )
     })
   })
 })
@@ -548,7 +586,6 @@ describe('non-finite and negative-duration input is treated as not known', () =>
     expect(formatUnitTime(Infinity)).toBe(DASH)
     expect(formatUnitTime(-Infinity)).toBe(DASH)
   })
-
 })
 
 // ---------------------------------------------------------------------------
@@ -582,7 +619,14 @@ describe('formatConnectionState', () => {
     // pinned strings themselves happened to collide - they do not here,
     // and this test is what would catch the merge itself rather than
     // relying on that coincidence.
-    const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'unauthorized', 'restarting']
+    const states: ConnectionState[] = [
+      'connecting',
+      'connected',
+      'degraded',
+      'offline',
+      'unauthorized',
+      'restarting',
+    ]
     const sentences = states.map((state) => formatConnectionState(state))
     expect(new Set(sentences).size).toBe(states.length)
   })
@@ -593,7 +637,9 @@ describe('formatUnauthorizedReason', () => {
     ['rejected', 'The unit refused the stored token.'],
     ['required', 'The unit requires a token and none is stored.'],
   ] as const)('%s -> %s', (reason, expected) => {
-    expect(formatUnauthorizedReason(reason as UnauthorizedReason)).toBe(expected)
+    expect(formatUnauthorizedReason(reason as UnauthorizedReason)).toBe(
+      expected,
+    )
   })
 
   it('gives the two reasons different sentences: a swap or a merge both fail this', () => {
@@ -604,7 +650,9 @@ describe('formatUnauthorizedReason', () => {
     // further than that weak shape by pinning each sentence to its exact
     // reason above; this second assertion only adds that a merge (both
     // reasons returning one shared string) is caught too.
-    expect(formatUnauthorizedReason('rejected')).not.toBe(formatUnauthorizedReason('required'))
+    expect(formatUnauthorizedReason('rejected')).not.toBe(
+      formatUnauthorizedReason('required'),
+    )
   })
 })
 
@@ -613,11 +661,15 @@ describe('formatUnauthorizedCallToAction', () => {
     ['rejected', 'Fix it in Settings.'],
     ['required', 'Add it in Settings.'],
   ] as const)('%s -> %s', (reason, expected) => {
-    expect(formatUnauthorizedCallToAction(reason as UnauthorizedReason)).toBe(expected)
+    expect(formatUnauthorizedCallToAction(reason as UnauthorizedReason)).toBe(
+      expected,
+    )
   })
 
   it('gives the two reasons different calls to action: a swap or a merge both fail this', () => {
-    expect(formatUnauthorizedCallToAction('rejected')).not.toBe(formatUnauthorizedCallToAction('required'))
+    expect(formatUnauthorizedCallToAction('rejected')).not.toBe(
+      formatUnauthorizedCallToAction('required'),
+    )
   })
 })
 
@@ -639,11 +691,17 @@ describe('formatUnauthorizedCallToAction', () => {
 describe('the Dashboard unauthorized banner is this composition (SPEC 4.5.1.1, 4.5.2.1)', () => {
   it.each([
     ['rejected', 'The unit refused the stored token. Fix it in Settings.'],
-    ['required', 'The unit requires a token and none is stored. Add it in Settings.'],
-  ] as const)('%s composes to the pinned banner sentence', (reason, pinnedBannerSentence) => {
-    const composed = `${formatUnauthorizedReason(reason as UnauthorizedReason)} ${formatUnauthorizedCallToAction(reason as UnauthorizedReason)}`
-    expect(composed).toBe(pinnedBannerSentence)
-  })
+    [
+      'required',
+      'The unit requires a token and none is stored. Add it in Settings.',
+    ],
+  ] as const)(
+    '%s composes to the pinned banner sentence',
+    (reason, pinnedBannerSentence) => {
+      const composed = `${formatUnauthorizedReason(reason as UnauthorizedReason)} ${formatUnauthorizedCallToAction(reason as UnauthorizedReason)}`
+      expect(composed).toBe(pinnedBannerSentence)
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -677,7 +735,7 @@ describe('formatLatency', () => {
     expect(formatLatency(0)).toBe('0 ms')
   })
 
-  it('does not round to seconds even for a duration under a second\'s worth of milliseconds either way', () => {
+  it("does not round to seconds even for a duration under a second's worth of milliseconds either way", () => {
     expect(formatLatency(999)).toBe('999 ms')
     expect(formatLatency(1000)).toBe('1000 ms')
   })
@@ -688,14 +746,17 @@ describe('formatLastErrorTime', () => {
     vi.useRealTimers()
   })
 
-  it('renders a bare time of day for a stamp made today, on the phone\'s own clock', () => {
+  it("renders a bare time of day for a stamp made today, on the phone's own clock", () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 7, 15, 12, 0, 0)) // "now": local noon, 15 Aug 2026
     const stampToday = new Date(2026, 7, 15, 9, 14, 0).getTime()
 
     const rendered = formatLastErrorTime(stampToday)
     const match = /(\d{1,2}):(\d{2})/.exec(rendered)
-    expect(match, `expected an "H:MM" clock time in ${JSON.stringify(rendered)}`).not.toBeNull()
+    expect(
+      match,
+      `expected an "H:MM" clock time in ${JSON.stringify(rendered)}`,
+    ).not.toBeNull()
     const [, h, m] = match as RegExpExecArray
     expect(Number(h)).toBe(9)
     expect(m).toBe('14')
@@ -788,24 +849,34 @@ describe('formatLastErrorCode', () => {
   // .spec.ts pins that half), not this formatter's.
   it('log_unavailable renders both of its sentences verbatim, not just the first', () => {
     const rendered = formatLastErrorCode(frameLastError('log_unavailable'))
-    expect(rendered).toBe('The unit could not read its log. With no agent it has no configuration to find the path in.')
+    expect(rendered).toBe(
+      'The unit could not read its log. With no agent it has no configuration to find the path in.',
+    )
     expect(rendered).not.toContain('log_unavailable')
   })
 
-  it('an unrecognised code never leaks through verbatim (SPEC 4.5.2.2\'s rule already required of the command path)', () => {
+  it("an unrecognised code never leaks through verbatim (SPEC 4.5.2.2's rule already required of the command path)", () => {
     const distinctive = 'zzz_unmapped_diagnostic_code_xyz'
-    expect(formatLastErrorCode(frameLastError(distinctive))).not.toContain(distinctive)
+    expect(formatLastErrorCode(frameLastError(distinctive))).not.toContain(
+      distinctive,
+    )
   })
 
   it('two different unrecognised codes render the identical generic sentence - the generic case must not quietly start printing the code again', () => {
-    const first = formatLastErrorCode(frameLastError('totally_unrecognised_code_alpha'))
-    const second = formatLastErrorCode(frameLastError('completely_different_unrecognised_beta'))
+    const first = formatLastErrorCode(
+      frameLastError('totally_unrecognised_code_alpha'),
+    )
+    const second = formatLastErrorCode(
+      frameLastError('completely_different_unrecognised_beta'),
+    )
     expect(second).toBe(first)
   })
 
   it('a pinned code renders a sentence distinct from the generic one an unmapped code gets', () => {
     const pinned = formatLastErrorCode(frameLastError('pasv_unavailable'))
-    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_one'))
+    const generic = formatLastErrorCode(
+      frameLastError('an_unmapped_diagnostic_code_one'),
+    )
     expect(pinned).not.toBe(generic)
   })
 
@@ -820,7 +891,9 @@ describe('formatLastErrorCode', () => {
   // sentence, not to a coerced non-string message) without this test to
   // catch the sentence itself.
   it('the generic sentence contains none of the literal substrings a coercion bug would print', () => {
-    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_two'))
+    const generic = formatLastErrorCode(
+      frameLastError('an_unmapped_diagnostic_code_two'),
+    )
     expect(generic).not.toContain('null')
     expect(generic).not.toContain('undefined')
     expect(generic).not.toContain('[object')
@@ -832,7 +905,12 @@ describe('formatLastErrorCode', () => {
   // the DOM level; asserted here too now that the function is known to take
   // the whole LastError and therefore can make the distinction itself.
   it('a close renders its numeric code, a frame with the same digits as its code does not', () => {
-    const close = formatLastErrorCode({ source: 'close', code: '1006', message: '', at: 1_700_000_000_000 })
+    const close = formatLastErrorCode({
+      source: 'close',
+      code: '1006',
+      message: '',
+      at: 1_700_000_000_000,
+    })
     const frame = formatLastErrorCode(frameLastError('1006'))
     expect(close).toContain('1006')
     expect(frame).not.toContain('1006')
@@ -887,7 +965,12 @@ describe('formatLastErrorCode', () => {
   // them into each other, leaked the raw code, threw on the unfamiliar
   // `source`, or rendered nothing passed regardless.
   it('pong_timeout (source "local") says the link stopped responding, and never leaks the raw code', () => {
-    const rendered = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    const rendered = formatLastErrorCode({
+      source: 'local',
+      code: 'pong_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
     expect(rendered.trim().length).toBeGreaterThan(0)
     expect(rendered).not.toContain('pong_timeout')
     expect(rendered.toLowerCase()).toContain('stopped responding')
@@ -910,14 +993,21 @@ describe('formatLastErrorCode', () => {
   // working and went away, against one that never came up ... the
   // difference is most of what the reader is on this screen to learn."
   it('pong_timeout and connect_timeout render different sentences from each other and from the generic case', () => {
-    const pongTimeout = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    const pongTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'pong_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
     const connectTimeout = formatLastErrorCode({
       source: 'local',
       code: 'connect_timeout',
       message: '',
       at: 1_700_000_000_000,
     })
-    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_three'))
+    const generic = formatLastErrorCode(
+      frameLastError('an_unmapped_diagnostic_code_three'),
+    )
     expect(pongTimeout).not.toBe(connectTimeout)
     expect(pongTimeout).not.toBe(generic)
     expect(connectTimeout).not.toBe(generic)
@@ -934,18 +1024,30 @@ describe('formatLastErrorCode', () => {
   // the case arm and falling through to the generic sentence was caught by
   // nothing before this test existed.
   it('socket_failed (source "local") renders the exact pinned sentence, distinct from the other two local codes', () => {
-    const socketFailed = formatLastErrorCode({ source: 'local', code: 'socket_failed', message: '', at: 1_700_000_000_000 })
+    const socketFailed = formatLastErrorCode({
+      source: 'local',
+      code: 'socket_failed',
+      message: '',
+      at: 1_700_000_000_000,
+    })
     expect(socketFailed).toBe('The browser refused to open the connection.')
     expect(socketFailed).not.toContain('socket_failed')
 
-    const pongTimeout = formatLastErrorCode({ source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 })
+    const pongTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'pong_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
     const connectTimeout = formatLastErrorCode({
       source: 'local',
       code: 'connect_timeout',
       message: '',
       at: 1_700_000_000_000,
     })
-    const generic = formatLastErrorCode(frameLastError('an_unmapped_diagnostic_code_four'))
+    const generic = formatLastErrorCode(
+      frameLastError('an_unmapped_diagnostic_code_four'),
+    )
     expect(socketFailed).not.toBe(pongTimeout)
     expect(socketFailed).not.toBe(connectTimeout)
     expect(socketFailed).not.toBe(generic)
@@ -1049,12 +1151,18 @@ describe('formatLastErrorMessage', () => {
     ['null', null],
     ['undefined', undefined],
     ['a boolean', true],
-    ['an array (the audit finding: an array-valued message reached the screen)', ['unexpected', 'array', 'payload']],
+    [
+      'an array (the audit finding: an array-valued message reached the screen)',
+      ['unexpected', 'array', 'payload'],
+    ],
     ['a plain object', { unexpected: 'object payload' }],
-  ] as const)('a %s message is treated as absent, not coerced to its string form', (_label, notAString) => {
-    const rendered = formatLastErrorMessage(notAString as unknown as string)
-    expect(rendered).toBe('')
-  })
+  ] as const)(
+    'a %s message is treated as absent, not coerced to its string form',
+    (_label, notAString) => {
+      const rendered = formatLastErrorMessage(notAString as unknown as string)
+      expect(rendered).toBe('')
+    },
+  )
 
   it('does not throw when message is not actually a string at runtime, and still returns a string', () => {
     const notAString = 12345 as unknown as string

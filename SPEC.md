@@ -367,6 +367,130 @@ of assigning it, the machine-checked entry fails and this section is what has to
 - Never bind `0.0.0.0`, `::`, or a hostname. Only literal IPv4 addresses the host actually has,
   selected by §2.3.1.
 
+#### 2.3.0 A port is a number the owner chose (issue #16)
+
+`ws_port` and `http_port` are read and used without validation, so `ws_port = 0` is accepted and
+the operating system assigns an arbitrary free port. A unit configured that way listens on a port
+nobody chose and nothing announces which one, which is the same shape §2.3 refuses for addresses:
+the security model is that the owner picks what is exposed.
+
+**A port is an integer in 1-65535, and nothing else.** Zero is refused, and so is a negative
+number, anything above 65535, a float -- including a whole-valued one like `8082.0` -- a string
+that happens to contain digits, and a boolean. TOML has distinct types for all of these and the
+owner wrote one of them on purpose; a key holding `"8082"` or `8082.0` is a type mismatch and
+guessing at the intent is how a unit ends up listening somewhere nobody meant. **A boolean is
+refused explicitly**, because Python makes `True` an `int` equal to 1 and would otherwise accept
+`ws_port = true` as port 1 -- an implementation detail of the language leaking out as a
+configuration decision the owner never made.
+
+**The check happens when `Listeners` is constructed**, before any pass runs, which is where
+§2.3.1 already validates address entries.
+
+**The refusal names the key and never the value, and a test enforces that rather than a comment.**
+This log is served to a client by `get_log` (§2.9), so a config value written into it is a config
+value on the wire. That rule is already stated at length beside the `gpsd_host` refusal, and it
+was violated anyway by the next refusal written into the same file, about twelve hundred lines
+below it -- twice, by two different authors, with the reasoning sitting there in full. A rule that
+is broken by the next person to write the same kind of code is a rule that needs a check and not
+more prose. So: **no logging call in `plugin/companion.py` may interpolate a configuration
+value**, and a test reads the module and asserts it.
+
+**A filesystem path from the config is a configuration value.** `tls_cert`, `tls_key`, `web_root`,
+`handshake_dir` and `log_path` are paths the owner wrote, and a refusal that prints one describes
+their filesystem to whoever is reading the log through the socket. Name the key instead: the owner
+knows what they configured, and `tls_cert could not be opened` is the same diagnostic as the path
+without being a description of somebody's disk. The same holds for a path this plugin *built* from
+one, because the capture directory is config and the filename half is derived from an SSID, which
+is remote.
+
+**And the message another library raises counts.** `ipaddress` embeds the rejected value in its
+own `ValueError` text, so catching one and logging `err` publishes the value without this file
+ever interpolating it. That was found while fixing the direct cases, and it is the reason the rule
+is about what reaches the log rather than about the syntax of the call.
+
+**`gpsd_port` is a port too, and it was missed the first time.** The rule above is about what a
+port is, not about which two keys happen to open a listener, and `gpsd_port` is read with a bare
+`int(...)` inside the poll's `try`. A value like `gpsd_port = "anything"` therefore reaches the
+log as `invalid literal for int() with base 10: 'anything'` -- the owner's raw configuration value
+on a line `get_log` serves, through another library's exception text, which is the exact route the
+`ipaddress` case was fixed for two paragraphs above. It is validated with the same `valid_port`,
+**at the poll and on the value the poll will use**, which is where §2.12 already validates
+`gpsd_host` and for the same reason: the key can be edited between passes. A refused value skips
+the poll and logs the key name, never the value, and GPS reports unavailable rather than the
+plugin failing. **The refusal is logged once and not once per pass**, because the poll runs on a
+timer and a message repeated every few seconds is how a bounded log that `get_log` serves loses
+everything else in it. The same shape as the unknown-configuration-key warning in §2.2.1:
+named once, then quiet until the port is valid again. Not "until the value changes" -- a port
+edited from `0` to `-1` is the same standing misconfiguration and says nothing new.
+
+**An explicit `null` means different things for the two listener ports and for `gpsd_port`, on
+purpose.** `ws_port` and `http_port` are read with `.get(key, DEFAULTS[key])` so that a key present
+and holding `null` is refused rather than folded into "absent"; `gpsd_port` is read through
+`option()`, which falls back to the default whenever the value is `None`, so `gpsd_port = null`
+polls the default port. The divergence is about what a wrong guess costs. Guessing at a listener
+port opens a socket on a port nobody chose, which is the whole of §2.3's security model; guessing
+at `gpsd_port` makes an outbound connection to the standard port on a host the owner named
+explicitly and validated one line earlier, and if nothing is there the poll fails and GPS reports
+unavailable. TOML has no null literal either, so the case cannot arise from a config file the
+owner wrote. What is validated identically is the value itself: `valid_port` is the same function
+and the same 1-65535, and only the resolution of a missing value differs.
+
+**The listening line is the one exemption, and it is narrow.** `[companion] listening on
+wss://<address>:<port>` interpolates `self._ws_port` and `self._http_port`, and by the letter of
+the rule that is a configuration value in a log served to a client. It stays, for a reason that is
+about disclosure and not about convenience: both ports are already published to every client by
+design -- one is the port the client connected on, and the other is written into the
+`connect-src` origin of the CSP (§2.15.1) that the same client is handed. A rule exists to keep a
+value from reaching somebody who does not have it, and these two it cannot. It does not extend to
+any other attribute that happens to be read from the config.
+
+**The bound addresses in that log are a separate question, and the answer is the same but weaker.**
+The listening line and the warnings beside it also name the IPv4 addresses the plugin bound, which
+come from `bind_addresses`. A client already knows the one it reached, so for that address the
+argument above holds unchanged -- but when `bind_addresses` covers a block, the log names the
+siblings it did not reach, and those it did not have. That is accepted rather than argued away:
+the addresses are the tether subnets of §2.3.1, a `172.20.10.x` or `10.0.0.2` that any client on
+the link can see for itself, and a listener that will not say where it is listening is a listener
+nobody can debug. If `bind_addresses` ever grows to hold something the owner would not publish,
+this paragraph is what has to change first.
+
+**The mechanical check cannot see it, and that is worth saying out loud.** The checker follows
+locals and one hop through a parameter, not attributes, so `self._ws_port` is invisible to it and
+the exemption above costs nothing to enforce -- but the same blindness means an attribute is one
+shape in which this leak can return unnoticed. **The other is an exception object**, and it is the
+shape that produced the two defects this section exists for: `except ... as err` followed by
+logging `err` interpolates nothing the checker can see, while the library that raised it may have
+put the rejected value in the text. Both gaps are review's to cover, and the checker's own
+docstring names them rather than leaving them to be rediscovered.
+
+**The plugin's own `DEFAULTS` table is not a configuration value.** It is a constant compiled into
+the file, identical on every unit, and it discloses nothing about the owner -- a message saying
+the interval fell back to `20` says what the code would have said anyway. The distinction matters
+because the first mechanical version of this check flagged `clamp_interval` logging the default it
+fell back to, which is the correct message: a check that forbids the correct message is a check
+somebody turns off. What is forbidden is a value that came from the owner's file, whether it
+arrives directly, through a local, or through a parameter that every call site fills from config.
+
+**Two tests asserted the defect.** They required the warning to contain the owner's raw string, so
+the suite was holding the leak in place: an implementation that stopped leaking failed them. They
+are rewritten to assert the key is named, which is what the correct message does. A test that
+pins a defect is worse than no test, because fixing the defect then looks like breaking the
+suite. The same shape as the secret scanner's test
+that no probe appears contiguously in its own source: the file is the fixture.
+
+**A refused port stops a listener, not the plugin.** The listener that
+would have used it is not started, the refusal is logged naming the key, and the plugin carries on
+-- §2.2.1's rule, that a pwnagotchi which will not boot because of a misconfiguration is worse
+than the misconfiguration. Refusing the port rather than the process also keeps the other listener
+alive, so a typo in `ws_port` still leaves the PWA served and a screen able to say what happened.
+
+**The test harness must not be the reason this was invisible.** `BindRecorder.record` discarded
+every bind on port 0, because the harness itself probes for free ports that way, and the effect
+was that `assert_no_wildcard()` watched nothing for exactly that case: every test asserting the
+plugin never binds the wildcard passed while blind to it. A recorder that filters by port cannot
+tell the harness's own probe from the plugin's bind; it has to distinguish them by which socket
+made the call, not by what the call looked like.
+
 #### 2.3.1 Address selection and the rebinding loop
 
 `bind_addresses` is a list whose entries are each either a literal IPv4 address or an IPv4 CIDR
@@ -6084,6 +6208,72 @@ not the rule. **Every excluded word gets its own probe**, shaped so it passes th
 alphabet tests and is refused only by the exclusion: a probe that fails on shape first proves
 nothing about the word list, and a word list with one probe standing for all of it is a list
 where deleting eight entries is invisible.
+
+#### 5.1.3 The frontend gets a formatter and not a linter (issue #113)
+
+`frontend/` had neither. The gates were `tsc --noEmit`, `svelte-check` and `vitest`, all of which
+check meaning and none of which checks form, while the plugin side has run `ruff` in CI since the
+beginning. The asymmetry cost twice, and both costs name the same tool.
+
+Quote style drifted and had to be unified by a script over a thousand lines of test; the script
+had a bug and corrupted about ninety comment lines, and `tsc` caught it only because the
+corruption happened to break syntax. A corruption producing valid TypeScript would have landed.
+It did, elsewhere: three comment blocks in `lib/ws.ts` reached `master` beginning mid-sentence,
+where a citation was stripped from the opening clause. Nothing mechanical noticed, because
+nothing mechanical was looking.
+
+**Prettier, over `frontend/**`, checked in CI.** Both costs are formatting problems and a
+formatter removes the whole class: quote style, wrapping and trailing commas stop being anybody's
+decision, and the hand-conversion that caused the corruption never needs writing again.
+
+**ESLint is deliberately not adopted, and this records why rather than leaving it to be
+re-litigated.** Three reasons, in order of weight. A rule set is a set of opinions, and adopting
+one wholesale imports opinions nobody here chose into a repository that argues for its own -- the
+`E`-and-`F`-only `ruff.toml` on the plugin side makes exactly this argument, and taking the
+TypeScript and Svelte plugin defaults would be the opposite of it. The semantic rules it would add
+overlap heavily with what `tsc` and `svelte-check` already refuse. And it arrives with a plugin
+graph of roughly a hundred packages on a tree that #31 already found is two thirds service worker,
+which is a supply-chain cost paid in every install for a gate that has not yet caught anything
+here.
+
+**What would change that.** A defect class that `tsc` cannot see and a formatter cannot prevent --
+a floating promise is the honest example, and this client is full of promises. If one of those
+reaches `master`, the calculation above is wrong and this paragraph is the thing to come back to.
+
+**The first run's diff lands on its own**, separate from any behaviour change, so that a reviewer
+reading a later diff is never asked to tell reformatting from work.
+
+**The damaged comments are repaired in the same change.** A formatter cannot fix prose, and this
+is the one moment somebody is reading all of it with that question in mind. The repair is a
+capital letter and nothing more, because there is nothing more to restore: the three blocks
+entered the repository already truncated, in the commit that wrote them, so no earlier revision
+holds the clause that was lost. Guessing at the citation would be worse than the missing one --
+the sentence that survives is true and self-contained, and an invented section number is a claim
+somebody would later act on.
+
+#### 5.1.4 The workflows are checked, and one of them only ever runs once (issue #180)
+
+CI gates the plugin, the frontend, the schemas, the pinned facts and repository hygiene, and
+nothing gates `.github/workflows/` itself. A mistyped key, an expression that cannot evaluate or a
+`uses:` that does not resolve is discovered when it runs.
+
+For `ci.yml` and `pull-request.yml` that is a short wait. For `release.yml` it is not: that
+workflow runs **only on a pushed tag**, which is the worst possible moment to find a typo -- the
+tag exists, the version bump is merged, and the fix means moving a tag or cutting another version.
+`upstream-drift.yml` has the same shape at a longer interval: it runs on a schedule, so a break in
+it is silent until the week it should have reported drift and did not. That is the failure mode
+§5.1's own rule about exit status already names -- a check whose failure is indistinguishable from
+a clean result is not a check.
+
+**`actionlint` runs over every file in `.github/workflows/`**, on every pull request, so a
+workflow that cannot run fails on the branch that broke it rather than on the tag that needed it.
+
+**Third-party actions are pinned to a commit SHA (issue #8)**, with the human-readable version in
+a trailing comment so a reader can tell what they are looking at. A floating major tag is a
+promise from somebody else that they will not retag; the CI jobs hold `contents: read` and no
+secrets, but the CodeQL workflow asks for `security-events: write`, which is enough to want the
+promise in writing. Dependabot updates the pinned SHAs, which is the arrangement that makes
+pinning sustainable rather than a thing that rots.
 
 ### 5.2 `release.yml` (on tag `v*`)
 

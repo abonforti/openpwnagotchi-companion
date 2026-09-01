@@ -520,18 +520,26 @@ def test_keepalive_interval_inside_the_range_is_left_alone(wired_plugin_factory,
 def test_keepalive_interval_non_numeric_falls_back_to_default_and_warns(
     wired_plugin_factory, caplog
 ):
+    """SPEC 2.3.0: the WARNING names the key and states the default it fell
+    back to, and never repeats the owner's raw value - that value is served
+    to a client by `get_log` (SPEC 2.9), so logging it verbatim would put a
+    configuration value on the wire."""
     with caplog.at_level("WARNING"):
         plugin, agent, sent = wired_plugin_factory({"keepalive_interval": "20s"})
     admit_a_client(plugin)
 
     stop = run_ticker(plugin, passes=1)
 
-    assert stop.waits == [float(companion.DEFAULTS["keepalive_interval"])]
+    default = companion.DEFAULTS["keepalive_interval"]
+    assert stop.waits == [float(default)]
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any(
-        "keepalive_interval" in r.getMessage() and "20s" in r.getMessage()
+        "keepalive_interval" in r.getMessage() and str(default) in r.getMessage()
         for r in warnings
-    ), "a non-numeric value must be reported at WARNING, distinct from the INFO clamp lines"
+    ), "a non-numeric value must be reported at WARNING, naming the key and the default used"
+    assert not any(
+        "20s" in r.getMessage() for r in caplog.records
+    ), "the owner's raw value must never appear in the log"
 
 
 @pytest.mark.parametrize(
@@ -757,14 +765,23 @@ def test_rebind_interval_inside_the_range_is_left_alone(wired_plugin_factory, ca
 def test_rebind_interval_non_numeric_falls_back_to_default_and_warns(
     wired_plugin_factory, caplog
 ):
+    """SPEC 2.3.0: the WARNING names the key and states the default it fell
+    back to, and never repeats the owner's raw value - that value is served
+    to a client by `get_log` (SPEC 2.9), so logging it verbatim would put a
+    configuration value on the wire."""
     with caplog.at_level("WARNING"):
         plugin, agent, sent = wired_plugin_factory({"rebind_interval": "30s"})
 
-    assert plugin._rebind_interval == float(companion.DEFAULTS["rebind_interval"])
+    default = companion.DEFAULTS["rebind_interval"]
+    assert plugin._rebind_interval == float(default)
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any(
-        "rebind_interval" in r.getMessage() and "30s" in r.getMessage() for r in warnings
-    ), "a non-numeric value must be reported at WARNING, distinct from the INFO clamp lines"
+        "rebind_interval" in r.getMessage() and str(default) in r.getMessage()
+        for r in warnings
+    ), "a non-numeric value must be reported at WARNING, naming the key and the default used"
+    assert not any(
+        "30s" in r.getMessage() for r in caplog.records
+    ), "the owner's raw value must never appear in the log"
 
 
 @pytest.mark.parametrize(

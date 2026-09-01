@@ -5,7 +5,13 @@ import screenImageSchema from '../../../docs/schemas/outgoing/screen_image.json'
 
 import { DASH, EMPTY_LABEL, formatUnitTime } from '../lib/format'
 import type { OutgoingMessage, OutgoingScreenImage } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.6 ("The Mirror, the second timer, and a string
 // that becomes a URL", issue #196), which explicitly adopts 4.5.2.5's
@@ -59,20 +65,32 @@ import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClie
 
 interface JsonSchemaLike {
   title: string
-  properties: Record<string, { const?: string; enum?: unknown[]; type?: string }>
+  properties: Record<
+    string,
+    { const?: string; enum?: unknown[]; type?: string }
+  >
   required: string[]
 }
 
 const GET_SCREEN_SCHEMA = getScreenSchema as JsonSchemaLike
 const SCREEN_IMAGE_SCHEMA = screenImageSchema as JsonSchemaLike
 
-function assertConformsToSchema(frame: Record<string, unknown>, schema: JsonSchemaLike): void {
+function assertConformsToSchema(
+  frame: Record<string, unknown>,
+  schema: JsonSchemaLike,
+): void {
   const allowedKeys = Object.keys(schema.properties)
   for (const key of Object.keys(frame)) {
-    expect(allowedKeys, `"${key}" is not a property of ${schema.title}`).toContain(key)
+    expect(
+      allowedKeys,
+      `"${key}" is not a property of ${schema.title}`,
+    ).toContain(key)
   }
   for (const key of schema.required) {
-    expect(Object.prototype.hasOwnProperty.call(frame, key), `missing required "${key}"`).toBe(true)
+    expect(
+      Object.prototype.hasOwnProperty.call(frame, key),
+      `missing required "${key}"`,
+    ).toBe(true)
   }
   expect(frame.type).toBe(schema.properties.type?.const)
 }
@@ -82,8 +100,9 @@ function assertConformsToSchema(frame: Record<string, unknown>, schema: JsonSche
 // ---------------------------------------------------------------------------
 
 const T = 1_700_000_000
-const GET_SCREEN_TYPE = (getScreenSchema as { properties: { type: { const: string } } }).properties
-  .type.const
+const GET_SCREEN_TYPE = (
+  getScreenSchema as { properties: { type: { const: string } } }
+).properties.type.const
 
 // `Buffer.from('synthetic-pwnagotchi-frame-fixture-bytes').toString('base64')`,
 // computed once and pasted here so the fixture stays deterministic without a
@@ -92,7 +111,11 @@ const GET_SCREEN_TYPE = (getScreenSchema as { properties: { type: { const: strin
 // claimed to decode to a real PNG, only to be a string the guard accepts.
 const VALID_PNG_B64 = 'c3ludGhldGljLXB3bmFnb3RjaGktZnJhbWUtZml4dHVyZS1ieXRlcw=='
 
-function screenImageEnvelope(png: string, mtime: number, timestamp = T): OutgoingScreenImage {
+function screenImageEnvelope(
+  png: string,
+  mtime: number,
+  timestamp = T,
+): OutgoingScreenImage {
   return { type: 'screen_image', timestamp, data: { png, mtime } }
 }
 
@@ -178,7 +201,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the mirror view must never send a command, only a read'))
+    return Promise.reject(
+      new Error('the mirror view must never send a command, only a read'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -188,7 +213,10 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -323,13 +351,18 @@ async function mountMirror(
   const mountTarget = document.createElement('div')
   document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, router, ws, target: mountTarget }
 }
 
 async function click(element: Element): Promise<void> {
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  element.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   await settle()
 }
 
@@ -341,7 +374,10 @@ async function click(element: Element): Promise<void> {
 function root(): HTMLElement {
   if (!container) throw new Error('Mirror view is not mounted')
   const viewRoot = container.querySelector('[data-view="mirror"]')
-  expect(viewRoot, 'expected [data-view="mirror"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="mirror"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -432,7 +468,7 @@ function accessibleName(el: HTMLElement): string {
 //    /mirror, the refresh control, and a host switch in place.
 // =============================================================================
 
-describe('the refresh: route becoming /mirror, the refresh control, and a host switch, per 4.5.2.6\'s adoption of 4.5.2.3', () => {
+describe("the refresh: route becoming /mirror, the refresh control, and a host switch, per 4.5.2.6's adoption of 4.5.2.3", () => {
   it('mounting the view issues exactly one get_screen request', async () => {
     const { client } = await mountMirror()
     expect(client.countRequestCalls(GET_SCREEN_TYPE)).toBe(1)
@@ -441,7 +477,10 @@ describe('the refresh: route becoming /mirror, the refresh control, and a host s
   it('the request frame conforms to incoming/get_screen.json', async () => {
     const { client } = await mountMirror()
     const call = client.lastRequestCall(GET_SCREEN_TYPE)
-    const frame = { type: call.type, ...(call.data as Record<string, unknown> | undefined) }
+    const frame = {
+      type: call.type,
+      ...(call.data as Record<string, unknown> | undefined),
+    }
     assertConformsToSchema(frame, GET_SCREEN_SCHEMA)
   })
 
@@ -502,8 +541,10 @@ describe('the frame is held and rendered, and cleared on a host switch (SPEC 4.5
 
   it("a host switch clears unit A's frame before unit B's own reply ever arrives", async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountMirror('connected', '/mirror', (c) =>
-      created.push(c),
+    const { client: clientA, settings } = await mountMirror(
+      'connected',
+      '/mirror',
+      (c) => created.push(c),
     )
     clientA.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, T - 5))
     await settle()
@@ -533,8 +574,10 @@ describe('the frame is held and rendered, and cleared on a host switch (SPEC 4.5
 
   it("unit B's own frame renders normally once its request settles", async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountMirror('connected', '/mirror', (c) =>
-      created.push(c),
+    const { client: clientA, settings } = await mountMirror(
+      'connected',
+      '/mirror',
+      (c) => created.push(c),
     )
     clientA.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, T - 5))
     await settle()
@@ -720,8 +763,10 @@ describe('the auto toggle: off on arrival, an immediate ask plus a 5 s interval 
     vi.useFakeTimers()
     try {
       const created: FakeWsClient[] = []
-      const { client, settings } = await mountMirror('connected', '/mirror', (c) =>
-        created.push(c),
+      const { client, settings } = await mountMirror(
+        'connected',
+        '/mirror',
+        (c) => created.push(c),
       )
       client.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, T - 5))
       await settle()
@@ -746,7 +791,9 @@ describe('the auto toggle: off on arrival, an immediate ask plus a 5 s interval 
 
       // Nothing was asked of the now-detached client, and no new client was
       // built for the timer to ask instead.
-      expect(client.countRequestCalls(GET_SCREEN_TYPE)).toBe(requestsBeforeRemoval)
+      expect(client.countRequestCalls(GET_SCREEN_TYPE)).toBe(
+        requestsBeforeRemoval,
+      )
       expect(created).toHaveLength(1)
 
       // Losing the client is not a reason to silently turn auto off.
@@ -780,7 +827,9 @@ describe('the auto toggle: off on arrival, an immediate ask plus a 5 s interval 
       container = null
 
       await vi.advanceTimersByTimeAsync(60_000)
-      expect(client.countRequestCalls(GET_SCREEN_TYPE)).toBe(requestsBeforeUnmount)
+      expect(client.countRequestCalls(GET_SCREEN_TYPE)).toBe(
+        requestsBeforeUnmount,
+      )
     } finally {
       vi.useRealTimers()
     }
@@ -813,7 +862,7 @@ describe('the auto toggle: off on arrival, an immediate ask plus a 5 s interval 
 
 const HOSTILE_PNG_PAYLOADS = [
   '"><img src=x onerror=window.__mirrorViewPwned=true>',
-  "'''\"\"\"",
+  '\'\'\'"""',
   '<script>window.__mirrorViewPwned = true</script>',
   'not base64 at all, has spaces and punctuation!',
 ]
@@ -829,7 +878,8 @@ const WRONG_LENGTH_PNG_PAYLOAD = 'YWJjZGVmZ2g'
 
 describe('a base64 string that is not base64 renders a sentence, not an image (SPEC 4.5.2.6, 4.5.3, issue #109)', () => {
   beforeEach(() => {
-    ;(window as unknown as { __mirrorViewPwned?: boolean }).__mirrorViewPwned = undefined
+    ;(window as unknown as { __mirrorViewPwned?: boolean }).__mirrorViewPwned =
+      undefined
   })
 
   for (const payload of HOSTILE_PNG_PAYLOADS) {
@@ -852,14 +902,18 @@ describe('a base64 string that is not base64 renders a sentence, not an image (S
       expect(root().querySelector('script')).toBeNull()
       expect(root().querySelector('[onerror]')).toBeNull()
       expect(
-        (window as unknown as { __mirrorViewPwned?: boolean }).__mirrorViewPwned,
+        (window as unknown as { __mirrorViewPwned?: boolean })
+          .__mirrorViewPwned,
       ).toBeUndefined()
     })
   }
 
   it('a payload with a valid alphabet but the wrong length (not a multiple of four) also renders the unreadable sentence, not an img', async () => {
     const { client } = await mountMirror()
-    client.settle(GET_SCREEN_TYPE, screenImageEnvelope(WRONG_LENGTH_PNG_PAYLOAD, T - 5))
+    client.settle(
+      GET_SCREEN_TYPE,
+      screenImageEnvelope(WRONG_LENGTH_PNG_PAYLOAD, T - 5),
+    )
     await settle()
 
     expect(anyImage()).toBeNull()
@@ -897,14 +951,22 @@ describe('a base64 string that is not base64 renders a sentence, not an image (S
 
   it('the unreadable sentence is distinct from the no-frame-yet sentence', async () => {
     const { client } = await mountMirror()
-    client.settle(GET_SCREEN_TYPE, screenImageEnvelope(HOSTILE_PNG_PAYLOADS[0] as string, T - 5))
+    client.settle(
+      GET_SCREEN_TYPE,
+      screenImageEnvelope(HOSTILE_PNG_PAYLOADS[0] as string, T - 5),
+    )
     await settle()
-    expect(emptyMessage()?.textContent).not.toBe('The unit has not drawn a frame yet.')
+    expect(emptyMessage()?.textContent).not.toBe(
+      'The unit has not drawn a frame yet.',
+    )
   })
 
   it('a later valid frame recovers from the unreadable sentence', async () => {
     const { client } = await mountMirror()
-    client.settle(GET_SCREEN_TYPE, screenImageEnvelope(HOSTILE_PNG_PAYLOADS[0] as string, T - 5))
+    client.settle(
+      GET_SCREEN_TYPE,
+      screenImageEnvelope(HOSTILE_PNG_PAYLOADS[0] as string, T - 5),
+    )
     await settle()
     expect(emptyMessage()?.textContent).toBe('The frame could not be read.')
 
@@ -928,7 +990,9 @@ describe('a valid frame becomes a data: URL, never a blob: one (SPEC 4.5.2.6)', 
     await settle()
     const img = frameImage()
     expect(img).not.toBeNull()
-    expect(img?.getAttribute('src')).toBe(`data:image/png;base64,${VALID_PNG_B64}`)
+    expect(img?.getAttribute('src')).toBe(
+      `data:image/png;base64,${VALID_PNG_B64}`,
+    )
   })
 
   it('the img src never begins with blob:', async () => {
@@ -980,33 +1044,49 @@ describe('no inline style attribute anywhere in the view (SPEC 4.5.2.6, 2.15.1)'
 describe('no_frame renders the same sentence as a frame that has never arrived (SPEC 4.5.2.6, 4.3.5)', () => {
   it('before any reply: "The unit has not drawn a frame yet."', async () => {
     await mountMirror()
-    expect(emptyMessage()?.textContent).toBe('The unit has not drawn a frame yet.')
+    expect(emptyMessage()?.textContent).toBe(
+      'The unit has not drawn a frame yet.',
+    )
   })
 
   it('the unit answering no_frame: the identical sentence, not a distinct one', async () => {
     const { client, ws } = await mountMirror()
-    client.rejectPending(GET_SCREEN_TYPE, new ws.RemoteError('no frame written yet', 'no_frame'))
+    client.rejectPending(
+      GET_SCREEN_TYPE,
+      new ws.RemoteError('no frame written yet', 'no_frame'),
+    )
     await settle()
-    expect(emptyMessage()?.textContent).toBe('The unit has not drawn a frame yet.')
+    expect(emptyMessage()?.textContent).toBe(
+      'The unit has not drawn a frame yet.',
+    )
   })
 
   it('the raw error code string never appears anywhere in the view', async () => {
     const { client, ws } = await mountMirror()
-    client.rejectPending(GET_SCREEN_TYPE, new ws.RemoteError('no frame written yet', 'no_frame'))
+    client.rejectPending(
+      GET_SCREEN_TYPE,
+      new ws.RemoteError('no frame written yet', 'no_frame'),
+    )
     await settle()
     expect(root().textContent ?? '').not.toContain('no_frame')
   })
 
   it('no_frame does not raise the unreadable-frame sentence', async () => {
     const { client, ws } = await mountMirror()
-    client.rejectPending(GET_SCREEN_TYPE, new ws.RemoteError('no frame written yet', 'no_frame'))
+    client.rejectPending(
+      GET_SCREEN_TYPE,
+      new ws.RemoteError('no frame written yet', 'no_frame'),
+    )
     await settle()
     expect(emptyMessage()?.textContent).not.toBe('The frame could not be read.')
   })
 
   it('no_frame followed by a later valid frame clears the sentence', async () => {
     const { client, ws } = await mountMirror()
-    client.rejectPending(GET_SCREEN_TYPE, new ws.RemoteError('no frame written yet', 'no_frame'))
+    client.rejectPending(
+      GET_SCREEN_TYPE,
+      new ws.RemoteError('no frame written yet', 'no_frame'),
+    )
     await settle()
     expect(emptyMessage()).not.toBeNull()
 
@@ -1023,25 +1103,33 @@ describe('no_frame renders the same sentence as a frame that has never arrived (
 //    table, including the not-connected sentence 4.5.2.3 shares unchanged.
 // =============================================================================
 
-describe('the sentences, pinned by equality against 4.5.2.6\'s table', () => {
+describe("the sentences, pinned by equality against 4.5.2.6's table", () => {
   it('no frame held, connected: "The unit has not drawn a frame yet."', async () => {
     await mountMirror('connected')
-    expect(emptyMessage()?.textContent).toBe('The unit has not drawn a frame yet.')
+    expect(emptyMessage()?.textContent).toBe(
+      'The unit has not drawn a frame yet.',
+    )
   })
 
   it('no frame held, degraded (still counted as connected): the same sentence', async () => {
     await mountMirror('degraded')
-    expect(emptyMessage()?.textContent).toBe('The unit has not drawn a frame yet.')
+    expect(emptyMessage()?.textContent).toBe(
+      'The unit has not drawn a frame yet.',
+    )
   })
 
   it('no frame held, not connected (connecting): the shared not-connected sentence', async () => {
     await mountMirror('connecting')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('no frame held, offline: the same not-connected sentence', async () => {
     await mountMirror('offline')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('the empty message carries role="status"', async () => {
@@ -1081,7 +1169,10 @@ describe("the frame's own mtime is shown through formatUnitTime, not the arrival
   it("the field shows the frame's mtime, formatted through formatUnitTime, and is no longer empty", async () => {
     const { client } = await mountMirror()
     const frameMtime = T - 7_200 // two hours before the envelope's own timestamp
-    client.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, frameMtime, T))
+    client.settle(
+      GET_SCREEN_TYPE,
+      screenImageEnvelope(VALID_PNG_B64, frameMtime, T),
+    )
     await settle()
     expect(frameTimeText()).toBe(formatUnitTime(frameMtime))
     expect(frameTimeField().getAttribute('data-empty')).not.toBe('true')
@@ -1091,7 +1182,10 @@ describe("the frame's own mtime is shown through formatUnitTime, not the arrival
     const { client } = await mountMirror()
     const frameMtime = 1_000_000
     const messageTimestamp = 2_000_000
-    client.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, frameMtime, messageTimestamp))
+    client.settle(
+      GET_SCREEN_TYPE,
+      screenImageEnvelope(VALID_PNG_B64, frameMtime, messageTimestamp),
+    )
     await settle()
     expect(frameTimeText()).toBe(formatUnitTime(frameMtime))
     expect(frameTimeText()).not.toBe(formatUnitTime(messageTimestamp))
@@ -1103,7 +1197,7 @@ describe("the frame's own mtime is shown through formatUnitTime, not the arrival
 //     against SPEC 4.5.2.6's own tables.
 // =============================================================================
 
-describe('control copy and the accessible name, pinned by equality against SPEC 4.5.2.6\'s table', () => {
+describe("control copy and the accessible name, pinned by equality against SPEC 4.5.2.6's table", () => {
   it('the refresh control reads "Refresh"', async () => {
     await mountMirror()
     expect(refreshControl().textContent).toBe('Refresh')
@@ -1116,7 +1210,7 @@ describe('control copy and the accessible name, pinned by equality against SPEC 
     expect(autoControl().textContent).toBe('Refreshing automatically')
   })
 
-  it("the image's accessible name is \"The unit's display\", naming the object rather than what it shows", async () => {
+  it('the image\'s accessible name is "The unit\'s display", naming the object rather than what it shows', async () => {
     const { client } = await mountMirror()
     client.settle(GET_SCREEN_TYPE, screenImageEnvelope(VALID_PNG_B64, T - 5))
     await settle()
@@ -1133,7 +1227,10 @@ describe('control copy and the accessible name, pinned by equality against SPEC 
 describe('wire conformance and the view root', () => {
   it('the screenImageEnvelope fixture conforms to outgoing/screen_image.json', () => {
     assertConformsToSchema(
-      screenImageEnvelope(VALID_PNG_B64, T - 5) as unknown as Record<string, unknown>,
+      screenImageEnvelope(VALID_PNG_B64, T - 5) as unknown as Record<
+        string,
+        unknown
+      >,
       SCREEN_IMAGE_SCHEMA,
     )
   })

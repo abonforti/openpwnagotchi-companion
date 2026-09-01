@@ -137,7 +137,12 @@ function ownField(value: Record<string, unknown>, key: string): unknown {
 }
 
 function isPort(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_PORT && value <= MAX_PORT
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_PORT &&
+    value <= MAX_PORT
+  )
 }
 
 // SPEC 4.7: an address is an IPv4 literal, four dot-separated decimal
@@ -268,7 +273,8 @@ function parseSettings(raw: string): Settings | null {
     return defaultSettings()
   }
   const activeHostId =
-    typeof parsed.activeHostId === 'string' && hosts.some((host) => host.id === parsed.activeHostId)
+    typeof parsed.activeHostId === 'string' &&
+    hosts.some((host) => host.id === parsed.activeHostId)
       ? parsed.activeHostId
       : null
   return { hosts, activeHostId }
@@ -291,11 +297,14 @@ function persist(next: Settings): void {
 
 const settingsWritable = writable<Settings>(defaultSettings())
 
-export const settings: Readable<Settings> = { subscribe: settingsWritable.subscribe }
+export const settings: Readable<Settings> = {
+  subscribe: settingsWritable.subscribe,
+}
 
 export const activeHost: Readable<Host | null> = derived(
   settings,
-  ($settings) => $settings.hosts.find((host) => host.id === $settings.activeHostId) ?? null,
+  ($settings) =>
+    $settings.hosts.find((host) => host.id === $settings.activeHostId) ?? null,
 )
 
 /**
@@ -339,7 +348,9 @@ export const activeHost: Readable<Host | null> = derived(
  * Meant to be called once, at startup; the store above is what everything
  * after that point reads.
  */
-export function loadSettings(getHostname: () => string = defaultGetHostname): Settings {
+export function loadSettings(
+  getHostname: () => string = defaultGetHostname,
+): Settings {
   let raw: string | null
   try {
     raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
@@ -354,7 +365,8 @@ export function loadSettings(getHostname: () => string = defaultGetHostname): Se
   } else {
     next = parsed
   }
-  const active = next.hosts.find((host) => host.id === next.activeHostId) ?? null
+  const active =
+    next.hosts.find((host) => host.id === next.activeHostId) ?? null
   storeToken(active === null ? null : active.token)
   settingsWritable.set(next)
   return next
@@ -431,14 +443,29 @@ export function updateHost(id: string, patch: Partial<Omit<Host, 'id'>>): void {
     }
     const addressChanged = addressPatched && address !== existing.address
 
-    const label = sanitizeLabel('label' in patch ? patch.label : existing.label, address)
-    const wsPort = sanitizePort('wsPort' in patch ? patch.wsPort : existing.wsPort, DEFAULT_WS_PORT)
-    const httpPort = sanitizePort('httpPort' in patch ? patch.httpPort : existing.httpPort, DEFAULT_HTTP_PORT)
+    const label = sanitizeLabel(
+      'label' in patch ? patch.label : existing.label,
+      address,
+    )
+    const wsPort = sanitizePort(
+      'wsPort' in patch ? patch.wsPort : existing.wsPort,
+      DEFAULT_WS_PORT,
+    )
+    const httpPort = sanitizePort(
+      'httpPort' in patch ? patch.httpPort : existing.httpPort,
+      DEFAULT_HTTP_PORT,
+    )
     const tokenPatched = 'token' in patch
-    const token = tokenPatched ? sanitizeToken(patch.token) : addressChanged ? null : existing.token
+    const token = tokenPatched
+      ? sanitizeToken(patch.token)
+      : addressChanged
+        ? null
+        : existing.token
 
     const updatedHost: Host = { id, address, label, wsPort, httpPort, token }
-    const hosts = current.hosts.map((host) => (host.id === id ? updatedHost : host))
+    const hosts = current.hosts.map((host) =>
+      host.id === id ? updatedHost : host,
+    )
     const next: Settings = { ...current, hosts }
     persist(next)
 
@@ -455,7 +482,10 @@ export function removeHost(id: string): void {
     if (!current.hosts.some((host) => host.id === id)) return current
     const hosts = current.hosts.filter((host) => host.id !== id)
     const wasActive = current.activeHostId === id
-    const next: Settings = { hosts, activeHostId: wasActive ? null : current.activeHostId }
+    const next: Settings = {
+      hosts,
+      activeHostId: wasActive ? null : current.activeHostId,
+    }
     persist(next)
     if (wasActive) {
       // SPEC 4.7: no host is active any more, so no host's token is either.

@@ -457,8 +457,22 @@ def _count_open(peers: list[socket.socket]) -> int:
     return sum(1 for peer in peers if _peer_is_open(peer))
 
 
+def _client_ssl_context(tls_material) -> ssl.SSLContext:
+    """A client `SSLContext` trusting the fixture CA, with the same floor
+    the plugin sets on its own server context: `ssl_ctx.minimum_version =
+    ssl.TLSVersion.TLSv1_2` (SPEC.md:368). Every client context this file
+    builds goes through here, both because a client free to negotiate down
+    to TLS 1.0 is not testing what the plugin actually ships, and so the
+    next context someone adds inherits the floor instead of reintroducing
+    it one construction site at a time.
+    """
+    context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def _get_index(https_port: int, tls_material, timeout: float = 5.0):
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
     connection = http.client.HTTPSConnection(
         ADDRESS, https_port, timeout=timeout, context=client_context
     )
@@ -1127,7 +1141,7 @@ def test_silence_after_a_completed_handshake_is_eventually_closed(
     a deadline SPEC says is "measured on a monotonic clock, not on the wall
     clock" cannot be sped up any other way from outside.
     """
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
 
     with caplog.at_level(0):
         # Positive control: a malformed request line is a genuine failure
@@ -1213,7 +1227,7 @@ def test_a_trickle_does_not_indefinitely_extend_the_request_deadline(
     would reset such a timeout well before it could ever fire.
     """
     raw = socket.create_connection((ADDRESS, ports[1]), timeout=10.0)
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
     wrapped = client_context.wrap_socket(raw, server_hostname=ADDRESS)
     try:
         assert _peer_is_open(wrapped), (
@@ -1285,7 +1299,7 @@ def test_max_http_connections_evicts_exactly_one_connection_and_serves_the_newco
     fail the count assertion.
     """
     cap = companion.MAX_HTTP_CONNECTIONS
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
     completed: list[ssl.SSLSocket] = []
     try:
         for attempt in range(cap):
@@ -1365,7 +1379,7 @@ def test_max_http_connections_counts_a_pending_handshake_toward_the_same_cap(
     """
     cap = companion.MAX_HTTP_CONNECTIONS
     oldest_pending = _silent_peer(ports[1])
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
     completed: list[ssl.SSLSocket] = []
     try:
         assert wait_until(lambda: _peer_is_open(oldest_pending)), (
@@ -1449,7 +1463,7 @@ def test_listener_recovers_after_the_live_connection_cap_empties(
     bounded poll.
     """
     cap = companion.MAX_HTTP_CONNECTIONS
-    client_context = ssl.create_default_context(cafile=str(tls_material["cert"]))
+    client_context = _client_ssl_context(tls_material)
     completed: list[ssl.SSLSocket] = []
     try:
         for attempt in range(cap):

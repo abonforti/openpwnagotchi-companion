@@ -114,11 +114,17 @@ jobs:
 
           if [ -n "$not_docs" ]; then
             echo "Not a documentation-only pull request. Leaving it to a human."
+            # shellcheck disable=SC2001  # ${var//x/y} replaces a substring in one
+            # string; this indents every line of a multi-line list, which
+            # parameter expansion cannot do.
             echo "$not_docs" | sed 's/^/  /'
             exit 0
           fi
 
           echo "Every changed file is documentation:"
+          # shellcheck disable=SC2001  # ${var//x/y} replaces a substring in one
+          # string; this indents every line of a multi-line list, which parameter
+          # expansion cannot do.
           echo "$files" | sed 's/^/  /'
 
           # Auto-merge does not bypass anything: the ruleset on master still

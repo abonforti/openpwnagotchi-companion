@@ -153,6 +153,8 @@ openpwnagotchi-companion/
 │   │   └── e2e/                      # Playwright, four projects (§10.5)
 │   │       └── ...
 │   ├── .npmrc                        # the Node floor is enforced, not warned about (§5.1.1)
+│   ├── .prettierignore               # what the formatter does not own (§5.1.3)
+│   ├── .prettierrc.json              # the formatter's whole configuration (§5.1.3)
 │   ├── index.html
 │   ├── package-lock.json             # COMMITTED - `npm ci` in CI requires it
 │   ├── package.json

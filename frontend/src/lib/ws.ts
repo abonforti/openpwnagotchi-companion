@@ -22,6 +22,9 @@ import type {
   RestartReason,
   Stats,
 } from './protocol'
+// SPEC 4.3.11 (issue #109): the generated guard this client checks every
+// incoming frame against before believing any of it -- see handleMessage.
+import { isOutgoingMessage } from './protocol'
 
 export type ConnectionState =
   | 'connecting'
@@ -63,15 +66,18 @@ export interface WsClientOptions {
 // of its own.
 export type UnauthorizedReason = 'rejected' | 'required'
 
-// SPEC 4.3.10: the only three codes recordLocalError() ever writes. `LastError`
+// SPEC 4.3.10/4.3.11: the codes recordLocalError() ever writes. `LastError`
 // carries this type, not `string`, for `source: 'local'`, so
 // formatLastErrorCode's `source === 'local'` switch is checked total by the
 // compiler instead of carrying a default arm no runtime value could ever
-// reach. `socket_failed` (issue #122) is the third: `createSocket` throwing
-// from inside the reconnect chain's bare `setTimeout` callback, where a
-// `new WebSocket` that fails to open has nothing above it to catch it.
+// reach. `socket_failed` (issue #122) is a drop this client's transport
+// noticed: `createSocket` throwing from inside the reconnect chain's bare
+// `setTimeout` callback, where a `new WebSocket` that fails to open has
+// nothing above it to catch it. `bad_frame` (issue #109) is a drop this
+// client's protocol layer noticed: a frame that failed the guard in
+// handleMessage below, recorded through the same path as the other three.
 export type LocalErrorCode =
-  'pong_timeout' | 'connect_timeout' | 'socket_failed'
+  'pong_timeout' | 'connect_timeout' | 'socket_failed' | 'bad_frame'
 
 /**
  * SPEC 4.3.10: what the client keeps of the last thing that went wrong,
@@ -102,9 +108,20 @@ export type LastError =
  * client that fired `onState` to announce a round trip would be telling
  * every subscriber the state moved when it did not.
  */
+/**
+ * SPEC 4.3.11 (issue #109): a count of frames dropped by the guard in
+ * handleMessage below, monotonic for the life of this client instance and
+ * never reset by a reconnection -- the client is what it counts for, not
+ * the connection. Kept beside `lastError` rather than folded into it: the
+ * last error is cleared once a connection is admitted (SPEC 4.3.10), which
+ * is right for a condition that has passed and wrong for a tally, and a
+ * mismatched plugin and app produce a number that keeps climbing rather
+ * than a puzzle.
+ */
 export interface Diagnostics {
   lastError: LastError | null
   latencyMs: number | null
+  droppedFrames: number
 }
 
 /**
@@ -393,6 +410,10 @@ export function createWsClient(options: WsClientOptions): WsClient {
   let lastStatsTimestampValue: number | null = null
   let lastErrorValue: LastError | null = null
   let latencyMsValue: number | null = null
+  // SPEC 4.3.11 (issue #109): a per-instance tally, like messageCounter
+  // above -- never reset in beginConnect(), because a reconnection does not
+  // change what this client instance is counting.
+  let droppedFramesValue = 0
   // SPEC 4.3.10: the local send stamp for the outstanding ping, cleared the
   // moment a pong answers it (or the socket goes) so a later pong -- late,
   // duplicate or unsolicited -- has nothing to measure against.
@@ -427,6 +448,7 @@ export function createWsClient(options: WsClientOptions): WsClient {
     const value: Diagnostics = {
       lastError: lastErrorValue,
       latencyMs: latencyMsValue,
+      droppedFrames: droppedFramesValue,
     }
     for (const handler of [...diagnosticsHandlers]) handler(value)
   }
@@ -803,14 +825,42 @@ export function createWsClient(options: WsClientOptions): WsClient {
   }
 
   function handleMessage(raw: string): void {
-    let message: OutgoingMessage
+    // The try is scoped to JSON.parse alone. Widening it to the guard below
+    // would also catch whatever recordLocalError's call into
+    // notifyDiagnostics can throw -- a subscriber's onDiagnostics handler is
+    // not isolated the way the message-handler loop further down is -- and
+    // a throw from there would land in this same catch and count one frame
+    // as dropped twice.
+    let parsed: unknown
     try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!isRecord(parsed) || typeof parsed.type !== 'string') return
-      message = parsed as unknown as OutgoingMessage
+      parsed = JSON.parse(raw)
     } catch {
+      droppedFramesValue += 1
+      recordLocalError('bad_frame')
       return
     }
+
+    // SPEC 4.3.11 (issue #109): the guard runs before everything else the
+    // arrival of a frame otherwise does -- before SPEC 4.3.9's rule that
+    // any frame unblocks the queue on a tokenless connection, before the
+    // subscribers, before correlation, before the state machine. An
+    // invalid frame is not a frame: it never counts as the first `stats`
+    // of this connection, never resolves a pending read, never unblocks
+    // the outbound queue, and never moves the state. `docs/schemas/` is
+    // authoritative on the wire format and `isOutgoingMessage` is
+    // generated from the same walk as the types it checks (protocol.ts),
+    // so this covers both an unrecognised `type` and a payload that fails
+    // its schema's guard.
+    if (
+      !isRecord(parsed) ||
+      typeof parsed.type !== 'string' ||
+      !isOutgoingMessage(parsed.type, parsed)
+    ) {
+      droppedFramesValue += 1
+      recordLocalError('bad_frame')
+      return
+    }
+    const message: OutgoingMessage = parsed
 
     if (!connectionReady && !hasSentAuth) {
       // SPEC 4.3.9: with no token configured, the arrival of any frame is
@@ -1090,7 +1140,11 @@ export function createWsClient(options: WsClientOptions): WsClient {
   }
 
   function diagnostics(): Diagnostics {
-    return { lastError: lastErrorValue, latencyMs: latencyMsValue }
+    return {
+      lastError: lastErrorValue,
+      latencyMs: latencyMsValue,
+      droppedFrames: droppedFramesValue,
+    }
   }
 
   function onState(handler: (state: ConnectionState) => void): () => void {

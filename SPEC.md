@@ -179,6 +179,7 @@ openpwnagotchi-companion/
 │   │   ├── test_certs.py             # gen-ca.sh / gen-cert.sh assertions, see §10.6
 │   │   ├── test_check_coverage.py
 │   │   ├── test_check_release_version.py
+│   │   ├── test_gen_protocol_types.py
 │   │   ├── test_install.py
 │   │   └── test_pinned_facts.py
 │   └── ...
@@ -3249,19 +3250,22 @@ twice, six months apart, by two people who each read a ticket rather than the fi
 the shape, not the instance: a call that can throw, made from a timer, needs a handler in the
 timer.
 
-**Each of the three gets its own sentence, and the five-code table above does not govern them.**
-That table is about codes the wire carries, where the rule is to reuse the wording another screen
-already gives them. These three came from this client and no screen has ever worded them, so they
-are written here: `pong_timeout` says the connection stopped responding, `connect_timeout` says
-the unit did not answer while connecting, and `socket_failed` says the browser refused to open
-the connection -- which is the one of the three that is about the phone rather than the unit, and
-the sentence says so, because an owner told the unit is not answering will go and check the
-unit. They must not collapse into each other or into the
-generic sentence, because they are different failures -- a link that was working and went
-away, one that never came up, and one the phone itself refused -- and the difference is most of
-what the reader is on this screen to learn. Neither shows its code: unlike a close code, these
-are names this app chose, and
-printing an identifier the owner has no way to look up is not a diagnostic.
+**Each of these gets its own sentence, and the five-code table above does not govern them.**
+That table is about codes the wire carries, where the rule is to reuse the wording another
+screen already gives them. These came from this client and no screen has ever worded them, so
+they are written here: `pong_timeout` says the connection stopped responding, `connect_timeout`
+says the unit did not answer while connecting, `socket_failed` says the browser refused to open
+the connection -- which is the one that is about the phone rather than the unit, and the
+sentence says so, because an owner told the unit is not answering will go and check the unit --
+and `bad_frame` (§4.3.11) says the unit sent something this app could not read, the only one of
+the four that is about the two ends disagreeing rather than about the link, which is what a
+plugin and an app of different vintages produce and the one clue that points at a version
+mismatch instead of at the tether. They must not collapse into each other or into the generic
+sentence, because they are different failures -- a link that was working and went away, one
+that never came up, one the phone itself refused, and one where the link is fine and the format
+is not agreed -- and the difference is most of what the reader is on this screen to learn. None
+of them shows its code: unlike a close code, these are names this app chose, and printing an
+identifier the owner has no way to look up is not a diagnostic.
 
 **A close that follows an `error` frame does not overwrite it, and `unauthorized` is what that
 means.** The rule exists for one sequence: the plugin sends `unauthorized` and then closes with
@@ -3389,6 +3393,146 @@ rows being right.
 it is text, never markup, never an attribute, and the view bounds its length rather than trusting
 a remote to have been brief. `code` is matched against known sentences and never printed, which
 §4.5.2.2 already required of it on the command path.
+
+#### 4.3.11 What arrives is checked before it is believed (issue #109)
+
+`docs/schemas/` is authoritative on one side of the socket and was decorative on the other.
+`validate_incoming()` refuses an unexpected key with `bad_request` and every schema sets
+`additionalProperties: false`, while this client checked that `type` was a string and cast the
+rest to the generated union. The cast is the part that matters: an unvalidated value carrying a
+type annotation is worse than an untyped one, because the next reader trusts it.
+
+**The decision is generated type guards, in `protocol.ts`, with no runtime schema library.**
+Three routes were open and the other two are refused here rather than left as an option:
+
+- *A runtime schema validator in the bundle.* It ships a general interpreter to check thirty-three
+  shapes that are known at build time, and it puts a second copy of the wire format -- the schema
+  documents, shipped as data -- into an app that already has one in `protocol.ts`. D2 puts this
+  bundle on a phone over BT PAN.
+- *Validation in development and in the tests only.* The production path is the only one that
+  ever faces a real unit, on the reference hardware, over the link that actually drops. A check
+  that is compiled out is a check that never sees the case it was written for.
+
+The guards come from `tools/gen-protocol-types.mjs`, beside the types, from the same schema walk
+and into the same file. Not a second generated file: `--check` compares one path today, CI fails
+if it drifts, and a second artifact is a second thing that can be regenerated alone. The
+generator's existing rule carries over unchanged -- a JSON Schema construct it cannot express is
+a hard error, never a silent `any` and now never a silent `true` -- so a schema that grows a
+keyword the guard cannot enforce fails the build in the commit that adds it.
+
+**The discipline is an allowlist of keywords, not a list of things that break it.** A walk that
+fails only on what it recognises as wrong passes everything it does not recognise at all, which
+is the same silent `true` in a different place: a `minimum` added to an outgoing schema would
+emit a guard with no bound and no error, and the schema would say one thing while the wire was
+checked for another. So the guard walk knows two named sets and refuses everything outside them.
+It **enforces** `type`, `const`, `enum`, `$ref`, `oneOf`, `properties`, `required` and `items`.
+It **ignores, by name and with a reason**: the annotations (`$schema`, `$id`, `title`,
+`description`, `default`), `additionalProperties`, for the forward-compatibility reason below,
+and `contentEncoding`, which appears once, on `screen_image.data.png`, where enforcing it would
+mean base64-decoding a full frame on every mirror update to learn what the decoder is about to
+tell us anyway. Any other keyword on any node the guard walk reaches is a hard `fail()` in the
+commit that adds it. `minimum` and `maximum` are used today in `incoming/get_log.json`, which
+this walk never reaches -- the guards are for what the unit sends, and the plugin validates what
+the app sends. Putting either on an outgoing schema stops the build, which is the point.
+
+**Two narrowings the guards do not make, recorded rather than left to be discovered.**
+`integer` is checked as `typeof === 'number'`, so `3.5` passes for `channel` or `uptime`. It is
+the same collapse the type generator already makes -- TypeScript has no integer -- and a guard
+stricter than the type it is proving would reject values the compiler says are fine. And `oneOf`
+is compiled to a disjunction, which is `anyOf`: exactly-one and at-least-one differ only when two
+branches can both match, and every `oneOf` in `docs/schemas` today is a shape against `null`.
+Both are listed here so that a schema that starts to depend on either difference is a change to
+this section and not a surprise.
+
+**Unknown keys are ignored, and that is deliberately not what the schemas say.**
+`additionalProperties: false` states what the plugin promises to send; it is not an instruction
+to this client about what to refuse. A plugin one version ahead of the app that adds a field to
+`Stats` would otherwise invalidate every frame it sends, and the app would go `offline` against a
+unit that is working perfectly. The asymmetry with `validate_incoming()` is the point: the plugin
+refuses an unknown key from the app because a command it does not recognise must not be guessed
+at, and the app tolerates an unknown key from the unit because a field it does not recognise is
+one it does not read. Strict on what is known, quiet on what is not.
+
+**What a guard checks** is what the schema states as keywords, and nothing it states only as
+prose: every required key present, every known key's `type`, `enum`, `const` and `$ref` honoured,
+nullable unions accepted as null, arrays checked element by element, optional keys checked only
+when present. It does not check `handshakesTotal >= handshakes`, which `common.json` says in a
+description. A guard generated from keywords must not acquire rules the schema has no way to
+express, because the schema is then no longer the place the format is defined.
+
+**An invalid frame is not a frame.** The check runs before everything the arrival of a frame
+otherwise does: before §4.3.9's rule that any frame unblocks the queue on a tokenless connection,
+before the subscribers, before correlation, before the state machine. So an invalid frame never
+counts as the "first `stats` of this connection", never resolves a pending read, never unblocks
+the outbound queue, and never moves the state.
+
+**A frame that is not JSON, or not an object, is counted the same as one that fails its guard.**
+The parse site returned silently before this section existed, which made malformed JSON the one
+kind of unreadable frame that left no trace. There is no reading of "an invalid frame is not a
+frame" under which a frame the parser rejected is more of a frame than one a guard rejected.
+
+**The `bad_frame` last error carries no `message`,** like the three local codes already in
+§4.3.10 and for a reason that survives the difference between them. There is a remote here and
+it did say something, which is exactly why nothing of it is quoted: what it said is the thing
+this client could not read, and putting it on the diagnostics line would print remote-chosen text
+attributed to the unit. §4.3.10 already refuses that on the `message` of an `error` frame, where
+the text at least came through a schema. The `code` names what happened and `at` says when, both
+established by this client.
+
+**Dropped, counted, and visible.** `Diagnostics` (§4.3.10) gains `droppedFrames`, a monotonic
+count for the life of the client, and `LocalErrorCode` gains `bad_frame`, recorded through the
+same `recordLocalError` path as `pong_timeout`. Two surfaces rather than one because they answer
+different questions and have different lifetimes: the last error is cleared when a connection
+becomes admitted (§4.3.10), which is right for a condition that has passed and wrong for a tally,
+and a mismatched plugin and app produce a number that keeps climbing rather than a puzzle. The
+count is not reset by a reconnection; the client instance is what it counts for.
+
+**The two cases the issue names, and what they now do.**
+
+A `restarting` whose `reason` is not one of `mode_change | reboot | shutdown` is dropped, so the
+state machine never sees it and the socket's close that follows is handled by §4.3.1's ordinary
+close rules: `offline`, then backoff, then reconnect. The app misses the banner and recovers by
+itself, which is what a newer plugin restarting for a reason this build has no copy for should
+cost. The alternative was to admit the frame with an invented reason, and every patience number in
+§4.3.1 is keyed to the reason -- there is no honest value to invent.
+
+A `stats` with a missing or non-numeric `sessionAge` is dropped, not read as stale. `degraded`
+means the unit said its data has stopped moving (§4.3.1); a frame this client could not parse says
+nothing about the unit's data at all, and the old behaviour reached the safe answer by luck rather
+than by rule. The visible consequence is stated plainly: a plugin that emits only malformed
+`stats` leaves `connecting` to expire at 55 s into `offline`, which is the honest reading of a
+socket that is open against something that is not answering in a language this app knows.
+
+**Cost.** The guard for a message is a walk of the object the parse just built, linear in the
+frame, with no allocation beyond the walk. `stats` arrives every 20 s (§2.4) and is fourteen keys
+over a handful of nested shapes. The bundle cost of the generated guards, measured on the built
+output, is stated in §4.3.11.1.
+
+##### 4.3.11.1 What the guards cost, measured
+
+Issue #109 asks for the figure rather than an assurance, because D2 puts this bundle on a phone
+over BT PAN. Two production builds of `frontend/`, differing only in `protocol.ts`: the generated
+guards as they ship, and the same functions with every body replaced by `return true`, so the
+difference is the checking and not the call sites, the exports or the dispatcher.
+
+| build | JavaScript, raw | JavaScript, gzip -9 |
+|---|---|---|
+| guards as generated | 274,935 B | 87,486 B |
+| the same guards stubbed to `return true` | 267,519 B | 86,257 B |
+| **the checks themselves** | **7,416 B** | **1,229 B** |
+
+**1.2 kB gzipped**, against 87 kB of JavaScript: a little over one percent, and it is the whole
+of what validating thirty-three message shapes costs on the wire. The runtime cost is not on this
+table because it is not a number a build can produce, but it is bounded by the shape of the code:
+each guard is a straight-line conjunction of `typeof` tests over an object `JSON.parse` has just
+built and left in cache, with no allocation, no regular expression and no recursion beyond the
+schema's own nesting. The frequent frame is `stats`, at one every 20 s (§2.4).
+
+The comparison flatters nothing: the stubbed build keeps every function, every export and the
+`switch` in `isOutgoingMessage`, so 1,229 B is what the checks add to a bundle that already pays
+for the scaffolding around them. Deleting the feature outright would save slightly more, which is
+not the question anyone is asking.
+
 
 ### 4.4 Stores (`lib/stores.ts`)
 
@@ -4106,13 +4250,24 @@ walking the markup breaks when the markup is rearranged, and this screen will be
   is not a host and must not wear `data-host-field`: overloading the two made a test filter for
   "the one address input outside any row", which is a test walking the markup by another name.
 - `data-field` on each diagnostic value, reusing §4.5.1.1's convention and its `data-empty="true"`:
-  `connectionState`, `pluginVersion`, `lastError`, `latency`, and `unauthorizedReason` on the row
+  `connectionState`, `pluginVersion`, `lastError`, `latency`, `droppedFrames`, and
+  `unauthorizedReason` on the row
   that appears only while the state is `unauthorized`. That last one is named here because the
   first implementation rendered the row without a hook, correctly refusing to invent one the list
   did not carry. It is also the one field that carries **no** `data-empty`: the row exists only
   when there is a reason, so the two can never both be true, and a branch that cannot be reached
   is worse than absent - it reads as a case somebody handled. `lastError` and `latency` do carry
   it, and carry it often: an app that has just started has neither.
+
+**The dropped-frame count is on this screen, and it is a measurement rather than a value that
+can be absent.** §4.3.11 counts what the client refused, and a count kept by the client and read
+by nobody is exactly the plumbing §4.5.1.1 refuses: connected and disconnected plumbing look
+identical from outside. So it renders, always, including at zero -- unlike `lastError` and
+`latency` it carries no `data-empty`, because zero is not the absence of a figure, it is the
+figure, and it is the one this screen shows almost always. It reads as a plain count. Its value
+to the reader is entirely in the moment it stops being zero, which is the moment an app and a
+plugin of different vintages are talking past each other, and the `bad_frame` sentence four rows
+up says what happened while this row says how often.
 
 **The address grammar has one expression, and the form asks for it.** §4.7 says to validate in
 the form and keep the mutator's throw as the backstop that says the form forgot. That is right,
@@ -7155,6 +7310,22 @@ This is the test that catches `websockets` API drift (§2.3.2) on whatever versi
   The no-optimism rule of §4.3.4 is **not** here: the mode badge following `stats` rather than
   the tap is a store and component assertion, and `ws.spec.ts` is scoped to a mock socket. It
   belongs to `stores.spec.ts` below, which is where it is listed.
+- `ws-validation.spec.ts`: §4.3.11 at the boundary, kept out of `ws.spec.ts` because that file
+  is scoped to the state machine and the queue and this one is scoped to what is refused before
+  either of them runs. An unrecognised `type`; a payload failing its guard in each way a schema
+  can be failed -- a missing required key, a wrong-typed key, an enum value outside its enum, a
+  nullable field given a non-null value of the wrong type, an array element of the wrong shape;
+  bytes that are not JSON, and JSON that parses to something that is not an object, which reach
+  the same outcome by two different paths and are asserted separately for that reason. Then the
+  forward-compatibility half, which is the one an over-strict implementation passes every other
+  test without: an unknown key, top level and nested, is **accepted**. Then that nothing an
+  invalid frame could have done happens -- it does not unblock the tokenless queue of §4.3.9,
+  does not count as the first `stats` of a connection, does not settle a pending read, does not
+  reach a subscriber, does not move the state. Then the two surfaces and their different
+  lifetimes: `droppedFrames` monotonic and surviving a reconnection, `lastError` carrying
+  `bad_frame` with an empty `message`, cleared when a new connection is admitted and **not** by
+  re-entering a state already admitted. Every group carries a positive control, because a suite
+  of drop assertions would also pass against a client that drops everything.
 - `stores.spec.ts`: each push message updating the right store; `capabilities.pasv` gating the
   PASV control; §4.3.4, the mode and PASV indicators derived from `stats` and never from the tap,
   showing the request as pending in between and **not** reverting silently if the command fails.
@@ -7464,6 +7635,20 @@ and that nothing was written**, rather than that a message appeared: a run that 
 complaint and installs anyway is the failure being guarded against, and the message alone cannot
 tell the two apart. `--pwn-prefix` is what lets the third source be exercised without root and
 without writing into the host's real `/opt/.pwn`.
+
+`tests/tools/test_gen_protocol_types.py` drives the type and guard generator (§4.3.11) the same
+way, as a subprocess against a copy of `docs/schemas` laid out so the script's own `ROOT`
+resolves inside the copy. The exit status is the contract and it is the whole contract: the
+guard walk allowlists the JSON Schema keywords it enforces and hard-fails on any other, so what
+this file asserts is that a keyword it cannot enforce **stops the build in the commit that adds
+it** rather than emitting a guard that silently checks nothing. Injecting one on an outgoing
+schema must fail and name the keyword; injecting the same keyword on an incoming schema must
+**not**, which is what distinguishes a walk that deliberately never reaches the incoming side
+from one that happened not to look. And a positive control asserts the fixtures still carry the
+two keywords the schemas legitimately use today -- `contentEncoding` on
+`outgoing/screen_image.json` and `minimum`/`maximum` on `incoming/get_log.json` -- because "the
+schemas generate cleanly" passes just as well against a copy where neither keyword is present
+at all.
 
 ### 10.7 Coverage gate
 

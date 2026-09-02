@@ -252,7 +252,7 @@ class FakeWsClient implements WsClient {
   reasonValue: UnauthorizedReason | null = null
   private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
-  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
+  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null, droppedFrames: 0 }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
@@ -1123,6 +1123,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       client.emitDiagnostics({
         lastError: sampleLastError({ message: 'a distinctive sample message' }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1148,6 +1149,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: 'unit rebooted unexpectedly',
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1173,7 +1175,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: null, latencyMs: 123 })
+      client.emitDiagnostics({ lastError: null, latencyMs: 123, droppedFrames: 0 })
       await settle()
 
       const el = diagnosticField('latency')
@@ -1190,7 +1192,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: null, latencyMs: 0 })
+      client.emitDiagnostics({ lastError: null, latencyMs: 0, droppedFrames: 0 })
       await settle()
 
       const el = diagnosticField('latency')
@@ -1208,6 +1210,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       client.emitDiagnostics({
         lastError: sampleLastError({ message: HOSTILE }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1237,6 +1240,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       client.emitDiagnostics({
         lastError: sampleLastError({ message: HOSTILE_MESSAGE }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1256,6 +1260,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       client.emitDiagnostics({
         lastError: sampleLastError({ message: RTL_MESSAGE }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1287,6 +1292,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: ['unexpected', 'array', 'payload'] as unknown as string,
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1328,6 +1334,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const generic = diagnosticField('lastError').textContent
@@ -1338,6 +1345,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const pinned = diagnosticField('lastError').textContent
@@ -1357,6 +1365,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const generic = diagnosticField('lastError').textContent
@@ -1367,6 +1376,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const pinned = diagnosticField('lastError').textContent
@@ -1386,6 +1396,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const first = diagnosticField('lastError').textContent
@@ -1396,6 +1407,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'shared payload text',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const second = diagnosticField('lastError').textContent
@@ -1422,6 +1434,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: '',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const droppedText = diagnosticField('lastError').textContent ?? ''
@@ -1434,6 +1447,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: '',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const refusedText = diagnosticField('lastError').textContent ?? ''
@@ -1447,6 +1461,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: '',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         expect(diagnosticField('lastError').textContent ?? '').toContain('1000')
@@ -1470,6 +1485,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
             message: 'a coincidentally numeric code',
           }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
 
@@ -1498,6 +1514,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: '',
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1526,6 +1543,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: 'token value did not match',
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1558,6 +1576,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         client1.emitDiagnostics({
           lastError: sampleLastError({ at: FIXED_AT }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const firstText = diagnosticField('lastError').textContent
@@ -1582,6 +1601,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         client2.emitDiagnostics({
           lastError: sampleLastError({ at: FIXED_AT }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const laterText = diagnosticField('lastError').textContent
@@ -1600,7 +1620,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError(), latencyMs: null })
+      client.emitDiagnostics({ lastError: sampleLastError(), latencyMs: null, droppedFrames: 0 })
       await settle()
 
       expect(diagnosticFieldOrNull('at')).toBeNull()
@@ -1630,6 +1650,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         client.emitDiagnostics({
           lastError: sampleLastError({ at: FIXED_AT }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
 
@@ -1667,6 +1688,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         client.emitDiagnostics({
           lastError: sampleLastError({ at: YESTERDAY_2359 }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const crossDayText = diagnosticField('lastError').textContent ?? ''
@@ -1691,6 +1713,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         client2.emitDiagnostics({
           lastError: sampleLastError({ at: YESTERDAY_2359 }),
           latencyMs: null,
+          droppedFrames: 0,
         })
         await settle()
         const sameDayText = diagnosticField('lastError').textContent ?? ''
@@ -1726,6 +1749,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: 'PASV mode requires AUTO',
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1769,6 +1793,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           message: 'no config on disk',
         }),
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1782,6 +1807,42 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       expect(text).not.toContain('. :')
       expect(text).not.toContain('..')
       expect(text.match(/\./g)?.length ?? 0).toBe(2)
+    })
+  })
+
+  // SPEC 4.3.11 / 4.5.2.1 (issue #109): a measurement rather than a value
+  // that can be absent - "it renders, always, including at zero ... it
+  // carries no data-empty, because zero is not the absence of a figure, it
+  // is the figure." Covered the same way lastError and latency are above:
+  // the empty-vs-populated distinction does not apply here, so what is
+  // pinned instead is that the hook exists, the value renders, and
+  // data-empty is never set on it, at zero or otherwise. No label text is
+  // asserted, per the implementer's note that SPEC pins the hook and the
+  // no-data-empty rule but not the wording.
+  describe('droppedFrames (SPEC 4.3.11, issue #109)', () => {
+    it('renders 0 before any traffic at all, with no data-empty attribute', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      await settle()
+
+      const el = diagnosticField('droppedFrames')
+      expect(el.getAttribute('data-empty')).toBeNull()
+      expect((el.textContent ?? '').trim()).toContain('0')
+    })
+
+    it('renders a non-zero count once the client reports one, still with no data-empty attribute', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({ lastError: null, latencyMs: null, droppedFrames: 7 })
+      await settle()
+
+      const el = diagnosticField('droppedFrames')
+      expect(el.getAttribute('data-empty')).toBeNull()
+      expect((el.textContent ?? '').trim()).toContain('7')
     })
   })
 
@@ -1811,6 +1872,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           at: 1_700_000_000_000,
         },
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1835,6 +1897,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           at: 1_700_000_000_000,
         },
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 
@@ -1843,6 +1906,35 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const text = el.textContent ?? ''
       expect(text.trim().length).toBeGreaterThan(0)
       expect(text).not.toContain('connect_timeout')
+      expect(/\d{1,2}:\d{2}/.test(text)).toBe(true)
+    })
+
+    // SPEC 4.3.11 (issue #109): `bad_frame` is the fourth local code -- a
+    // frame arrived and failed the boundary guard. Same DOM-level shape as
+    // pong_timeout and connect_timeout above: a real, non-empty line with
+    // the time on it, and the raw code never leaks onto the screen.
+    it('bad_frame renders a real line with a time on it, and never leaks the raw code', async () => {
+      const client = new FakeWsClient()
+      const { settings: api, stores } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      teardownStores = stores.connectStores(asClient(client))
+      client.emitDiagnostics({
+        lastError: {
+          source: 'local',
+          code: 'bad_frame',
+          message: '',
+          at: 1_700_000_000_000,
+        },
+        latencyMs: null,
+        droppedFrames: 1,
+      })
+      await settle()
+
+      const el = diagnosticField('lastError')
+      expect(el.getAttribute('data-empty')).not.toBe('true')
+      const text = el.textContent ?? ''
+      expect(text.trim().length).toBeGreaterThan(0)
+      expect(text).not.toContain('bad_frame')
       expect(/\d{1,2}:\d{2}/.test(text)).toBe(true)
     })
 
@@ -1863,6 +1955,7 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
           at: 1_700_000_000_000,
         },
         latencyMs: null,
+        droppedFrames: 0,
       })
       await settle()
 

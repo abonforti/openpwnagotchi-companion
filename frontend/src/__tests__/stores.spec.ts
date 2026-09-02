@@ -312,7 +312,7 @@ class FakeWsClient implements WsClient {
   private restartReasonValue: RestartReason | null = null
   private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
-  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null }
+  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null, droppedFrames: 0 }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
@@ -488,6 +488,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 
@@ -509,6 +510,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
         restartReason: null,
         lastError: null,
         latencyMs: null,
+        droppedFrames: 0,
       })
     }
   })
@@ -523,6 +525,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
     fake.emitState('unauthorized', 'required')
     expect(get(connection)).toEqual({
@@ -531,6 +534,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 
@@ -545,6 +549,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 
@@ -564,6 +569,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
 
     teardown?.()
@@ -574,6 +580,7 @@ describe('connection: a mirror of the client state, not a second opinion', () =>
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 })
@@ -708,7 +715,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it('seeds lastError and latencyMs from the client at mount, before any onDiagnostics push', () => {
     const fake = new FakeWsClient()
     const seededError = sampleLastError()
-    fake.primeDiagnostics({ lastError: seededError, latencyMs: 42 })
+    fake.primeDiagnostics({ lastError: seededError, latencyMs: 42, droppedFrames: 0 })
     mount(fake)
     expect(get(connection)).toEqual({
       state: 'offline',
@@ -716,6 +723,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
       restartReason: null,
       lastError: seededError,
       latencyMs: 42,
+      droppedFrames: 0,
     })
   })
 
@@ -735,14 +743,40 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
       code: '1006',
       message: '',
     })
-    fake.emitDiagnostics({ lastError: error, latencyMs: 88 })
+    fake.emitDiagnostics({ lastError: error, latencyMs: 88, droppedFrames: 0 })
     expect(get(connection)).toEqual({
       state: 'connected',
       unauthorizedReason: null,
       restartReason: null,
       lastError: error,
       latencyMs: 88,
+      droppedFrames: 0,
     })
+  })
+
+  // SPEC 4.3.11 (issue #109): droppedFrames is mirrored the same way
+  // lastError and latencyMs are, but every fixture above happens to carry
+  // 0 for it, so none of those tests can tell a real mirror from a field
+  // hardcoded to zero. This drives a non-zero count through the live-push
+  // mirroring site specifically, the one exercised on every ordinary
+  // reconnect-free run of the app.
+  it('mirrors a non-zero droppedFrames count through to the connection store, not a hardcoded zero', () => {
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitDiagnostics({ lastError: null, latencyMs: null, droppedFrames: 5 })
+    expect(get(connection).droppedFrames).toBe(5)
+  })
+
+  // The same gap, at the seed-at-mount site rather than the live-push one:
+  // "seeds lastError and latencyMs from the client at mount" above pins the
+  // seeding mechanism but carries droppedFrames: 0 like every other fixture
+  // in this file did before the two tests above, so it cannot tell a real
+  // seed from a field the seeding code hardcodes to zero.
+  it('seeds a non-zero droppedFrames count from the client at mount, not a hardcoded zero', () => {
+    const fake = new FakeWsClient()
+    fake.primeDiagnostics({ lastError: null, latencyMs: null, droppedFrames: 3 })
+    mount(fake)
+    expect(get(connection).droppedFrames).toBe(3)
   })
 
   // A latency of exactly 0ms is a measurement, not the absence of one - a
@@ -752,7 +786,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it('distinguishes a measured latencyMs of 0 from an absent one', () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitDiagnostics({ lastError: null, latencyMs: 0 })
+    fake.emitDiagnostics({ lastError: null, latencyMs: 0, droppedFrames: 0 })
     expect(get(connection).latencyMs).toBe(0)
     expect(get(connection).latencyMs).not.toBeNull()
   })
@@ -760,7 +794,7 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it("reads a null lastError and null latencyMs once no client is attached, not the client's last reported diagnostics (SPEC 4.4.2)", () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitDiagnostics({ lastError: sampleLastError(), latencyMs: 15 })
+    fake.emitDiagnostics({ lastError: sampleLastError(), latencyMs: 15, droppedFrames: 0 })
     expect(get(connection).lastError).not.toBeNull()
     expect(get(connection).latencyMs).toBe(15)
 
@@ -801,8 +835,8 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
     class StateLinkedDiagnosticsClient extends FakeWsClient {
       diagnostics(): Diagnostics {
         return this.currentState === 'connected'
-          ? { lastError: null, latencyMs: 999 }
-          : { lastError: null, latencyMs: null }
+          ? { lastError: null, latencyMs: 999, droppedFrames: 0 }
+          : { lastError: null, latencyMs: null, droppedFrames: 0 }
       }
     }
     const fake = new StateLinkedDiagnosticsClient()
@@ -811,6 +845,30 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
 
     fake.emitState('connected') // onState only - emitDiagnostics() is never called
     expect(get(connection).latencyMs).toBe(999)
+  })
+
+  // The same fresh-read requirement, for droppedFrames rather than
+  // latencyMs: the state-transition handler could carry droppedFrames
+  // forward from whatever the store already held instead of reading it off
+  // client.diagnostics() the same way it reads lastError and latencyMs, and
+  // every fixture elsewhere in this file happens to agree on 0 for it, so
+  // nothing above would notice. Same double, same drive-only-emitState()
+  // shape as the test above, with droppedFrames forced apart between states
+  // instead of latencyMs.
+  it('a state transition also composes droppedFrames from a fresh read of diagnostics(), not a stale cached copy', () => {
+    class StateLinkedDroppedFramesClient extends FakeWsClient {
+      diagnostics(): Diagnostics {
+        return this.currentState === 'connected'
+          ? { lastError: null, latencyMs: null, droppedFrames: 9 }
+          : { lastError: null, latencyMs: null, droppedFrames: 0 }
+      }
+    }
+    const fake = new StateLinkedDroppedFramesClient()
+    mount(fake)
+    expect(get(connection).droppedFrames).toBe(0)
+
+    fake.emitState('connected') // onState only - emitDiagnostics() is never called
+    expect(get(connection).droppedFrames).toBe(9)
   })
 })
 
@@ -1449,6 +1507,7 @@ describe('unauthorized clears every data store', () => {
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 })
@@ -1495,6 +1554,7 @@ describe('resetStores: the explicit clear a caller reaches for around close()', 
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   })
 

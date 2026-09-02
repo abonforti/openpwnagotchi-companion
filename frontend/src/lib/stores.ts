@@ -27,9 +27,9 @@ import type {
 
 /**
  * SPEC 4.3.1 owns the state machine; this is a mirror of it, not a second
- * opinion. `lastError` and `latencyMs` are SPEC 4.3.10's diagnostics pair,
- * mirrored the same way: written from `client.diagnostics()`, never
- * computed here.
+ * opinion. `lastError`, `latencyMs` and `droppedFrames` are `client.diagnostics()`
+ * (SPEC 4.3.10/4.3.11), mirrored the same way: written from the client,
+ * never computed here.
  */
 /**
  * SPEC 4.4.1 (issue #131): `restartReason` is null in every state but
@@ -44,6 +44,7 @@ export interface ConnectionView {
   restartReason: RestartReason | null
   lastError: LastError | null
   latencyMs: number | null
+  droppedFrames: number
 }
 
 /**
@@ -69,6 +70,7 @@ const connectionWritable = writable<ConnectionView>({
   restartReason: null,
   lastError: null,
   latencyMs: null,
+  droppedFrames: 0,
 })
 const statsWritable = writable<Stats | null>(null)
 const accessPointsWritable = writable<AccessPoint[]>([])
@@ -530,6 +532,7 @@ export function connectStores(client: WsClient): () => void {
     restartReason: client.restartReason(),
     lastError: seededDiagnostics.lastError,
     latencyMs: seededDiagnostics.latencyMs,
+    droppedFrames: seededDiagnostics.droppedFrames,
   })
   const seededStats = client.lastStats()
   if (seededStats !== null) {
@@ -550,13 +553,14 @@ export function connectStores(client: WsClient): () => void {
     // lib/ws.ts may have cleared lastError as part of this very state
     // change (entering 'connected'/'degraded'), and by the time this
     // handler runs that clearing has already happened.
-    const { lastError, latencyMs } = client.diagnostics()
+    const { lastError, latencyMs, droppedFrames } = client.diagnostics()
     connectionWritable.set({
       state,
       unauthorizedReason: client.unauthorizedReason(),
       restartReason: client.restartReason(),
       lastError,
       latencyMs,
+      droppedFrames,
     })
     if (state === 'unauthorized') {
       // SPEC 4.4.2: the data belongs to a session the unit refused; leaving
@@ -571,11 +575,12 @@ export function connectStores(client: WsClient): () => void {
   // SPEC 4.3.10: a second callback, not folded into onState -- latency
   // changes without the state changing, once per ping interval.
   const unsubscribeDiagnostics = client.onDiagnostics(
-    ({ lastError, latencyMs }) => {
+    ({ lastError, latencyMs, droppedFrames }) => {
       connectionWritable.update((current) => ({
         ...current,
         lastError,
         latencyMs,
+        droppedFrames,
       }))
     },
   )
@@ -606,6 +611,7 @@ export function connectStores(client: WsClient): () => void {
       restartReason: null,
       lastError: null,
       latencyMs: null,
+      droppedFrames: 0,
     })
   }
 }

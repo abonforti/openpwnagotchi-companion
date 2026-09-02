@@ -204,7 +204,7 @@ class FakeWsClient implements WsClient {
     this.sendGpsCalls.push(data)
   }
   diagnostics(): Diagnostics {
-    return { lastError: null, latencyMs: null }
+    return { lastError: null, latencyMs: null, droppedFrames: 0 }
   }
   onDiagnostics(): () => void {
     return () => {}

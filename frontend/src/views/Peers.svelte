@@ -80,50 +80,123 @@
          (SPEC 4.5.3) -- so all three route through them like every other
          remote string on this row, and only '' dashes; '???' passes
          through unchanged because it is not ''. -->
-    <span class="row-field" data-field="name" data-empty={nameEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(peer.name)}</bdi>{#if nameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="name"
+      data-empty={nameEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(peer.name)}</bdi>{#if nameEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="fullName" data-empty={fullNameEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(peer.fullName)}</bdi>{#if fullNameEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="fullName"
+      data-empty={fullNameEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(peer.fullName)}</bdi>{#if fullNameEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
     <span
       class="row-field"
       data-field="fingerprint"
       data-empty={fingerprintEmpty ? 'true' : undefined}
     >
-      <bdi>{formatRemoteString(peer.fingerprint)}</bdi>{#if fingerprintEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      <bdi>{formatRemoteString(peer.fingerprint)}</bdi
+      >{#if fingerprintEmpty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="face" data-empty={faceEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(peer.face)}</bdi>{#if faceEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="face"
+      data-empty={faceEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(peer.face)}</bdi>{#if faceEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="version" data-empty={versionEmpty ? 'true' : undefined}>
-      <bdi>{formatRemoteString(peer.version)}</bdi>{#if versionEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="version"
+      data-empty={versionEmpty ? 'true' : undefined}
+    >
+      <bdi>{formatRemoteString(peer.version)}</bdi>{#if versionEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="rssi" data-empty={rssiEmpty ? 'true' : undefined}>
-      {formatPeerNumber(peer.rssi)}{#if rssiEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="rssi"
+      data-empty={rssiEmpty ? 'true' : undefined}
+    >
+      {formatPeerNumber(peer.rssi)}{#if rssiEmpty}<span class="visually-hidden">
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="channel" data-empty={channelEmpty ? 'true' : undefined}>
-      {formatPeerNumber(peer.channel)}{#if channelEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="channel"
+      data-empty={channelEmpty ? 'true' : undefined}
+    >
+      {formatPeerNumber(peer.channel)}{#if channelEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="lastSeen" data-empty={lastSeenEmpty ? 'true' : undefined}>
-      {formatUnitTime(peer.lastSeen)}{#if lastSeenEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="lastSeen"
+      data-empty={lastSeenEmpty ? 'true' : undefined}
+    >
+      {formatUnitTime(peer.lastSeen)}{#if lastSeenEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
     <span
       class="row-field"
       data-field="encounters"
       data-empty={encountersEmpty ? 'true' : undefined}
     >
-      {formatPeerNumber(peer.encounters)}{#if encountersEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      {formatPeerNumber(peer.encounters)}{#if encountersEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
-    <span class="row-field" data-field="pwndRun" data-empty={pwndRunEmpty ? 'true' : undefined}>
-      {formatPeerNumber(peer.pwndRun)}{#if pwndRunEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+    <span
+      class="row-field"
+      data-field="pwndRun"
+      data-empty={pwndRunEmpty ? 'true' : undefined}
+    >
+      {formatPeerNumber(peer.pwndRun)}{#if pwndRunEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
     <span
       class="row-field"
       data-field="pwndTotal"
       data-empty={pwndTotalEmpty ? 'true' : undefined}
     >
-      {formatPeerNumber(peer.pwndTotal)}{#if pwndTotalEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+      {formatPeerNumber(peer.pwndTotal)}{#if pwndTotalEmpty}<span
+          class="visually-hidden"
+        >
+          {EMPTY_LABEL}</span
+        >{/if}
     </span>
   </li>
 {/snippet}

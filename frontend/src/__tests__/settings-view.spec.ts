@@ -1,8 +1,19 @@
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Capabilities, OutgoingMessage, OutgoingStats } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, LastError, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
+import type {
+  Capabilities,
+  OutgoingMessage,
+  OutgoingStats,
+} from '../lib/protocol'
+import type {
+  ConnectionState,
+  Diagnostics,
+  LastError,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+} from '../lib/ws'
 
 import { assertRemoteStringIsolated } from './helpers/remoteText'
 
@@ -99,7 +110,11 @@ let container: HTMLElement | null = null
 let instance: Record<string, unknown> | null = null
 let teardownStores: (() => void) | null = null
 
-async function mountSettings(): Promise<{ root: HTMLElement; settings: SettingsApi; stores: StoresApi }> {
+async function mountSettings(): Promise<{
+  root: HTMLElement
+  settings: SettingsApi
+  stores: StoresApi
+}> {
   svelte = await import('svelte')
   const settingsApi = await import('../lib/settings')
   const storesApi = await import('../lib/stores')
@@ -108,7 +123,10 @@ async function mountSettings(): Promise<{ root: HTMLElement; settings: SettingsA
   }
   container = document.createElement('div')
   document.body.appendChild(container)
-  instance = svelte.mount(module.default, { target: container }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: container }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { root: container, settings: settingsApi, stores: storesApi }
 }
@@ -150,14 +168,20 @@ function hostRowOrNull(id: string): HTMLElement | null {
 function hostField(id: string, name: string): HTMLElement {
   const row = hostRow(id)
   const found = row.querySelector(`[data-host-field="${name}"]`)
-  expect(found, `expected [data-host-field="${name}"] inside host ${id}`).not.toBeNull()
+  expect(
+    found,
+    `expected [data-host-field="${name}"] inside host ${id}`,
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
 function hostAction(id: string, action: string): HTMLElement {
   const row = hostRow(id)
   const found = row.querySelector(`[data-action="${action}"]`)
-  expect(found, `expected [data-action="${action}"] inside host ${id}`).not.toBeNull()
+  expect(
+    found,
+    `expected [data-action="${action}"] inside host ${id}`,
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -169,7 +193,10 @@ function hostAction(id: string, action: string): HTMLElement {
  */
 function addField(name: string): HTMLInputElement {
   const found = root().querySelector(`[data-add-field="${name}"]`)
-  expect(found, `expected [data-add-field="${name}"] in the add-host form`).not.toBeNull()
+  expect(
+    found,
+    `expected [data-add-field="${name}"] in the add-host form`,
+  ).not.toBeNull()
   return found as HTMLInputElement
 }
 
@@ -185,10 +212,13 @@ function addButton(): HTMLElement {
 
 /** The reveal control belonging to the add-host form's token field, not to any row's. */
 function addFormReveal(): HTMLElement {
-  const candidates = [...root().querySelectorAll('[data-action="reveal"]')].filter(
-    (el) => el.closest('[data-host-id]') === null,
-  )
-  expect(candidates, 'expected exactly one reveal control outside any row').toHaveLength(1)
+  const candidates = [
+    ...root().querySelectorAll('[data-action="reveal"]'),
+  ].filter((el) => el.closest('[data-host-id]') === null)
+  expect(
+    candidates,
+    'expected exactly one reveal control outside any row',
+  ).toHaveLength(1)
   return candidates[0] as HTMLElement
 }
 
@@ -267,14 +297,21 @@ class FakeWsClient implements WsClient {
   }
   sendGps(): void {}
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    if (message.type === 'stats')
+      this.lastStatsValue = {
+        stats: message.data,
+        timestamp: message.timestamp,
+      }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -289,7 +326,13 @@ function asClient(fake: FakeWsClient): WsClient {
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'gpsd', pluginVersion: '0.1.0', ...overrides }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'gpsd',
+    pluginVersion: '0.1.0',
+    ...overrides,
+  }
 }
 
 function statsEnvelope(capabilities: Capabilities): OutgoingStats {
@@ -397,7 +440,9 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
     api.loadSettings(() => 'not-an-ip-address')
     await settle()
 
-    expect(hostField('bluetooth', 'address').textContent).toContain('172.20.10.2')
+    expect(hostField('bluetooth', 'address').textContent).toContain(
+      '172.20.10.2',
+    )
     expect(hostField('usb', 'address').textContent).toContain('10.0.0.2')
     expect(hostRow('bluetooth').getAttribute('data-host-active')).toBe('true')
     expect(hostRow('usb').getAttribute('data-host-active')).not.toBe('true')
@@ -413,13 +458,21 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
 
     expect(get(api.activeHost)?.id).toBe('usb')
     expect(hostRow('usb').getAttribute('data-host-active')).toBe('true')
-    expect(hostRow('bluetooth').getAttribute('data-host-active')).not.toBe('true')
+    expect(hostRow('bluetooth').getAttribute('data-host-active')).not.toBe(
+      'true',
+    )
   })
 
   it('removes a host from the list, through [data-action="remove"]', async () => {
     const { settings: api } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
-    api.addHost({ label: 'Extra unit', address: '172.20.10.5', wsPort: 8082, httpPort: 8443, token: null })
+    api.addHost({
+      label: 'Extra unit',
+      address: '172.20.10.5',
+      wsPort: 8082,
+      httpPort: 8443,
+      token: null,
+    })
     await settle()
 
     const extra = get(api.settings).hosts.find((h) => h.label === 'Extra unit')
@@ -440,8 +493,13 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
     click(addButton())
     await settle()
 
-    const added = get(api.settings).hosts.find((h) => h.address === '172.20.10.40')
-    expect(added, 'the new host must appear in the settings store').toBeDefined()
+    const added = get(api.settings).hosts.find(
+      (h) => h.address === '172.20.10.40',
+    )
+    expect(
+      added,
+      'the new host must appear in the settings store',
+    ).toBeDefined()
     expect(hostRowOrNull(added!.id)).not.toBeNull()
   })
 
@@ -454,12 +512,17 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
     await settle()
 
     const labelField = hostField('bluetooth', 'label')
-    expect(labelField.tagName, 'expected the label field to become an input while editing').toBe('INPUT')
+    expect(
+      labelField.tagName,
+      'expected the label field to become an input while editing',
+    ).toBe('INPUT')
     typeInto(labelField, 'My Bluetooth Unit')
     click(hostAction('bluetooth', 'save'))
     await settle()
 
-    expect(get(api.settings).hosts.find((h) => h.id === 'bluetooth')?.label).toBe('My Bluetooth Unit')
+    expect(
+      get(api.settings).hosts.find((h) => h.id === 'bluetooth')?.label,
+    ).toBe('My Bluetooth Unit')
   })
 
   it('discards an in-progress edit through [data-action="cancel"]', async () => {
@@ -467,14 +530,18 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
     api.loadSettings(() => 'not-an-ip-address')
     await settle()
 
-    const before = get(api.settings).hosts.find((h) => h.id === 'bluetooth')?.label
+    const before = get(api.settings).hosts.find(
+      (h) => h.id === 'bluetooth',
+    )?.label
     click(hostAction('bluetooth', 'edit'))
     await settle()
     typeInto(hostField('bluetooth', 'label'), 'Discarded label')
     click(hostAction('bluetooth', 'cancel'))
     await settle()
 
-    expect(get(api.settings).hosts.find((h) => h.id === 'bluetooth')?.label).toBe(before)
+    expect(
+      get(api.settings).hosts.find((h) => h.id === 'bluetooth')?.label,
+    ).toBe(before)
   })
 
   it('ports are shown but never editable (SPEC 4.5.1: "ports are diagnostics, not settings")', async () => {
@@ -489,9 +556,14 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
       const el = hostField('bluetooth', port)
       if (el.tagName === 'INPUT') {
         const input = el as HTMLInputElement
-        expect(input.disabled || input.readOnly, `${port} input must be disabled or readOnly`).toBe(true)
+        expect(
+          input.disabled || input.readOnly,
+          `${port} input must be disabled or readOnly`,
+        ).toBe(true)
       }
-      expect(el.textContent ?? (el as HTMLInputElement).value).toContain(expected)
+      expect(el.textContent ?? (el as HTMLInputElement).value).toContain(
+        expected,
+      )
     }
 
     // Also true while a row is in its "edit" state: ports never become
@@ -511,9 +583,10 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
       const el = hostField('bluetooth', port)
       if (el.tagName === 'INPUT') {
         const input = el as HTMLInputElement
-        expect(input.disabled || input.readOnly, `${port} input must stay disabled or readOnly while editing`).toBe(
-          true,
-        )
+        expect(
+          input.disabled || input.readOnly,
+          `${port} input must stay disabled or readOnly while editing`,
+        ).toBe(true)
       }
       expect(
         el.textContent ?? (el as HTMLInputElement).value,
@@ -532,7 +605,7 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
 // of the number it exists to guard.
 // ---------------------------------------------------------------------------
 
-describe("the view carries no port literals of its own (SPEC 4.5.2.1)", () => {
+describe('the view carries no port literals of its own (SPEC 4.5.2.1)', () => {
   it("a host added through the form comes out at the library's exported port defaults", async () => {
     const { settings: api } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
@@ -542,8 +615,13 @@ describe("the view carries no port literals of its own (SPEC 4.5.2.1)", () => {
     click(addButton())
     await settle()
 
-    const added = get(api.settings).hosts.find((h) => h.address === '172.20.10.12')
-    expect(added, 'the new host must appear in the settings store').toBeDefined()
+    const added = get(api.settings).hosts.find(
+      (h) => h.address === '172.20.10.12',
+    )
+    expect(
+      added,
+      'the new host must appear in the settings store',
+    ).toBeDefined()
     expect(added?.wsPort).toBe(api.DEFAULT_WS_PORT)
     expect(added?.httpPort).toBe(api.DEFAULT_HTTP_PORT)
   })
@@ -569,15 +647,23 @@ describe('a token is edited directly in the row, with no edit mode gating it (SP
     // it behind an edit mode separates it from the one fact that gives it
     // meaning".
     const tokenInput = hostField(activeId!, 'token')
-    expect(tokenInput.tagName, 'the token field must be directly editable').toBe('INPUT')
+    expect(
+      tokenInput.tagName,
+      'the token field must be directly editable',
+    ).toBe('INPUT')
     typeInto(tokenInput, 'a-fresh-token')
     tokenInput.dispatchEvent(new Event('change', { bubbles: true }))
     tokenInput.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
     await settle()
 
     const record = get(api.settings).hosts.find((h) => h.id === activeId)
-    expect(record?.token, 'the per-host record is the source of truth').toBe('a-fresh-token')
-    expect(fakeStorage.getItem(TOKEN_KEY), 'companion.token is the copy the client reads').toBe('a-fresh-token')
+    expect(record?.token, 'the per-host record is the source of truth').toBe(
+      'a-fresh-token',
+    )
+    expect(
+      fakeStorage.getItem(TOKEN_KEY),
+      'companion.token is the copy the client reads',
+    ).toBe('a-fresh-token')
   })
 })
 
@@ -622,7 +708,7 @@ function tokenLeaksIntoMarkup(token: string): boolean {
 }
 
 describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
-  it("is masked in a row until [data-action=\"reveal\"] is used there, then reads as plain text", async () => {
+  it('is masked in a row until [data-action="reveal"] is used there, then reads as plain text', async () => {
     const { settings: api } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
     const fixtureToken = 'row-reveal-fixture-value'
@@ -630,10 +716,13 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
     await settle()
 
     const tokenInput = hostField('bluetooth', 'token') as HTMLInputElement
-    expect(isMasked(tokenInput), 'the token must be masked by default').toBe(true)
-    expect(tokenLeaksIntoMarkup(fixtureToken), 'the token must not appear in the rendered markup while masked').toBe(
-      false,
+    expect(isMasked(tokenInput), 'the token must be masked by default').toBe(
+      true,
     )
+    expect(
+      tokenLeaksIntoMarkup(fixtureToken),
+      'the token must not appear in the rendered markup while masked',
+    ).toBe(false)
     // The value is still there, carried in the property the browser reads
     // to render the field, just not exposed as text or as a stray
     // attribute -- masking hides it visually, it does not discard it.
@@ -644,7 +733,10 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
 
     const revealedInput = hostField('bluetooth', 'token') as HTMLInputElement
     expect(isMasked(revealedInput), 'revealing must unmask it').toBe(false)
-    expect(revealedInput.value, 'revealing must not have altered or discarded the value').toBe(fixtureToken)
+    expect(
+      revealedInput.value,
+      'revealing must not have altered or discarded the value',
+    ).toBe(fixtureToken)
     // Still true after revealing: the field being type="text" now is what
     // makes the value visible to a person looking at the screen, but that
     // visibility is the browser rendering the input widget, not the value
@@ -653,7 +745,10 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
     // (title/aria-label/placeholder/text node) than the one `isMasked`
     // already covers, not a claim that revealing changes what
     // `innerHTML` contains.
-    expect(tokenLeaksIntoMarkup(fixtureToken), 'revealing must not spill the token into markup either').toBe(false)
+    expect(
+      tokenLeaksIntoMarkup(fixtureToken),
+      'revealing must not spill the token into markup either',
+    ).toBe(false)
   })
 
   it('is masked in the add-host form on the same terms, until its own reveal control is used', async () => {
@@ -666,18 +761,28 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
     typeInto(addToken, fixtureToken)
     await settle()
 
-    expect(isMasked(addField('token')), 'the add-host form token must be masked by default too').toBe(true)
-    expect(tokenLeaksIntoMarkup(fixtureToken), 'a token typed into the add form must not leak into markup while masked').toBe(
-      false,
-    )
+    expect(
+      isMasked(addField('token')),
+      'the add-host form token must be masked by default too',
+    ).toBe(true)
+    expect(
+      tokenLeaksIntoMarkup(fixtureToken),
+      'a token typed into the add form must not leak into markup while masked',
+    ).toBe(false)
 
     click(addFormReveal())
     await settle()
 
     const revealed = addField('token')
-    expect(isMasked(revealed), 'revealing the add-host form field must unmask it').toBe(false)
+    expect(
+      isMasked(revealed),
+      'revealing the add-host form field must unmask it',
+    ).toBe(false)
     expect(revealed.value).toBe(fixtureToken)
-    expect(tokenLeaksIntoMarkup(fixtureToken), 'revealing must not spill the token into markup either').toBe(false)
+    expect(
+      tokenLeaksIntoMarkup(fixtureToken),
+      'revealing must not spill the token into markup either',
+    ).toBe(false)
   })
 
   // "One field is revealed at a time, across the whole screen. Revealing a
@@ -692,11 +797,16 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
     // Row, then the add form: the row must re-mask.
     click(hostAction('bluetooth', 'reveal'))
     await settle()
-    expect(isMasked(hostField('bluetooth', 'token') as HTMLInputElement)).toBe(false)
+    expect(isMasked(hostField('bluetooth', 'token') as HTMLInputElement)).toBe(
+      false,
+    )
 
     click(addFormReveal())
     await settle()
-    expect(isMasked(addField('token')), 'the add-host form field must now be revealed').toBe(false)
+    expect(
+      isMasked(addField('token')),
+      'the add-host form field must now be revealed',
+    ).toBe(false)
     expect(
       isMasked(hostField('bluetooth', 'token') as HTMLInputElement),
       "revealing the add-host form's token must re-mask the row's",
@@ -705,7 +815,10 @@ describe('the token is masked, with a reveal control (SPEC 4.5.2.1)', () => {
     // The add form, then a row: the add form must re-mask.
     click(hostAction('usb', 'reveal'))
     await settle()
-    expect(isMasked(hostField('usb', 'token') as HTMLInputElement), 'the usb row must now be revealed').toBe(false)
+    expect(
+      isMasked(hostField('usb', 'token') as HTMLInputElement),
+      'the usb row must now be revealed',
+    ).toBe(false)
     expect(
       isMasked(addField('token')),
       "revealing a row's token must re-mask the add-host form's",
@@ -731,13 +844,18 @@ describe('a bad address typed into the add-host form (SPEC 4.5.2.1, 4.7)', () =>
     expect(() => click(addButton())).not.toThrow()
     await settle()
 
-    expect(get(api.settings).hosts.length, 'no host is added for a refused address').toBe(before)
+    expect(
+      get(api.settings).hosts.length,
+      'no host is added for a refused address',
+    ).toBe(before)
     const error = root().querySelector('[data-field-error="address"]')
-    expect(error, 'expected an error message next to the address field').not.toBeNull()
+    expect(
+      error,
+      'expected an error message next to the address field',
+    ).not.toBeNull()
     expect((error?.textContent ?? '').length).toBeGreaterThan(0)
     expect(error?.getAttribute('role')).toBe('alert')
   })
-
 })
 
 // ---------------------------------------------------------------------------
@@ -753,62 +871,91 @@ describe('a bad address typed into the add-host form (SPEC 4.5.2.1, 4.7)', () =>
 // makes new URL throw instead.
 // ---------------------------------------------------------------------------
 
-const ADDRESS_CASES: Array<[label: string, address: string, usable: boolean]> = [
-  ['an ordinary IPv4 literal', '172.20.10.9', true],
-  ['the highest legal octets', '255.255.255.254', true],
-  ['the wildcard address, refused by name (SPEC 4.7)', '0.0.0.0', false],
-  ['the limited broadcast address, refused by name (SPEC 4.7)', '255.255.255.255', false],
-  ['an octal-looking octet new URL would silently reinterpret (SPEC 4.7)', '010.0.0.2', false],
-  ['a leading zero on a digit that is not a valid octal one either, where new URL would throw (SPEC 4.7)', '08.0.0.2', false],
-  ['a malformed literal', 'not-an-ip-address', false],
-  ['an out-of-range octet', '256.0.0.1', false],
-  ['an IPv6 literal', '[fe80::1]', false],
-]
+const ADDRESS_CASES: Array<[label: string, address: string, usable: boolean]> =
+  [
+    ['an ordinary IPv4 literal', '172.20.10.9', true],
+    ['the highest legal octets', '255.255.255.254', true],
+    ['the wildcard address, refused by name (SPEC 4.7)', '0.0.0.0', false],
+    [
+      'the limited broadcast address, refused by name (SPEC 4.7)',
+      '255.255.255.255',
+      false,
+    ],
+    [
+      'an octal-looking octet new URL would silently reinterpret (SPEC 4.7)',
+      '010.0.0.2',
+      false,
+    ],
+    [
+      'a leading zero on a digit that is not a valid octal one either, where new URL would throw (SPEC 4.7)',
+      '08.0.0.2',
+      false,
+    ],
+    ['a malformed literal', 'not-an-ip-address', false],
+    ['an out-of-range octet', '256.0.0.1', false],
+    ['an IPv6 literal', '[fe80::1]', false],
+  ]
 
 describe('the form and the mutator refuse the same set (SPEC 4.5.2.1, 4.7)', () => {
-  it.each(ADDRESS_CASES)('%s (%s): isUsableAddress, addHost and the form agree (usable=%s)', async (_label, address, usable) => {
-    const { settings: api } = await mountSettings()
-    api.loadSettings(() => 'not-an-ip-address')
-    await settle()
+  it.each(ADDRESS_CASES)(
+    '%s (%s): isUsableAddress, addHost and the form agree (usable=%s)',
+    async (_label, address, usable) => {
+      const { settings: api } = await mountSettings()
+      api.loadSettings(() => 'not-an-ip-address')
+      await settle()
 
-    // 1. The predicate itself, exported from lib/settings.ts.
-    expect(api.isUsableAddress(address)).toBe(usable)
+      // 1. The predicate itself, exported from lib/settings.ts.
+      expect(api.isUsableAddress(address)).toBe(usable)
 
-    // 2. The mutator: addHost throws iff the predicate refuses the address
-    // (SPEC 4.7's "a mutator throws on a bad address").
-    const beforeMutator = get(api.settings).hosts.length
-    const hostArgs = { label: 'probe', address, wsPort: 8082, httpPort: 8443, token: null }
-    if (usable) {
-      expect(() => api.addHost(hostArgs)).not.toThrow()
-      expect(get(api.settings).hosts.length).toBe(beforeMutator + 1)
-    } else {
-      expect(() => api.addHost(hostArgs)).toThrow()
-      expect(get(api.settings).hosts.length).toBe(beforeMutator)
-    }
-    // Undo whatever the mutator did, so the form assertion below starts
-    // clean regardless of which branch ran.
-    const mutatorAdded = get(api.settings).hosts.find((h) => h.address === address)
-    if (mutatorAdded) api.removeHost(mutatorAdded.id)
-    await settle()
+      // 2. The mutator: addHost throws iff the predicate refuses the address
+      // (SPEC 4.7's "a mutator throws on a bad address").
+      const beforeMutator = get(api.settings).hosts.length
+      const hostArgs = {
+        label: 'probe',
+        address,
+        wsPort: 8082,
+        httpPort: 8443,
+        token: null,
+      }
+      if (usable) {
+        expect(() => api.addHost(hostArgs)).not.toThrow()
+        expect(get(api.settings).hosts.length).toBe(beforeMutator + 1)
+      } else {
+        expect(() => api.addHost(hostArgs)).toThrow()
+        expect(get(api.settings).hosts.length).toBe(beforeMutator)
+      }
+      // Undo whatever the mutator did, so the form assertion below starts
+      // clean regardless of which branch ran.
+      const mutatorAdded = get(api.settings).hosts.find(
+        (h) => h.address === address,
+      )
+      if (mutatorAdded) api.removeHost(mutatorAdded.id)
+      await settle()
 
-    // 3. The form: the same address, through the DOM, never a thrown error
-    // reaching the user either way (SPEC 4.5.2.1).
-    const beforeForm = get(api.settings).hosts.length
-    typeInto(addFormAddressInput(), address)
-    expect(() => click(addButton())).not.toThrow()
-    await settle()
+      // 3. The form: the same address, through the DOM, never a thrown error
+      // reaching the user either way (SPEC 4.5.2.1).
+      const beforeForm = get(api.settings).hosts.length
+      typeInto(addFormAddressInput(), address)
+      expect(() => click(addButton())).not.toThrow()
+      await settle()
 
-    if (usable) {
-      expect(get(api.settings).hosts.some((h) => h.address === address)).toBe(true)
-      expect(get(api.settings).hosts.length).toBe(beforeForm + 1)
-      expect(root().querySelector('[data-field-error="address"]')).toBeNull()
-    } else {
-      expect(get(api.settings).hosts.length, `${address} must not be added through the form`).toBe(beforeForm)
-      const error = root().querySelector('[data-field-error="address"]')
-      expect(error, `expected an error for ${address}`).not.toBeNull()
-      expect(error?.getAttribute('role')).toBe('alert')
-    }
-  })
+      if (usable) {
+        expect(get(api.settings).hosts.some((h) => h.address === address)).toBe(
+          true,
+        )
+        expect(get(api.settings).hosts.length).toBe(beforeForm + 1)
+        expect(root().querySelector('[data-field-error="address"]')).toBeNull()
+      } else {
+        expect(
+          get(api.settings).hosts.length,
+          `${address} must not be added through the form`,
+        ).toBe(beforeForm)
+        const error = root().querySelector('[data-field-error="address"]')
+        expect(error, `expected an error for ${address}`).not.toBeNull()
+        expect(error?.getAttribute('role')).toBe('alert')
+      }
+    },
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -834,7 +981,9 @@ describe('the USB desktop-only note (SPEC 4.7)', () => {
     // The persisted label must not be where the warning lives: SPEC 4.7
     // says plainly that a warning in the label is one the owner can delete
     // by renaming the entry.
-    expect(hostField('usb', 'label').textContent).not.toMatch(/desktop[- ]only|cannot use/i)
+    expect(hostField('usb', 'label').textContent).not.toMatch(
+      /desktop[- ]only|cannot use/i,
+    )
   })
 })
 
@@ -901,7 +1050,9 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
     const { settings: api, stores } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
     teardownStores = stores.connectStores(asClient(client))
-    client.emitMessage(statsEnvelope(capabilitiesData({ pluginVersion: '1.4.2' })))
+    client.emitMessage(
+      statsEnvelope(capabilitiesData({ pluginVersion: '1.4.2' })),
+    )
     await settle()
 
     const el = diagnosticField('pluginVersion')
@@ -941,8 +1092,16 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
     // and already carry one of the two `LocalErrorCode` values.
     type WireLastError = Extract<LastError, { source: 'frame' | 'close' }>
 
-    function sampleLastError(overrides: Partial<WireLastError> = {}): LastError {
-      return { source: 'frame', code: 'internal_error', message: 'a sample failure', at: 1700000000000, ...overrides }
+    function sampleLastError(
+      overrides: Partial<WireLastError> = {},
+    ): LastError {
+      return {
+        source: 'frame',
+        code: 'internal_error',
+        message: 'a sample failure',
+        at: 1700000000000,
+        ...overrides,
+      }
     }
 
     it('renders lastError with data-empty="true" before any error has been reported', async () => {
@@ -961,7 +1120,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError({ message: 'a distinctive sample message' }), latencyMs: null })
+      client.emitDiagnostics({
+        lastError: sampleLastError({ message: 'a distinctive sample message' }),
+        latencyMs: null,
+      })
       await settle()
 
       const el = diagnosticField('lastError')
@@ -981,7 +1143,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       teardownStores = stores.connectStores(asClient(client))
       const distinctiveUnmappedCode = 'zzz_unmapped_diagnostic_code_xyz'
       client.emitDiagnostics({
-        lastError: sampleLastError({ code: distinctiveUnmappedCode, message: 'unit rebooted unexpectedly' }),
+        lastError: sampleLastError({
+          code: distinctiveUnmappedCode,
+          message: 'unit rebooted unexpectedly',
+        }),
         latencyMs: null,
       })
       await settle()
@@ -1034,19 +1199,25 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
     })
 
     it('renders a hostile lastError message as text, with no element or script created from it (SPEC 4.5.3)', async () => {
-      const HOSTILE = '<script>window.__pwned_settings_lasterror = true</script>'
+      const HOSTILE =
+        '<script>window.__pwned_settings_lasterror = true</script>'
       const client = new FakeWsClient()
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError({ message: HOSTILE }), latencyMs: null })
+      client.emitDiagnostics({
+        lastError: sampleLastError({ message: HOSTILE }),
+        latencyMs: null,
+      })
       await settle()
 
       expect(root().querySelector('script')).toBeNull()
-      expect((window as unknown as { __pwned_settings_lasterror?: boolean }).__pwned_settings_lasterror).not.toBe(
-        true,
-      )
-      delete (window as unknown as { __pwned_settings_lasterror?: boolean }).__pwned_settings_lasterror
+      expect(
+        (window as unknown as { __pwned_settings_lasterror?: boolean })
+          .__pwned_settings_lasterror,
+      ).not.toBe(true)
+      delete (window as unknown as { __pwned_settings_lasterror?: boolean })
+        .__pwned_settings_lasterror
     })
 
     // Bidi isolation (SPEC 4.5.3, "A string rendered as text can still lie
@@ -1063,7 +1234,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError({ message: HOSTILE_MESSAGE }), latencyMs: null })
+      client.emitDiagnostics({
+        lastError: sampleLastError({ message: HOSTILE_MESSAGE }),
+        latencyMs: null,
+      })
       await settle()
 
       const el = diagnosticField('lastError')
@@ -1079,7 +1253,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError({ message: RTL_MESSAGE }), latencyMs: null })
+      client.emitDiagnostics({
+        lastError: sampleLastError({ message: RTL_MESSAGE }),
+        latencyMs: null,
+      })
       await settle()
 
       const el = diagnosticField('lastError')
@@ -1146,14 +1323,20 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         teardownStores = stores.connectStores(asClient(client))
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'an_unmapped_diagnostic_code_one', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'an_unmapped_diagnostic_code_one',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
         const generic = diagnosticField('lastError').textContent
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'unauthorized', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'unauthorized',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1169,14 +1352,20 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         teardownStores = stores.connectStores(asClient(client))
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'an_unmapped_diagnostic_code_two', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'an_unmapped_diagnostic_code_two',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
         const generic = diagnosticField('lastError').textContent
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'log_unavailable', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'log_unavailable',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1192,14 +1381,20 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         teardownStores = stores.connectStores(asClient(client))
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'totally_unrecognised_code_alpha', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'totally_unrecognised_code_alpha',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
         const first = diagnosticField('lastError').textContent
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ code: 'completely_different_unrecognised_beta', message: 'shared payload text' }),
+          lastError: sampleLastError({
+            code: 'completely_different_unrecognised_beta',
+            message: 'shared payload text',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1221,7 +1416,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         teardownStores = stores.connectStores(asClient(client))
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ source: 'close', code: '1006', message: '' }),
+          lastError: sampleLastError({
+            source: 'close',
+            code: '1006',
+            message: '',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1229,7 +1428,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         expect(droppedText).toContain('1006')
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ source: 'close', code: '1008', message: '' }),
+          lastError: sampleLastError({
+            source: 'close',
+            code: '1008',
+            message: '',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1238,7 +1441,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         expect(refusedText).not.toBe(droppedText) // three different diagnoses, three different lines
 
         client.emitDiagnostics({
-          lastError: sampleLastError({ source: 'close', code: '1000', message: '' }),
+          lastError: sampleLastError({
+            source: 'close',
+            code: '1000',
+            message: '',
+          }),
           latencyMs: null,
         })
         await settle()
@@ -1257,12 +1464,18 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         // whenever it is numeric-looking (rather than gating on `source`)
         // still fails.
         client.emitDiagnostics({
-          lastError: sampleLastError({ source: 'frame', code: '1006', message: 'a coincidentally numeric code' }),
+          lastError: sampleLastError({
+            source: 'frame',
+            code: '1006',
+            message: 'a coincidentally numeric code',
+          }),
           latencyMs: null,
         })
         await settle()
 
-        expect(diagnosticField('lastError').textContent ?? '').not.toContain('1006')
+        expect(diagnosticField('lastError').textContent ?? '').not.toContain(
+          '1006',
+        )
       })
     })
 
@@ -1279,7 +1492,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       teardownStores = stores.connectStores(asClient(client))
 
       client.emitDiagnostics({
-        lastError: sampleLastError({ source: 'frame', code: 'unauthorized', message: '' }),
+        lastError: sampleLastError({
+          source: 'frame',
+          code: 'unauthorized',
+          message: '',
+        }),
         latencyMs: null,
       })
       await settle()
@@ -1303,7 +1520,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       teardownStores = stores.connectStores(asClient(client))
 
       client.emitDiagnostics({
-        lastError: sampleLastError({ source: 'frame', code: 'unauthorized', message: 'token value did not match' }),
+        lastError: sampleLastError({
+          source: 'frame',
+          code: 'unauthorized',
+          message: 'token value did not match',
+        }),
         latencyMs: null,
       })
       await settle()
@@ -1334,7 +1555,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         const { settings: api1, stores: stores1 } = await mountSettings()
         api1.loadSettings(() => 'not-an-ip-address')
         teardownStores = stores1.connectStores(asClient(client1))
-        client1.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        client1.emitDiagnostics({
+          lastError: sampleLastError({ at: FIXED_AT }),
+          latencyMs: null,
+        })
         await settle()
         const firstText = diagnosticField('lastError').textContent
 
@@ -1355,7 +1579,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         const { settings: api2, stores: stores2 } = await mountSettings()
         api2.loadSettings(() => 'not-an-ip-address')
         teardownStores = stores2.connectStores(asClient(client2))
-        client2.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        client2.emitDiagnostics({
+          lastError: sampleLastError({ at: FIXED_AT }),
+          latencyMs: null,
+        })
         await settle()
         const laterText = diagnosticField('lastError').textContent
 
@@ -1400,12 +1627,18 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         const { settings: api, stores } = await mountSettings()
         api.loadSettings(() => 'not-an-ip-address')
         teardownStores = stores.connectStores(asClient(client))
-        client.emitDiagnostics({ lastError: sampleLastError({ at: FIXED_AT }), latencyMs: null })
+        client.emitDiagnostics({
+          lastError: sampleLastError({ at: FIXED_AT }),
+          latencyMs: null,
+        })
         await settle()
 
         const text = diagnosticField('lastError').textContent ?? ''
         const match = /(\d{1,2}):(\d{2})/.exec(text)
-        expect(match, `expected an "H:MM" clock time in ${JSON.stringify(text)}`).not.toBeNull()
+        expect(
+          match,
+          `expected an "H:MM" clock time in ${JSON.stringify(text)}`,
+        ).not.toBeNull()
         const [, h, m] = match as RegExpExecArray
         // 09:14 local, allowing a 12h-with-meridiem rendering (hour 9 either way).
         expect(Number(h)).toBe(9)
@@ -1431,7 +1664,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         const { settings: api, stores } = await mountSettings()
         api.loadSettings(() => 'not-an-ip-address')
         teardownStores = stores.connectStores(asClient(client))
-        client.emitDiagnostics({ lastError: sampleLastError({ at: YESTERDAY_2359 }), latencyMs: null })
+        client.emitDiagnostics({
+          lastError: sampleLastError({ at: YESTERDAY_2359 }),
+          latencyMs: null,
+        })
         await settle()
         const crossDayText = diagnosticField('lastError').textContent ?? ''
 
@@ -1452,7 +1688,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
         const { settings: api2, stores: stores2 } = await mountSettings()
         api2.loadSettings(() => 'not-an-ip-address')
         teardownStores = stores2.connectStores(asClient(client2))
-        client2.emitDiagnostics({ lastError: sampleLastError({ at: YESTERDAY_2359 }), latencyMs: null })
+        client2.emitDiagnostics({
+          lastError: sampleLastError({ at: YESTERDAY_2359 }),
+          latencyMs: null,
+        })
         await settle()
         const sameDayText = diagnosticField('lastError').textContent ?? ''
 
@@ -1481,7 +1720,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
       client.emitDiagnostics({
-        lastError: sampleLastError({ source: 'frame', code: 'pasv_unavailable', message: 'PASV mode requires AUTO' }),
+        lastError: sampleLastError({
+          source: 'frame',
+          code: 'pasv_unavailable',
+          message: 'PASV mode requires AUTO',
+        }),
         latencyMs: null,
       })
       await settle()
@@ -1520,14 +1763,20 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
       client.emitDiagnostics({
-        lastError: sampleLastError({ source: 'frame', code: 'log_unavailable', message: 'no config on disk' }),
+        lastError: sampleLastError({
+          source: 'frame',
+          code: 'log_unavailable',
+          message: 'no config on disk',
+        }),
         latencyMs: null,
       })
       await settle()
 
       const text = (diagnosticField('lastError').textContent ?? '').trim()
       expect(text).toContain('The unit could not read its log')
-      expect(text).toContain('With no agent it has no configuration to find the path in')
+      expect(text).toContain(
+        'With no agent it has no configuration to find the path in',
+      )
       expect(text).toContain('no config on disk')
       expect(text).not.toContain('.:')
       expect(text).not.toContain('. :')
@@ -1555,7 +1804,12 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
       client.emitDiagnostics({
-        lastError: { source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 },
+        lastError: {
+          source: 'local',
+          code: 'pong_timeout',
+          message: '',
+          at: 1_700_000_000_000,
+        },
         latencyMs: null,
       })
       await settle()
@@ -1574,7 +1828,12 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
       client.emitDiagnostics({
-        lastError: { source: 'local', code: 'connect_timeout', message: '', at: 1_700_000_000_000 },
+        lastError: {
+          source: 'local',
+          code: 'connect_timeout',
+          message: '',
+          at: 1_700_000_000_000,
+        },
         latencyMs: null,
       })
       await settle()
@@ -1597,7 +1856,12 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
       client.emitDiagnostics({
-        lastError: { source: 'local', code: 'pong_timeout', message: '', at: 1_700_000_000_000 },
+        lastError: {
+          source: 'local',
+          code: 'pong_timeout',
+          message: '',
+          at: 1_700_000_000_000,
+        },
         latencyMs: null,
       })
       await settle()
@@ -1670,7 +1934,10 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       // own row (the wrapper that also holds its label), so an
       // implementation that labels *this* row "Last error" still fails here.
       const row = el.closest('[data-field]')?.parentElement
-      expect(row, 'expected the unauthorizedReason field to sit in a labelled row').not.toBeNull()
+      expect(
+        row,
+        'expected the unauthorizedReason field to sit in a labelled row',
+      ).not.toBeNull()
       expect(/last error/i.test(row?.textContent ?? '')).toBe(false)
     })
   })
@@ -1686,7 +1953,8 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
   const HOSTILE_SCRIPT = '<script>window.__pwned_settings = true</script>'
 
   afterEach(() => {
-    delete (window as unknown as { __pwned_settings?: boolean }).__pwned_settings
+    delete (window as unknown as { __pwned_settings?: boolean })
+      .__pwned_settings
   })
 
   it('renders a hostile plugin version verbatim, isolated inside a <bdi>, with no other element created', async () => {
@@ -1694,13 +1962,17 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     const { settings: api, stores } = await mountSettings()
     api.loadSettings(() => 'not-an-ip-address')
     teardownStores = stores.connectStores(asClient(client))
-    client.emitMessage(statsEnvelope(capabilitiesData({ pluginVersion: HOSTILE_SCRIPT })))
+    client.emitMessage(
+      statsEnvelope(capabilitiesData({ pluginVersion: HOSTILE_SCRIPT })),
+    )
     await settle()
 
     const el = diagnosticField('pluginVersion')
     expect(el.textContent).toBe(HOSTILE_SCRIPT)
     expect(root().querySelector('script')).toBeNull()
-    expect((window as unknown as { __pwned_settings?: boolean }).__pwned_settings).not.toBe(true)
+    expect(
+      (window as unknown as { __pwned_settings?: boolean }).__pwned_settings,
+    ).not.toBe(true)
     assertRemoteStringIsolated(el, HOSTILE_SCRIPT)
   })
 

@@ -66,7 +66,8 @@ export function unitPosition(gps: Gps | null): UnitPosition | null {
  * `{s}`/`{z}`/`{x}`/`{y}` itself from the coordinates it computed; nothing
  * that arrived on the wire is ever interpolated into this string.
  */
-export const TILE_URL_TEMPLATE = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+export const TILE_URL_TEMPLATE =
+  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 export const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 export const TILE_MAX_ZOOM = 19

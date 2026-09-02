@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import getPeersSchema from '../../../docs/schemas/incoming/get_peers.json'
 
 import type { OutgoingMessage, OutgoingPeersList, Peer } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 // DASH and EMPTY_LABEL are the pre-existing SPEC 4.5.1.1 surface. formatUnitTime
 // is also pre-existing (named, with its return shape, in 4.5.1.1's own function
 // table) and is reused here only to pin the wiring of the lastSeen field, the
@@ -155,7 +161,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the peers view must never send a command, only a read'))
+    return Promise.reject(
+      new Error('the peers view must never send a command, only a read'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -165,7 +173,10 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -296,13 +307,18 @@ async function mountPeers(
   const mountTarget = target ?? document.createElement('div')
   if (!target) document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, router, target: mountTarget }
 }
 
 async function click(element: Element): Promise<void> {
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  element.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   await settle()
 }
 
@@ -314,7 +330,10 @@ async function click(element: Element): Promise<void> {
 function root(): HTMLElement {
   if (!container) throw new Error('Peers view is not mounted')
   const viewRoot = container.querySelector('[data-view="peers"]')
-  expect(viewRoot, 'expected [data-view="peers"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="peers"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -368,9 +387,11 @@ describe('the refresh: route becoming /peers, the control, and a host switch in 
     expect(client.countRequestCalls('get_peers')).toBe(1)
   })
 
-  it("the request type matches docs/schemas' own \"type\" const, not a hand-typed literal that could drift from it", async () => {
+  it('the request type matches docs/schemas\' own "type" const, not a hand-typed literal that could drift from it', async () => {
     const { client } = await mountPeers()
-    const requestType = (getPeersSchema as { properties: { type: { const: string } } }).properties.type.const
+    const requestType = (
+      getPeersSchema as { properties: { type: { const: string } } }
+    ).properties.type.const
     expect(client.requestCalls).toContain(requestType)
   })
 
@@ -421,7 +442,12 @@ describe('the refresh: route becoming /peers, the control, and a host switch in 
 
   it('a host switch in place - the view still mounted, the route still /peers - asks the new unit for its own list', async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountPeers('connected', '/peers', null, (c) => created.push(c))
+    const { client: clientA, settings } = await mountPeers(
+      'connected',
+      '/peers',
+      null,
+      (c) => created.push(c),
+    )
     expect(created).toHaveLength(1)
     expect(clientA.countRequestCalls('get_peers')).toBe(1)
 
@@ -442,7 +468,10 @@ describe('the refresh: route becoming /peers, the control, and a host switch in 
     const clientB = created[1] as FakeWsClient
     expect(clientB.countRequestCalls('get_peers')).toBe(1)
 
-    clientB.settle('get_peers', peersListEnvelope([peer({ fingerprint: 'fp-unit-b' })]))
+    clientB.settle(
+      'get_peers',
+      peersListEnvelope([peer({ fingerprint: 'fp-unit-b' })]),
+    )
     await settle()
     expect(emptyMessage()).toBeNull()
     expect(rowKeys()).toEqual(['fp-unit-b'])
@@ -509,12 +538,19 @@ describe('the refresh: route becoming /peers, the control, and a host switch in 
     expect(client.countRequestCalls('get_peers')).toBe(1)
     client.rejectPending('get_peers', new Error('simulated queue timeout'))
     await settle()
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
-  it('tapping refresh with no active host does nothing: no request, no throw, no new client (SPEC 4.5.2.3\'s trigger has nothing to call request() on)', async () => {
+  it("tapping refresh with no active host does nothing: no request, no throw, no new client (SPEC 4.5.2.3's trigger has nothing to call request() on)", async () => {
     const created: FakeWsClient[] = []
-    const { client, settings } = await mountPeers('connected', '/peers', null, (c) => created.push(c))
+    const { client, settings } = await mountPeers(
+      'connected',
+      '/peers',
+      null,
+      (c) => created.push(c),
+    )
     expect(created).toHaveLength(1)
     client.settle('get_peers', peersListEnvelope([]))
     await settle()
@@ -568,14 +604,18 @@ describe('empty vs. not-yet-fetched, decided by connection state', () => {
     expect(emptyMessage()?.textContent).toBe('The unit has met no peers.')
   })
 
-  it('empty while not connected: the shared not-connected sentence, identical to the Wi-Fi view\'s own', async () => {
+  it("empty while not connected: the shared not-connected sentence, identical to the Wi-Fi view's own", async () => {
     await mountPeers('connecting')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('empty while offline: the same not-connected sentence', async () => {
     await mountPeers('offline')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('the empty message is absent once the list has rows', async () => {
@@ -596,9 +636,24 @@ describe('empty vs. not-yet-fetched, decided by connection state', () => {
 
 describe("several peers sharing the default '???' fingerprint all render as separate rows (SPEC 4.5.2.4)", () => {
   it('three peers that have not advertised an identity render as three rows, not one', async () => {
-    const one = peer({ fingerprint: '???', name: '???', fullName: '???@???', rssi: -40 })
-    const two = peer({ fingerprint: '???', name: '???', fullName: '???@???', rssi: -55 })
-    const three = peer({ fingerprint: '???', name: '???', fullName: '???@???', rssi: -70 })
+    const one = peer({
+      fingerprint: '???',
+      name: '???',
+      fullName: '???@???',
+      rssi: -40,
+    })
+    const two = peer({
+      fingerprint: '???',
+      name: '???',
+      fullName: '???@???',
+      rssi: -55,
+    })
+    const three = peer({
+      fingerprint: '???',
+      name: '???',
+      fullName: '???@???',
+      rssi: -70,
+    })
     const { client } = await mountPeers()
     client.settle('get_peers', peersListEnvelope([one, two, three]))
     await settle()
@@ -615,7 +670,11 @@ describe("several peers sharing the default '???' fingerprint all render as sepa
   })
 
   it("one peer with a real fingerprint and two sharing '???' are three rows together, not two", async () => {
-    const identified = peer({ fingerprint: 'fp-real-0001', name: 'known-unit', rssi: -30 })
+    const identified = peer({
+      fingerprint: 'fp-real-0001',
+      name: 'known-unit',
+      rssi: -30,
+    })
     const anonA = peer({ fingerprint: '???', rssi: -50 })
     const anonB = peer({ fingerprint: '???', rssi: -60 })
     const { client } = await mountPeers()
@@ -631,9 +690,12 @@ describe("several peers sharing the default '???' fingerprint all render as sepa
 // =============================================================================
 
 describe("'???' renders verbatim, never as a dash, and carries no data-empty (SPEC 4.5.2.4)", () => {
-  it('name and fingerprint both reading \'???\' render the literal string, with no data-empty', async () => {
+  it("name and fingerprint both reading '???' render the literal string, with no data-empty", async () => {
     const { client } = await mountPeers()
-    client.settle('get_peers', peersListEnvelope([peer({ name: '???', fingerprint: '???' })]))
+    client.settle(
+      'get_peers',
+      peersListEnvelope([peer({ name: '???', fingerprint: '???' })]),
+    )
     await settle()
     const row = rows()[0] as HTMLElement
     const nameField = fieldIn(row, 'name')
@@ -646,7 +708,12 @@ describe("'???' renders verbatim, never as a dash, and carries no data-empty (SP
 
   it('an advertised name and fingerprint render verbatim too, distinct from the sentinel', async () => {
     const { client } = await mountPeers()
-    client.settle('get_peers', peersListEnvelope([peer({ name: 'known-unit', fingerprint: 'fp-real-0001' })]))
+    client.settle(
+      'get_peers',
+      peersListEnvelope([
+        peer({ name: 'known-unit', fingerprint: 'fp-real-0001' }),
+      ]),
+    )
     await settle()
     const row = rows()[0] as HTMLElement
     expect(fieldIn(row, 'name').textContent).toBe('known-unit')
@@ -701,8 +768,16 @@ describe("an empty string ('') dashes and is marked empty, distinct from '???' (
     // as two peers each reporting '???' are two rows (SPEC 4.5.2.4's own
     // "a key must be positional" rule is about the render key, not about
     // treating '' as another sentinel).
-    const first = peer({ fingerprint: '', name: 'unit-with-blank-fingerprint-a', rssi: -40 })
-    const second = peer({ fingerprint: '', name: 'unit-with-blank-fingerprint-b', rssi: -55 })
+    const first = peer({
+      fingerprint: '',
+      name: 'unit-with-blank-fingerprint-a',
+      rssi: -40,
+    })
+    const second = peer({
+      fingerprint: '',
+      name: 'unit-with-blank-fingerprint-b',
+      rssi: -55,
+    })
     const { client } = await mountPeers()
     client.settle('get_peers', peersListEnvelope([first, second]))
     await settle()
@@ -724,10 +799,17 @@ const HOSTILE_STRINGS = [
 
 describe('every remote string renders as text (SPEC 4.5.3)', () => {
   beforeEach(() => {
-    ;(window as unknown as { __peersViewPwned?: boolean }).__peersViewPwned = undefined
+    ;(window as unknown as { __peersViewPwned?: boolean }).__peersViewPwned =
+      undefined
   })
 
-  const fields: Array<keyof Peer> = ['name', 'fullName', 'fingerprint', 'face', 'version']
+  const fields: Array<keyof Peer> = [
+    'name',
+    'fullName',
+    'fingerprint',
+    'face',
+    'version',
+  ]
 
   for (const field of fields) {
     for (const hostile of HOSTILE_STRINGS) {
@@ -742,14 +824,20 @@ describe('every remote string renders as text (SPEC 4.5.3)', () => {
       // once the template started creating one on purpose (SPEC 4.5.3).
       it(`${field} "${hostile}" renders as text, isolated inside a <bdi>, with no other element created`, async () => {
         const { client } = await mountPeers()
-        client.settle('get_peers', peersListEnvelope([peer({ [field]: hostile } as Partial<Peer>)]))
+        client.settle(
+          'get_peers',
+          peersListEnvelope([peer({ [field]: hostile } as Partial<Peer>)]),
+        )
         await settle()
         const row = rows()[0] as HTMLElement
         const el = fieldIn(row, field)
         expect(el.textContent).toBe(hostile)
         expect(root().querySelector('script')).toBeNull()
         expect(root().querySelector('[onerror]')).toBeNull()
-        expect((window as unknown as { __peersViewPwned?: boolean }).__peersViewPwned).toBeUndefined()
+        expect(
+          (window as unknown as { __peersViewPwned?: boolean })
+            .__peersViewPwned,
+        ).toBeUndefined()
         assertRemoteStringIsolated(el, hostile)
       })
     }
@@ -783,10 +871,21 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
   // name and fullName - fingerprint, face and version arrive over pwngrid
   // exactly the same way, and each was left untested here until review found
   // the gap: a wrapper deleted from any of the three left this suite green.
-  for (const field of ['name', 'fullName', 'fingerprint', 'face', 'version'] as const) {
+  for (const field of [
+    'name',
+    'fullName',
+    'fingerprint',
+    'face',
+    'version',
+  ] as const) {
     it(`${field} carrying U+202E is isolated inside a <bdi>, the character preserved rather than stripped`, async () => {
       const { client } = await mountPeers()
-      client.settle('get_peers', peersListEnvelope([peer({ [field]: HOSTILE_BIDI_NAME } as Partial<Peer>)]))
+      client.settle(
+        'get_peers',
+        peersListEnvelope([
+          peer({ [field]: HOSTILE_BIDI_NAME } as Partial<Peer>),
+        ]),
+      )
       await settle()
       const el = fieldIn(rows()[0] as HTMLElement, field)
       expect(el.textContent).toBe(HOSTILE_BIDI_NAME)
@@ -797,7 +896,10 @@ describe('bidi isolation for remote strings (SPEC 4.5.3, issue #219)', () => {
     for (const rtlName of [RTL_NAME_ARABIC, RTL_NAME_HEBREW]) {
       it(`a legitimate right-to-left ${field} "${rtlName}" renders unmangled, not stripped or reordered`, async () => {
         const { client } = await mountPeers()
-        client.settle('get_peers', peersListEnvelope([peer({ [field]: rtlName } as Partial<Peer>)]))
+        client.settle(
+          'get_peers',
+          peersListEnvelope([peer({ [field]: rtlName } as Partial<Peer>)]),
+        )
         await settle()
         const el = fieldIn(rows()[0] as HTMLElement, field)
         expect(el.textContent).toBe(rtlName)
@@ -824,13 +926,18 @@ describe('the six wire-nullable fields dash with data-empty on null, and render 
   for (const { field, sample } of nullableFields) {
     it(`${field}: null dashes with data-empty, a known value renders unmarked`, async () => {
       const { client } = await mountPeers()
-      client.settle('get_peers', peersListEnvelope([peer({ [field]: null } as Partial<Peer>)]))
+      client.settle(
+        'get_peers',
+        peersListEnvelope([peer({ [field]: null } as Partial<Peer>)]),
+      )
       await settle()
       let row = rows()[0] as HTMLElement
       expect(visibleFieldText(row, field)).toBe(DASH)
       expect(fieldIn(row, field).getAttribute('data-empty')).toBe('true')
 
-      client.emitMessage(peersListEnvelope([peer({ [field]: sample } as Partial<Peer>)]))
+      client.emitMessage(
+        peersListEnvelope([peer({ [field]: sample } as Partial<Peer>)]),
+      )
       await settle()
       row = rows()[0] as HTMLElement
       expect(fieldIn(row, field).textContent).toContain(String(sample))
@@ -842,12 +949,22 @@ describe('the six wire-nullable fields dash with data-empty on null, and render 
     const { client } = await mountPeers()
     client.settle(
       'get_peers',
-      peersListEnvelope([peer({ rssi: 0, channel: 0, encounters: 0, pwndRun: 0, pwndTotal: 0 })]),
+      peersListEnvelope([
+        peer({ rssi: 0, channel: 0, encounters: 0, pwndRun: 0, pwndTotal: 0 }),
+      ]),
     )
     await settle()
     const row = rows()[0] as HTMLElement
-    for (const field of ['rssi', 'channel', 'encounters', 'pwndRun', 'pwndTotal']) {
-      expect(fieldIn(row, field).getAttribute('data-empty'), field).not.toBe('true')
+    for (const field of [
+      'rssi',
+      'channel',
+      'encounters',
+      'pwndRun',
+      'pwndTotal',
+    ]) {
+      expect(fieldIn(row, field).getAttribute('data-empty'), field).not.toBe(
+        'true',
+      )
     }
   })
 
@@ -909,7 +1026,9 @@ describe('face and version dash on null, unlike name/fingerprint - the sentinel 
     // the fixture constant and not on a string that could be mistaken for a
     // real upstream release.
     const advertisedVersion = peer().version
-    client.emitMessage(peersListEnvelope([peer({ version: advertisedVersion })]))
+    client.emitMessage(
+      peersListEnvelope([peer({ version: advertisedVersion })]),
+    )
     await settle()
     row = rows()[0] as HTMLElement
     expect(fieldIn(row, 'version').textContent).toBe(advertisedVersion)
@@ -961,7 +1080,10 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   it('a null lastSeen sorts last, after every peer with a known one', async () => {
     const { client } = await mountPeers()
     const unknown = peer({ fingerprint: 'fp-unknown-seen', lastSeen: null })
-    const known = peer({ fingerprint: 'fp-known-seen', lastSeen: T - 1_000_000 }) // far older, still known
+    const known = peer({
+      fingerprint: 'fp-known-seen',
+      lastSeen: T - 1_000_000,
+    }) // far older, still known
     client.settle('get_peers', peersListEnvelope([unknown, known]))
     await settle()
     expect(rowKeys()).toEqual(['fp-known-seen', 'fp-unknown-seen'])
@@ -982,7 +1104,10 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   // comparison it lands on.
   it('a null lastSeen still sorts last when it arrives after the known peers in the payload, not only before them', async () => {
     const { client } = await mountPeers()
-    const known = peer({ fingerprint: 'fp-known-seen-2', lastSeen: T - 1_000_000 })
+    const known = peer({
+      fingerprint: 'fp-known-seen-2',
+      lastSeen: T - 1_000_000,
+    })
     const unknown = peer({ fingerprint: 'fp-unknown-seen-2', lastSeen: null })
     client.settle('get_peers', peersListEnvelope([known, unknown]))
     await settle()
@@ -1000,8 +1125,16 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
 
   it('within a tied lastSeen group, a null rssi sorts after a known one', async () => {
     const { client } = await mountPeers()
-    const unknownRssi = peer({ fingerprint: 'fp-unknown-rssi', lastSeen: T, rssi: null })
-    const knownRssi = peer({ fingerprint: 'fp-known-rssi', lastSeen: T, rssi: -90 }) // very weak, still known
+    const unknownRssi = peer({
+      fingerprint: 'fp-unknown-rssi',
+      lastSeen: T,
+      rssi: null,
+    })
+    const knownRssi = peer({
+      fingerprint: 'fp-known-rssi',
+      lastSeen: T,
+      rssi: -90,
+    }) // very weak, still known
     client.settle('get_peers', peersListEnvelope([unknownRssi, knownRssi]))
     await settle()
     expect(rowKeys()).toEqual(['fp-known-rssi', 'fp-unknown-rssi'])
@@ -1014,8 +1147,16 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   // lastSeen group, same expected final answer.
   it('within a tied lastSeen group, a null rssi still sorts after a known one when it arrives second in the payload, not only first', async () => {
     const { client } = await mountPeers()
-    const knownRssi = peer({ fingerprint: 'fp-known-rssi-2', lastSeen: T, rssi: -90 })
-    const unknownRssi = peer({ fingerprint: 'fp-unknown-rssi-2', lastSeen: T, rssi: null })
+    const knownRssi = peer({
+      fingerprint: 'fp-known-rssi-2',
+      lastSeen: T,
+      rssi: -90,
+    })
+    const unknownRssi = peer({
+      fingerprint: 'fp-unknown-rssi-2',
+      lastSeen: T,
+      rssi: null,
+    })
     client.settle('get_peers', peersListEnvelope([knownRssi, unknownRssi]))
     await settle()
     expect(rowKeys()).toEqual(['fp-known-rssi-2', 'fp-unknown-rssi-2'])
@@ -1023,14 +1164,25 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
 
   it('a null rssi in one lastSeen group does not leak into a more recent group: lastSeen still leads', async () => {
     const { client } = await mountPeers()
-    const olderKnownRssi = peer({ fingerprint: 'fp-older-known', lastSeen: T - 100, rssi: -20 })
-    const newerNullRssi = peer({ fingerprint: 'fp-newer-null', lastSeen: T, rssi: null })
-    client.settle('get_peers', peersListEnvelope([olderKnownRssi, newerNullRssi]))
+    const olderKnownRssi = peer({
+      fingerprint: 'fp-older-known',
+      lastSeen: T - 100,
+      rssi: -20,
+    })
+    const newerNullRssi = peer({
+      fingerprint: 'fp-newer-null',
+      lastSeen: T,
+      rssi: null,
+    })
+    client.settle(
+      'get_peers',
+      peersListEnvelope([olderKnownRssi, newerNullRssi]),
+    )
     await settle()
     expect(rowKeys()).toEqual(['fp-newer-null', 'fp-older-known'])
   })
 
-  it('two peers tied on both lastSeen and rssi break the tie on fingerprint, ascending (SPEC 4.5.2.4, matching 4.5.2.3\'s BSSID rule)', async () => {
+  it("two peers tied on both lastSeen and rssi break the tie on fingerprint, ascending (SPEC 4.5.2.4, matching 4.5.2.3's BSSID rule)", async () => {
     const lower = peer({ fingerprint: 'fp-tied-aaaa', lastSeen: T, rssi: -50 })
     const higher = peer({ fingerprint: 'fp-tied-bbbb', lastSeen: T, rssi: -50 })
     const { client } = await mountPeers()
@@ -1048,7 +1200,9 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
     client.settle('get_peers', peersListEnvelope([tiedA, tiedB]))
     await settle()
     const firstOrder = rowKeys()
-    expect(new Set(firstOrder)).toEqual(new Set([tiedA.fingerprint, tiedB.fingerprint]))
+    expect(new Set(firstOrder)).toEqual(
+      new Set([tiedA.fingerprint, tiedB.fingerprint]),
+    )
 
     // SPEC 4.5.2.4 names the fingerprint tie-break as ascending, matching
     // 4.5.2.3's BSSID rule - pinned by the direction test above. This test is
@@ -1096,10 +1250,21 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   // breaks this only for one array arrangement is the asymmetry the two
   // reversed-arrival tests above exist to catch.
   it('two peers both reporting a null lastSeen: neither wins the tie, so rssi still decides between them', async () => {
-    const strongerNullSeen = peer({ fingerprint: 'fp-nullseen-zzzz', lastSeen: null, rssi: -30 })
-    const weakerNullSeen = peer({ fingerprint: 'fp-nullseen-aaaa', lastSeen: null, rssi: -70 })
+    const strongerNullSeen = peer({
+      fingerprint: 'fp-nullseen-zzzz',
+      lastSeen: null,
+      rssi: -30,
+    })
+    const weakerNullSeen = peer({
+      fingerprint: 'fp-nullseen-aaaa',
+      lastSeen: null,
+      rssi: -70,
+    })
     const { client } = await mountPeers()
-    client.settle('get_peers', peersListEnvelope([strongerNullSeen, weakerNullSeen]))
+    client.settle(
+      'get_peers',
+      peersListEnvelope([strongerNullSeen, weakerNullSeen]),
+    )
     await settle()
     expect(rowKeys()).toEqual(['fp-nullseen-zzzz', 'fp-nullseen-aaaa'])
 
@@ -1109,8 +1274,16 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   })
 
   it('two peers both reporting a null lastSeen and a null rssi: the tie falls all the way through to fingerprint, ascending', async () => {
-    const lower = peer({ fingerprint: 'fp-nullboth-aaaa', lastSeen: null, rssi: null })
-    const higher = peer({ fingerprint: 'fp-nullboth-bbbb', lastSeen: null, rssi: null })
+    const lower = peer({
+      fingerprint: 'fp-nullboth-aaaa',
+      lastSeen: null,
+      rssi: null,
+    })
+    const higher = peer({
+      fingerprint: 'fp-nullboth-bbbb',
+      lastSeen: null,
+      rssi: null,
+    })
     const { client } = await mountPeers()
     client.settle('get_peers', peersListEnvelope([higher, lower]))
     await settle()
@@ -1122,16 +1295,30 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
   })
 
   it('two peers tied on a known lastSeen, both reporting a null rssi: the tie falls through to fingerprint, ascending', async () => {
-    const lower = peer({ fingerprint: 'fp-tiedseen-nullrssi-aaaa', lastSeen: T, rssi: null })
-    const higher = peer({ fingerprint: 'fp-tiedseen-nullrssi-bbbb', lastSeen: T, rssi: null })
+    const lower = peer({
+      fingerprint: 'fp-tiedseen-nullrssi-aaaa',
+      lastSeen: T,
+      rssi: null,
+    })
+    const higher = peer({
+      fingerprint: 'fp-tiedseen-nullrssi-bbbb',
+      lastSeen: T,
+      rssi: null,
+    })
     const { client } = await mountPeers()
     client.settle('get_peers', peersListEnvelope([higher, lower]))
     await settle()
-    expect(rowKeys()).toEqual(['fp-tiedseen-nullrssi-aaaa', 'fp-tiedseen-nullrssi-bbbb'])
+    expect(rowKeys()).toEqual([
+      'fp-tiedseen-nullrssi-aaaa',
+      'fp-tiedseen-nullrssi-bbbb',
+    ])
 
     client.emitMessage(peersListEnvelope([lower, higher]))
     await settle()
-    expect(rowKeys()).toEqual(['fp-tiedseen-nullrssi-aaaa', 'fp-tiedseen-nullrssi-bbbb'])
+    expect(rowKeys()).toEqual([
+      'fp-tiedseen-nullrssi-aaaa',
+      'fp-tiedseen-nullrssi-bbbb',
+    ])
   })
 })
 
@@ -1139,7 +1326,7 @@ describe('order: most recent lastSeen first, rssi (strongest first) the tie-brea
 // 8. The refresh control's copy.
 // =============================================================================
 
-describe('control copy, pinned by equality against SPEC 4.5.2.4\'s table', () => {
+describe("control copy, pinned by equality against SPEC 4.5.2.4's table", () => {
   it('the refresh control reads "Refresh"', async () => {
     await mountPeers()
     expect(refreshControl().textContent).toBe('Refresh')

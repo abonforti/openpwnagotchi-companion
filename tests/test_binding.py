@@ -1011,6 +1011,29 @@ def test_the_wildcard_guard_is_live(bind_recorder, free_ports):
     assert ("0.0.0.0", free_ports[0]) in bind_recorder.addresses
 
 
+def test_the_wildcard_guard_is_live_even_on_port_zero(bind_recorder):
+    """The guard-of-the-guard for the harness itself (SPEC 2.3.0, issue #16).
+
+    `BindRecorder` used to discard every bind whose port was 0, because
+    `free_ports` (this file's own fixture) probes for a free port that way -
+    which meant `assert_no_wildcard()` watched nothing for exactly the shape
+    an unvalidated `ws_port = 0` would have produced: a bind of the wildcard
+    on an OS-assigned port. Filtering by port could not tell the harness's own
+    probe apart from that; only telling the two apart by which socket made the
+    call can. This binds the wildcard on port 0 directly - the harness's own
+    probes never use the wildcard host, only `127.0.0.1` - and requires the
+    recorder to have seen it regardless.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as offender:
+        offender.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        offender.bind(("0.0.0.0", 0))
+
+        with pytest.raises(AssertionError):
+            bind_recorder.assert_no_wildcard()
+
+    assert ("0.0.0.0", 0) in bind_recorder.addresses
+
+
 @pytest.mark.parametrize("reported", ["0.0.0.0", "::", "::1", "localhost", ""])
 def test_a_junk_local_address_is_never_bound(
     make_listeners, harness, bind_recorder, reported

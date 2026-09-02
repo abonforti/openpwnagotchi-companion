@@ -45,7 +45,9 @@
   const frameSrc = $derived(frame === null ? null : screenFrameSrc(frame.png))
 
   const emptyText = $derived(
-    frame === null ? formatMirrorEmptyMessage(fetched) : MIRROR_UNREADABLE_MESSAGE,
+    frame === null
+      ? formatMirrorEmptyMessage(fetched)
+      : MIRROR_UNREADABLE_MESSAGE,
   )
 
   // SPEC 4.5.2.6's DOM hooks: "the field is present whether or not a frame
@@ -54,7 +56,9 @@
   // value needs. Held but unreadable still renders a real time: the
   // timestamp is a fact about the reply that arrived, not about whether this
   // app could render its picture.
-  const frameTimeText = $derived(formatUnitTime(frame === null ? null : frame.mtime))
+  const frameTimeText = $derived(
+    formatUnitTime(frame === null ? null : frame.mtime),
+  )
   const frameTimeEmpty = $derived(frameTimeText === DASH)
 
   const autoLabel = $derived(formatMirrorAutoLabel(auto))
@@ -67,7 +71,11 @@
   // refreshScreen, the one place that decides what "ask for the frame"
   // means.
   const screenRefresh = watchViewRefresh('mirror', refreshScreen)
-  const screenFollow = watchViewFollow('mirror', AUTO_INTERVAL_MS, refreshScreen)
+  const screenFollow = watchViewFollow(
+    'mirror',
+    AUTO_INTERVAL_MS,
+    refreshScreen,
+  )
 
   function requestRefresh(): void {
     screenRefresh.refreshNow()
@@ -88,7 +96,12 @@
   </div>
 
   <div class="controls-row">
-    <button type="button" data-action="auto" aria-pressed={auto} onclick={toggleAuto}>
+    <button
+      type="button"
+      data-action="auto"
+      aria-pressed={auto}
+      onclick={toggleAuto}
+    >
       {autoLabel}
     </button>
   </div>
@@ -97,8 +110,14 @@
        frame is held, dashed when it is not" -- outside the {#if} below on
        purpose, so a screen with no frame yet changes value, not shape. See
        the comment beside frameTimeText above. -->
-  <p class="frame-time" data-field="frameTime" data-empty={frameTimeEmpty ? 'true' : undefined}>
-    {frameTimeText}{#if frameTimeEmpty}<span class="visually-hidden"> {EMPTY_LABEL}</span>{/if}
+  <p
+    class="frame-time"
+    data-field="frameTime"
+    data-empty={frameTimeEmpty ? 'true' : undefined}
+  >
+    {frameTimeText}{#if frameTimeEmpty}<span class="visually-hidden">
+        {EMPTY_LABEL}</span
+      >{/if}
   </p>
 
   {#if frameSrc !== null}
@@ -107,7 +126,12 @@
          not what it shows: the face and status are on the wire separately,
          in face_status, and reading them out of the picture is not
          something this client does. -->
-    <img class="frame" data-screen-frame src={frameSrc} alt={MIRROR_FRAME_LABEL} />
+    <img
+      class="frame"
+      data-screen-frame
+      src={frameSrc}
+      alt={MIRROR_FRAME_LABEL}
+    />
   {:else}
     <p class="empty-message" data-empty-message role="status">{emptyText}</p>
   {/if}

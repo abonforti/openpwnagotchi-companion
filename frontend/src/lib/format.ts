@@ -327,7 +327,9 @@ export function formatUnauthorizedReason(reason: UnauthorizedReason): string {
  * for both sentences, not a second typing of the half that tells somebody
  * what to do -- the half most likely to be corrected later.
  */
-export function formatUnauthorizedCallToAction(reason: UnauthorizedReason): string {
+export function formatUnauthorizedCallToAction(
+  reason: UnauthorizedReason,
+): string {
   switch (reason) {
     case 'rejected':
       return 'Fix it in Settings.'
@@ -522,7 +524,8 @@ export function formatModeConfirmLabel(target: ModeTarget): string {
 }
 
 /** Both `set_mode` rows share one consequence sentence (SPEC 4.5.2.2's table). */
-export const MODE_CONSEQUENCE = "Restarts the unit's services. It comes back in 20 to 60 seconds."
+export const MODE_CONSEQUENCE =
+  "Restarts the unit's services. It comes back in 20 to 60 seconds."
 
 /** Both `set_mode` rows share one pending sentence (SPEC 4.5.2.2's table). */
 export const MODE_PENDING = 'Restarting.'
@@ -559,7 +562,8 @@ export const PASV_DISABLED_REASON = 'PASV is reachable only from AUTO.'
 
 export const REBOOT_LABEL = 'Reboot'
 export const REBOOT_CONFIRM_LABEL = 'Confirm reboot'
-export const REBOOT_CONSEQUENCE = 'The unit reboots. It comes back in a minute or two.'
+export const REBOOT_CONSEQUENCE =
+  'The unit reboots. It comes back in a minute or two.'
 export const REBOOT_PENDING = 'Rebooting.'
 
 export const SHUTDOWN_LABEL = 'Shut down'
@@ -568,7 +572,8 @@ export const SHUTDOWN_CONFIRM_LABEL = 'Confirm shutdown'
 // on what the unit is built from, and the reference hardware's PiSugar 3 is
 // not the only answer. What is true of every unit is that this app is not
 // the way back.
-export const SHUTDOWN_CONSEQUENCE = 'The unit powers off. It cannot be turned back on from here.'
+export const SHUTDOWN_CONSEQUENCE =
+  'The unit powers off. It cannot be turned back on from here.'
 export const SHUTDOWN_PENDING = 'Shutting down.'
 
 /** The cancel button's label, the same word for every control (SPEC 4.5.2.2). */
@@ -577,11 +582,13 @@ export const CANCEL_LABEL = 'Cancel'
 // Exported so formatLastErrorCode (SPEC 4.3.10, below) can reuse it rather
 // than re-wording the same code's meaning a second time for the diagnostics
 // line.
-export const PASV_UNAVAILABLE_MESSAGE = 'The unit does not have the PASV plugin.'
+export const PASV_UNAVAILABLE_MESSAGE =
+  'The unit does not have the PASV plugin.'
 const COMMAND_REFUSED_MESSAGE = 'The unit did not accept the command.'
 
 /** Two `stats` frames arrived with no confirmation of the change (SPEC 4.5.2.2). */
-export const COMMAND_NOT_CONFIRMED_MESSAGE = 'The unit did not confirm the change.'
+export const COMMAND_NOT_CONFIRMED_MESSAGE =
+  'The unit did not confirm the change.'
 
 /**
  * The sentence for a command that failed, from SPEC 4.5.2.2's condition
@@ -600,7 +607,10 @@ export const COMMAND_NOT_CONFIRMED_MESSAGE = 'The unit did not confirm the chang
  * explanation of why their reboot failed. A sentence only explains the
  * control it is about.
  */
-export function formatControlFailure(control: ControlId, code: string | null): string {
+export function formatControlFailure(
+  control: ControlId,
+  code: string | null,
+): string {
   if (control === 'pasv' && code === 'pasv_requires_auto') {
     return PASV_DISABLED_REASON
   }
@@ -624,7 +634,8 @@ export function formatControlFailure(control: ControlId, code: string | null): s
  * shared: it says nothing about which list it is under, because the reason
  * it appears has nothing to do with the list."). One string, not two.
  */
-const NOT_CONNECTED_LIST_MESSAGE = 'Not connected, so this list has not been read.'
+const NOT_CONNECTED_LIST_MESSAGE =
+  'Not connected, so this list has not been read.'
 
 /**
  * The label on the refresh control every list view carries (SPEC 4.5.2.3's
@@ -652,11 +663,16 @@ export type WifiSegment = 'nearby' | 'captured'
  * connection state -- not a property of the list itself, which is why it is
  * passed in rather than derived here.
  */
-export function formatWifiEmptyMessage(segment: WifiSegment, fetched: boolean): string {
+export function formatWifiEmptyMessage(
+  segment: WifiSegment,
+  fetched: boolean,
+): string {
   if (!fetched) {
     return NOT_CONNECTED_LIST_MESSAGE
   }
-  return segment === 'nearby' ? 'The unit reports no access points.' : 'The unit has no captures.'
+  return segment === 'nearby'
+    ? 'The unit reports no access points.'
+    : 'The unit has no captures.'
 }
 
 /**
@@ -851,7 +867,10 @@ export const LOG_UNAVAILABLE_MESSAGE =
  * against for the connection banner, applied here to a flag instead of a
  * state.
  */
-export function formatLogEmptyMessage(fetched: boolean, unavailable: boolean): string {
+export function formatLogEmptyMessage(
+  fetched: boolean,
+  unavailable: boolean,
+): string {
   if (!fetched) {
     return NOT_CONNECTED_LIST_MESSAGE
   }
@@ -954,7 +973,8 @@ export const MIRROR_FRAME_LABEL = "The unit's display"
 // ---------------------------------------------------------------------------
 
 const MAP_NO_CAPTURES_MESSAGE = 'The unit has no captures.'
-const MAP_NO_POSITIONED_CAPTURES_MESSAGE = "None of the unit's captures has a position."
+const MAP_NO_POSITIONED_CAPTURES_MESSAGE =
+  "None of the unit's captures has a position."
 
 /**
  * SPEC 4.5.2.7's copy table: three states, and only the third is new wording.
@@ -972,11 +992,16 @@ const MAP_NO_POSITIONED_CAPTURES_MESSAGE = "None of the unit's captures has a po
  * `capturesWithGps` decides that separately, so a caller with a non-empty pin
  * list has nothing to show here and never calls this function to find out.
  */
-export function formatMapEmptyMessage(fetched: boolean, hasCaptures: boolean): string {
+export function formatMapEmptyMessage(
+  fetched: boolean,
+  hasCaptures: boolean,
+): string {
   if (!fetched) {
     return NOT_CONNECTED_LIST_MESSAGE
   }
-  return hasCaptures ? MAP_NO_POSITIONED_CAPTURES_MESSAGE : MAP_NO_CAPTURES_MESSAGE
+  return hasCaptures
+    ? MAP_NO_POSITIONED_CAPTURES_MESSAGE
+    : MAP_NO_CAPTURES_MESSAGE
 }
 
 /**
@@ -995,8 +1020,12 @@ export function formatMapEmptyMessage(fetched: boolean, hasCaptures: boolean): s
  * printing a number the plugin never had. The second clause stays a real
  * count either way: there being none is not a guess.
  */
-export function formatMapCaption(total: number | null, withPosition: number): string {
-  const captureCount = total === null ? `Capture count ${EMPTY_LABEL}` : `${total} captures`
+export function formatMapCaption(
+  total: number | null,
+  withPosition: number,
+): string {
+  const captureCount =
+    total === null ? `Capture count ${EMPTY_LABEL}` : `${total} captures`
   return `${captureCount}, ${withPosition} with a position.`
 }
 

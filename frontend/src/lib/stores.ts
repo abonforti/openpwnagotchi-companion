@@ -54,7 +54,11 @@ export interface ConnectionView {
  */
 export type HandshakesList = OutgoingHandshakesList['data']
 
-const EMPTY_HANDSHAKES: HandshakesList = { entries: [], truncated: false, total: 0 }
+const EMPTY_HANDSHAKES: HandshakesList = {
+  entries: [],
+  truncated: false,
+  total: 0,
+}
 
 /** SPEC 4.4.1's `screen` row: the `screen_image` reply's `data`, `png` and `mtime` both. */
 export type ScreenFrame = OutgoingScreenImage['data']
@@ -115,17 +119,33 @@ function setChannel(value: number | null, timestamp: number): void {
   channelWritable.set(value)
 }
 
-export const connection: Readable<ConnectionView> = { subscribe: connectionWritable.subscribe }
-export const stats: Readable<Stats | null> = { subscribe: statsWritable.subscribe }
-export const accessPoints: Readable<AccessPoint[]> = { subscribe: accessPointsWritable.subscribe }
-export const handshakes: Readable<HandshakesList> = { subscribe: handshakesWritable.subscribe }
+export const connection: Readable<ConnectionView> = {
+  subscribe: connectionWritable.subscribe,
+}
+export const stats: Readable<Stats | null> = {
+  subscribe: statsWritable.subscribe,
+}
+export const accessPoints: Readable<AccessPoint[]> = {
+  subscribe: accessPointsWritable.subscribe,
+}
+export const handshakes: Readable<HandshakesList> = {
+  subscribe: handshakesWritable.subscribe,
+}
 export const peers: Readable<Peer[]> = { subscribe: peersWritable.subscribe }
 export const log: Readable<string[]> = { subscribe: logWritable.subscribe }
-export const logUnavailable: Readable<boolean> = { subscribe: logUnavailableWritable.subscribe }
+export const logUnavailable: Readable<boolean> = {
+  subscribe: logUnavailableWritable.subscribe,
+}
 export const gps: Readable<Gps | null> = { subscribe: gpsWritable.subscribe }
-export const face: Readable<FaceStatus | null> = { subscribe: faceWritable.subscribe }
-export const screen: Readable<ScreenFrame | null> = { subscribe: screenWritable.subscribe }
-export const channel: Readable<number | null> = { subscribe: channelWritable.subscribe }
+export const face: Readable<FaceStatus | null> = {
+  subscribe: faceWritable.subscribe,
+}
+export const screen: Readable<ScreenFrame | null> = {
+  subscribe: screenWritable.subscribe,
+}
+export const channel: Readable<number | null> = {
+  subscribe: channelWritable.subscribe,
+}
 
 // SPEC 4.4.1: capabilities has no writer of its own, it arrives inside
 // stats and having two sources for one fact is how they disagree, so it is
@@ -146,7 +166,9 @@ function upsertPeer(peer: Peer): void {
     // sorts by signal and last seen); this file promises none, so both the
     // append below and the in-place update keep whatever order they find.
     if (peer.fingerprint === '???') return [...current, peer]
-    const index = current.findIndex((existing) => existing.fingerprint === peer.fingerprint)
+    const index = current.findIndex(
+      (existing) => existing.fingerprint === peer.fingerprint,
+    )
     if (index === -1) return [...current, peer]
     const next = [...current]
     next[index] = peer
@@ -212,7 +234,10 @@ function createCoalescedRefresh(
   // reaches it. None of the other three callers pass one: a dropped
   // outcome there costs only coalescing, not a store write, so they stay
   // on the plain swallow-and-release behaviour this parameter defaults to.
-  onSettled?: (client: WsClient, outcome: { ok: true } | { ok: false; error: unknown }) => void,
+  onSettled?: (
+    client: WsClient,
+    outcome: { ok: true } | { ok: false; error: unknown },
+  ) => void,
 ): (client: WsClient) => void {
   let owner: WsClient | null = null
   return (client: WsClient) => {
@@ -251,7 +276,9 @@ export const refreshHandshakes = createCoalescedRefresh((client) =>
 // wifi_update and once at the start of every session (initial_burst), so a
 // failed or timed-out refresh only means this particular ask did not
 // shorten the wait for one of those.
-const refreshAccessPoints = createCoalescedRefresh((client) => client.request('get_access_points'))
+const refreshAccessPoints = createCoalescedRefresh((client) =>
+  client.request('get_access_points'),
+)
 
 // SPEC 4.5.2.4: not fatal here either, and for the strongest version of the
 // same reason -- peers_list has no push counterpart at all (unlike
@@ -259,7 +286,9 @@ const refreshAccessPoints = createCoalescedRefresh((client) => client.request('g
 // will carry it", it is "nothing will until this view asks again", which
 // is exactly what its own refresh control and its own becoming-current
 // trigger (lib/viewRefresh.ts) are for.
-export const refreshPeers = createCoalescedRefresh((client) => client.request('get_peers'))
+export const refreshPeers = createCoalescedRefresh((client) =>
+  client.request('get_peers'),
+)
 
 /**
  * SPEC 4.5.2.3: the Wi-Fi view's own refresh, asked for on three occasions
@@ -321,7 +350,10 @@ export const refreshLog = createCoalescedRefresh(
       logUnavailableWritable.set(false)
       return
     }
-    if (outcome.error instanceof RemoteError && outcome.error.code === 'log_unavailable') {
+    if (
+      outcome.error instanceof RemoteError &&
+      outcome.error.code === 'log_unavailable'
+    ) {
       logUnavailableWritable.set(true)
     }
   },
@@ -343,7 +375,9 @@ export const refreshLog = createCoalescedRefresh(
  * written gets, so nothing beyond the plain swallow-and-release this helper
  * already does is needed.
  */
-export const refreshScreen = createCoalescedRefresh((client) => client.request('get_screen'))
+export const refreshScreen = createCoalescedRefresh((client) =>
+  client.request('get_screen'),
+)
 
 function handleMessage(message: OutgoingMessage, client: WsClient): void {
   switch (message.type) {
@@ -411,7 +445,9 @@ function handleMessage(message: OutgoingMessage, client: WsClient): void {
       // deliberately dropped, FaceStatus has no field for it. Nothing to
       // merge into before the first face_status has arrived.
       faceWritable.update((current) =>
-        current === null ? current : { ...current, status: message.data.status },
+        current === null
+          ? current
+          : { ...current, status: message.data.status },
       )
       break
     default:
@@ -529,12 +565,20 @@ export function connectStores(client: WsClient): () => void {
       resetStores()
     }
   })
-  const unsubscribeMessage = client.onMessage((message) => handleMessage(message, client))
+  const unsubscribeMessage = client.onMessage((message) =>
+    handleMessage(message, client),
+  )
   // SPEC 4.3.10: a second callback, not folded into onState -- latency
   // changes without the state changing, once per ping interval.
-  const unsubscribeDiagnostics = client.onDiagnostics(({ lastError, latencyMs }) => {
-    connectionWritable.update((current) => ({ ...current, lastError, latencyMs }))
-  })
+  const unsubscribeDiagnostics = client.onDiagnostics(
+    ({ lastError, latencyMs }) => {
+      connectionWritable.update((current) => ({
+        ...current,
+        lastError,
+        latencyMs,
+      }))
+    },
+  )
 
   let torndown = false
   return () => {

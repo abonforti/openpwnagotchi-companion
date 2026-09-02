@@ -20,7 +20,14 @@ import type {
 // body comes from the same dynamic `lib/ws` graph as everything else that
 // test mounts against -- see the comment on mountDashboard()'s WsModule.
 import { canSendCommand } from '../lib/ws'
-import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 // Written from SPEC.md 4.5.2.2 ("Controls: confirm, pending and where a
 // refusal appears", issue #184), plus 4.3.3 (queue vs. command, canSendCommand),
@@ -56,7 +63,10 @@ import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, W
 
 interface JsonSchemaLike {
   title: string
-  properties: Record<string, { const?: string; enum?: unknown[]; type?: string }>
+  properties: Record<
+    string,
+    { const?: string; enum?: unknown[]; type?: string }
+  >
   required: string[]
 }
 
@@ -65,13 +75,22 @@ const SET_PASV_SCHEMA = setPasvSchema as JsonSchemaLike
 const REBOOT_SCHEMA = rebootSchema as JsonSchemaLike
 const SHUTDOWN_SCHEMA = shutdownSchema as JsonSchemaLike
 
-function assertConformsToSchema(frame: Record<string, unknown>, schema: JsonSchemaLike): void {
+function assertConformsToSchema(
+  frame: Record<string, unknown>,
+  schema: JsonSchemaLike,
+): void {
   const allowedKeys = Object.keys(schema.properties)
   for (const key of Object.keys(frame)) {
-    expect(allowedKeys, `"${key}" is not a property of ${schema.title}`).toContain(key)
+    expect(
+      allowedKeys,
+      `"${key}" is not a property of ${schema.title}`,
+    ).toContain(key)
   }
   for (const key of schema.required) {
-    expect(Object.prototype.hasOwnProperty.call(frame, key), `missing required "${key}"`).toBe(true)
+    expect(
+      Object.prototype.hasOwnProperty.call(frame, key),
+      `missing required "${key}"`,
+    ).toBe(true)
   }
   expect(frame.type).toBe(schema.properties.type?.const)
   if (schema.properties.mode?.enum) {
@@ -93,7 +112,13 @@ function battery(overrides: Partial<Battery> = {}): Battery {
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'gpsd', pluginVersion: '0.1.0', ...overrides }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'gpsd',
+    pluginVersion: '0.1.0',
+    ...overrides,
+  }
 }
 
 function gpsReading(overrides: Partial<Gps> = {}): Gps {
@@ -231,14 +256,21 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    if (message.type === 'stats')
+      this.lastStatsValue = {
+        stats: message.data,
+        timestamp: message.timestamp,
+      }
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 
@@ -277,7 +309,8 @@ function asClient(fake: FakeWsClient): WsClient {
 
 function frameFromCall(call: RecordedCommand): Record<string, unknown> {
   const frame: Record<string, unknown> = {}
-  if (call.data && typeof call.data === 'object') Object.assign(frame, call.data)
+  if (call.data && typeof call.data === 'object')
+    Object.assign(frame, call.data)
   frame.type = call.type
   frame.message_id = 'test-message-id'
   return frame
@@ -373,7 +406,10 @@ async function mountDashboard(
   }
   container = document.createElement('div')
   document.body.appendChild(container)
-  instance = svelte.mount(module.default, { target: container }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: container }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, ws, settings }
 }
@@ -408,13 +444,22 @@ function controlState(name: string): string | null {
   return controlRoot(name).getAttribute('data-control-state')
 }
 
-function controlButtonOrNull(name: string, action: 'request' | 'confirm' | 'cancel'): HTMLElement | null {
+function controlButtonOrNull(
+  name: string,
+  action: 'request' | 'confirm' | 'cancel',
+): HTMLElement | null {
   return controlRoot(name).querySelector(`[data-action="${action}"]`)
 }
 
-function controlButton(name: string, action: 'request' | 'confirm' | 'cancel'): HTMLElement {
+function controlButton(
+  name: string,
+  action: 'request' | 'confirm' | 'cancel',
+): HTMLElement {
   const found = controlButtonOrNull(name, action)
-  expect(found, `expected [data-control="${name}"] [data-action="${action}"]`).not.toBeNull()
+  expect(
+    found,
+    `expected [data-control="${name}"] [data-action="${action}"]`,
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -481,7 +526,9 @@ describe('the mode switch offers the mode that takes the unit somewhere else (4.
 describe('the PASV control (4.5.2.2)', () => {
   it('is not rendered at all when capabilities.pasv is false', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ capabilities: capabilitiesData({ pasv: false }) }))
+    client.emitMessage(
+      statsEnvelope({ capabilities: capabilitiesData({ pasv: false }) }),
+    )
     await settle()
 
     expect(controlRootOrNull('pasv')).toBeNull()
@@ -489,7 +536,12 @@ describe('the PASV control (4.5.2.2)', () => {
 
   it('is rendered and enabled when the mode is AUTO', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(isDisabled(controlButton('pasv', 'request'))).toBe(false)
@@ -497,7 +549,12 @@ describe('the PASV control (4.5.2.2)', () => {
 
   it('is rendered and enabled when the mode is PASV', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(isDisabled(controlButton('pasv', 'request'))).toBe(false)
@@ -505,7 +562,12 @@ describe('the PASV control (4.5.2.2)', () => {
 
   it('is present but disabled, with the shared sentence, when the mode is MANUAL', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'MANUAL', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'MANUAL',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(isDisabled(controlButton('pasv', 'request'))).toBe(true)
@@ -514,7 +576,12 @@ describe('the PASV control (4.5.2.2)', () => {
 
   it('is present but disabled when the mode is null -- the opposite of the mode switch, for the opposite reason', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: null, capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: null,
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(isDisabled(controlButton('pasv', 'request'))).toBe(true)
@@ -540,7 +607,9 @@ describe('before the first stats frame, the app is honestly connecting (4.5.2.2)
 
     expect(ws.canSendCommand('connecting')).toBe(false)
     expect(controlRootOrNull('pasv')).toBeNull()
-    expect((controlButton('mode', 'request').textContent ?? '').trim()).toBe('Switch to AUTO')
+    expect((controlButton('mode', 'request').textContent ?? '').trim()).toBe(
+      'Switch to AUTO',
+    )
     expect(isDisabled(controlButton('mode', 'request'))).toBe(true)
     expect(isDisabled(controlButton('reboot', 'request'))).toBe(true)
     expect(isDisabled(controlButton('shutdown', 'request'))).toBe(true)
@@ -550,7 +619,12 @@ describe('before the first stats frame, the app is honestly connecting (4.5.2.2)
     const { client } = await mountDashboard('connecting')
     expect(controlRootOrNull('pasv')).toBeNull()
 
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(controlRootOrNull('pasv')).not.toBeNull()
@@ -570,32 +644,57 @@ describe('before the first stats frame, the app is honestly connecting (4.5.2.2)
 describe('the two-step confirm is inline and armed one at a time (4.5.2.2, issue #37)', () => {
   it('tapping the PASV control arms it without sending anything', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
 
     expect(controlState('pasv')).toBe('armed')
     expect(client.commandCalls).toHaveLength(0)
-    expect((controlButton('pasv', 'confirm').textContent ?? '').trim()).toBe('Confirm entering PASV')
-    expect((controlButton('pasv', 'cancel').textContent ?? '').trim()).toBe('Cancel')
-    expect(controlMessageText('pasv')).toBe('The unit stops attacking and only listens.')
+    expect((controlButton('pasv', 'confirm').textContent ?? '').trim()).toBe(
+      'Confirm entering PASV',
+    )
+    expect((controlButton('pasv', 'cancel').textContent ?? '').trim()).toBe(
+      'Cancel',
+    )
+    expect(controlMessageText('pasv')).toBe(
+      'The unit stops attacking and only listens.',
+    )
   })
 
   it('confirming the armed PASV-off direction shows its own consequence', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
 
-    expect((controlButton('pasv', 'confirm').textContent ?? '').trim()).toBe('Confirm leaving PASV')
-    expect(controlMessageText('pasv')).toBe('The unit returns to AUTO and resumes attacking.')
+    expect((controlButton('pasv', 'confirm').textContent ?? '').trim()).toBe(
+      'Confirm leaving PASV',
+    )
+    expect(controlMessageText('pasv')).toBe(
+      'The unit returns to AUTO and resumes attacking.',
+    )
   })
 
   it('focus moves to Cancel, not to Confirm, once a control is armed', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
@@ -605,7 +704,12 @@ describe('the two-step confirm is inline and armed one at a time (4.5.2.2, issue
 
   it('cancelling sends nothing and returns the control to idle', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
@@ -661,7 +765,12 @@ describe('the two-step confirm is inline and armed one at a time (4.5.2.2, issue
   it('arming does not expire: it is still armed after ten minutes with no interaction (no timer owned by the module)', async () => {
     vi.useFakeTimers()
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
@@ -681,17 +790,32 @@ describe('the two-step confirm is inline and armed one at a time (4.5.2.2, issue
   // no Confirm and no Cancel a tap on Request never asked for.
   it('a capability that disappears while PASV is armed clears the arming, and PASV returns idle -- not armed -- once the capability comes back', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     await arm('pasv')
     expect(controlState('pasv')).toBe('armed')
 
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: false }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: false }),
+      }),
+    )
     await settle()
     expect(controlRootOrNull('pasv')).toBeNull()
 
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(controlRootOrNull('pasv')).not.toBeNull()
@@ -706,7 +830,7 @@ describe('the two-step confirm is inline and armed one at a time (4.5.2.2, issue
 // 4. The exact frame that reaches the wire on confirm, checked against schema.
 // ---------------------------------------------------------------------------
 
-describe('the frame a confirm sends matches the wire vocabulary, not stats.mode or restart()\'s own (4.5.2.2, 2.6.1)', () => {
+describe("the frame a confirm sends matches the wire vocabulary, not stats.mode or restart()'s own (4.5.2.2, 2.6.1)", () => {
   it('set_mode to auto carries lowercase "auto"', async () => {
     const { client } = await mountDashboard()
     client.emitMessage(statsEnvelope({ mode: 'MANUAL' }))
@@ -736,7 +860,12 @@ describe('the frame a confirm sends matches the wire vocabulary, not stats.mode 
 
   it('set_pasv on carries { on: true }', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
@@ -750,7 +879,12 @@ describe('the frame a confirm sends matches the wire vocabulary, not stats.mode 
 
   it('set_pasv off carries { on: false }', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
@@ -804,10 +938,11 @@ describe('pending resolves only on the observation the table names (4.5.2.2)', (
   // never started, in either direction, so there is no test here that
   // asserts a mode change *succeeded* -- only that nothing except
   // `restarting` ever ends it, whichever direction was requested.
-  const modeDirections: Array<{ target: 'auto' | 'manual'; startMode: Mode }> = [
-    { target: 'auto', startMode: 'MANUAL' },
-    { target: 'manual', startMode: 'AUTO' },
-  ]
+  const modeDirections: Array<{ target: 'auto' | 'manual'; startMode: Mode }> =
+    [
+      { target: 'auto', startMode: 'MANUAL' },
+      { target: 'manual', startMode: 'AUTO' },
+    ]
 
   for (const { target, startMode } of modeDirections) {
     it(`set_mode ${target}: no stats frame resolves it -- only the connection state becoming restarting does`, async () => {
@@ -829,7 +964,9 @@ describe('pending resolves only on the observation the table names (4.5.2.2)', (
       // reboot/shutdown now that both set_mode directions wait on
       // `restarting`, and a second one here would abandon the request
       // before the test gets to assert what it came to assert.
-      client.emitMessage(statsEnvelope({ mode: target === 'auto' ? 'AUTO' : null }))
+      client.emitMessage(
+        statsEnvelope({ mode: target === 'auto' ? 'AUTO' : null }),
+      )
       await settle()
       expect(controlState('mode')).toBe('pending')
 
@@ -847,7 +984,12 @@ describe('pending resolves only on the observation the table names (4.5.2.2)', (
 
   it('set_pasv on: stays pending while stats.mode is still AUTO, resolves on stats.mode PASV', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
@@ -855,29 +997,54 @@ describe('pending resolves only on the observation the table names (4.5.2.2)', (
     expect(controlState('pasv')).toBe('pending')
     expect(controlMessageText('pasv')).toBe('Waiting for the unit to confirm.')
 
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     expect(controlState('pasv')).toBe('pending')
 
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     expect(controlState('pasv')).toBe('idle')
   })
 
   it('set_pasv off: stays pending while stats.mode is still PASV, resolves on stats.mode AUTO', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
 
     expect(controlState('pasv')).toBe('pending')
 
-    client.emitMessage(statsEnvelope({ mode: 'PASV', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'PASV',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     expect(controlState('pasv')).toBe('pending')
 
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     expect(controlState('pasv')).toBe('idle')
   })
@@ -930,11 +1097,15 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
     await arm('reboot')
     await confirm('reboot')
 
-    client.rejectLastCommand(new ws.RemoteError('the unit said no', 'internal_error'))
+    client.rejectLastCommand(
+      new ws.RemoteError('the unit said no', 'internal_error'),
+    )
     await settle()
 
     expect(controlState('reboot')).toBe('idle')
-    expect(controlMessageText('reboot')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not accept the command.',
+    )
   })
 
   it('a rejection carrying no code at all (a plain Error) also shows the generic sentence', async () => {
@@ -947,7 +1118,9 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
     client.rejectLastCommand(new Error('command timed out'))
     await settle()
 
-    expect(controlMessageText('shutdown')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('shutdown')).toBe(
+      'The unit did not accept the command.',
+    )
   })
 
   it('pasv_requires_auto reaches the PASV control and nowhere else -- the race SPEC 4.5.2.2 names explicitly', async () => {
@@ -955,33 +1128,53 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
     // The control was available when tapped (AUTO); the unit answers as
     // though it had since left AUTO, the race the section itself describes
     // rather than a state the test contrives.
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
 
-    client.rejectLastCommand(new ws.RemoteError('PASV requires auto', 'pasv_requires_auto'))
+    client.rejectLastCommand(
+      new ws.RemoteError('PASV requires auto', 'pasv_requires_auto'),
+    )
     await settle()
 
     expect(controlMessageText('pasv')).toBe('PASV is reachable only from AUTO.')
     for (const other of ['mode', 'reboot', 'shutdown']) {
-      expect(controlMessageText(other)).not.toBe('PASV is reachable only from AUTO.')
+      expect(controlMessageText(other)).not.toBe(
+        'PASV is reachable only from AUTO.',
+      )
     }
   })
 
   it('pasv_unavailable reaches the PASV control and nowhere else', async () => {
     const { client, ws } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
 
-    client.rejectLastCommand(new ws.RemoteError('pasv_mode is not loaded', 'pasv_unavailable'))
+    client.rejectLastCommand(
+      new ws.RemoteError('pasv_mode is not loaded', 'pasv_unavailable'),
+    )
     await settle()
 
-    expect(controlMessageText('pasv')).toBe('The unit does not have the PASV plugin.')
+    expect(controlMessageText('pasv')).toBe(
+      'The unit does not have the PASV plugin.',
+    )
     for (const other of ['mode', 'reboot', 'shutdown']) {
-      expect(controlMessageText(other)).not.toBe('The unit does not have the PASV plugin.')
+      expect(controlMessageText(other)).not.toBe(
+        'The unit does not have the PASV plugin.',
+      )
     }
   })
 
@@ -1006,7 +1199,9 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
       client.rejectLastCommand(new ws.RemoteError('rejected', code))
       await settle()
 
-      expect(controlMessageText('reboot')).toBe('The unit did not accept the command.')
+      expect(controlMessageText('reboot')).toBe(
+        'The unit did not accept the command.',
+      )
     },
   )
 
@@ -1021,7 +1216,9 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
     client.rejectLastCommand(new ws.RemoteError('rejected', hostileCode))
     await settle()
 
-    expect(controlMessageText('reboot')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not accept the command.',
+    )
     expect(root().innerHTML).not.toContain('<script>')
     expect(root().textContent ?? '').not.toContain(hostileCode)
   })
@@ -1041,7 +1238,9 @@ describe('a pending request also ends on rejection or on two unconfirming stats 
     client.emitMessage(statsEnvelope())
     await settle()
     expect(controlState('reboot')).toBe('idle')
-    expect(controlMessageText('reboot')).toBe('The unit did not confirm the change.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not confirm the change.',
+    )
   })
 })
 
@@ -1062,15 +1261,21 @@ describe('message precedence: pending, then the static disabled reason, then the
     await arm('reboot')
     await confirm('reboot')
 
-    client.rejectLastCommand(new ws.RemoteError('the unit said no', 'internal_error'))
+    client.rejectLastCommand(
+      new ws.RemoteError('the unit said no', 'internal_error'),
+    )
     await settle()
-    expect(controlMessageText('reboot')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not accept the command.',
+    )
 
     client.emitState('offline')
     await settle()
 
     expect(isDisabled(controlButton('reboot', 'request'))).toBe(true)
-    expect(controlMessageText('reboot')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not accept the command.',
+    )
   })
 
   it('an abandonment message survives the control being disabled by a disconnect', async () => {
@@ -1084,18 +1289,27 @@ describe('message precedence: pending, then the static disabled reason, then the
     await settle()
     client.emitMessage(statsEnvelope())
     await settle()
-    expect(controlMessageText('shutdown')).toBe('The unit did not confirm the change.')
+    expect(controlMessageText('shutdown')).toBe(
+      'The unit did not confirm the change.',
+    )
 
     client.emitState('offline')
     await settle()
 
     expect(isDisabled(controlButton('shutdown', 'request'))).toBe(true)
-    expect(controlMessageText('shutdown')).toBe('The unit did not confirm the change.')
+    expect(controlMessageText('shutdown')).toBe(
+      'The unit did not confirm the change.',
+    )
   })
 
   it('the static PASV disabled reason is shown only while the app could send the command, and disappears once it could not', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'MANUAL', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'MANUAL',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(controlMessageText('pasv')).toBe('PASV is reachable only from AUTO.')
@@ -1114,19 +1328,33 @@ describe('message precedence: pending, then the static disabled reason, then the
 
   it('the static disabled reason takes precedence over a stale last message once both could apply', async () => {
     const { client, ws } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
 
-    client.rejectLastCommand(new ws.RemoteError('the unit said no', 'internal_error'))
+    client.rejectLastCommand(
+      new ws.RemoteError('the unit said no', 'internal_error'),
+    )
     await settle()
-    expect(controlMessageText('pasv')).toBe('The unit did not accept the command.')
+    expect(controlMessageText('pasv')).toBe(
+      'The unit did not accept the command.',
+    )
 
     // The mode has since left AUTO -- still connected, still capable of
     // PASV per capabilities, but the wrong mode for it. The static reason
     // is not merely present alongside the old failure text, it replaces it.
-    client.emitMessage(statsEnvelope({ mode: 'MANUAL', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'MANUAL',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(controlMessageText('pasv')).toBe('PASV is reachable only from AUTO.')
@@ -1134,7 +1362,12 @@ describe('message precedence: pending, then the static disabled reason, then the
 
   it('the pending sentence takes precedence over the static disabled reason while a request is in flight', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('pasv')
     await confirm('pasv')
@@ -1146,7 +1379,12 @@ describe('message precedence: pending, then the static disabled reason, then the
     // abandonment backstop (this is the one frame that backstop tolerates),
     // but it must not make the disabled-reason sentence pre-empt the
     // pending one.
-    client.emitMessage(statsEnvelope({ mode: 'MANUAL', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'MANUAL',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
 
     expect(controlState('pasv')).toBe('pending')
@@ -1188,7 +1426,9 @@ describe('a rejection is matched to the request that sent it, not to whichever r
     client.emitMessage(statsEnvelope())
     await settle()
     expect(controlState('reboot')).toBe('idle')
-    expect(controlMessageText('reboot')).toBe('The unit did not confirm the change.')
+    expect(controlMessageText('reboot')).toBe(
+      'The unit did not confirm the change.',
+    )
 
     // A second reboot, requested after the first was given up on.
     await arm('reboot')
@@ -1201,7 +1441,9 @@ describe('a rejection is matched to the request that sent it, not to whichever r
     // rejection -- the defect this test exists to catch matched a rejection
     // to whatever was pending for the control it named, which was by then
     // the second, unrelated reboot.
-    firstRequest.reject(new ws.RemoteError('command timed out', 'internal_error'))
+    firstRequest.reject(
+      new ws.RemoteError('command timed out', 'internal_error'),
+    )
     await settle()
 
     expect(controlState('reboot')).toBe('pending')
@@ -1219,7 +1461,9 @@ describe('a rejection is matched to the request that sent it, not to whichever r
   // the same mistaken identity the single-client test above rules out.
   it("a late rejection from unit A's abandoned-by-the-switch request does not touch unit B's own pending request", async () => {
     const created: FakeWsClient[] = []
-    const { settings, ws } = await mountDashboard('connected', (client) => created.push(client))
+    const { settings, ws } = await mountDashboard('connected', (client) =>
+      created.push(client),
+    )
 
     const clientA = created[0] as FakeWsClient
     clientA.emitMessage(statsEnvelope({ mode: 'AUTO' }))
@@ -1254,7 +1498,9 @@ describe('a rejection is matched to the request that sent it, not to whichever r
     // switch itself -- lib/session.ts tears the client down and resets the
     // stores, but the promise command() returned to A's confirm tap is
     // still sitting there, unsettled, and can still reject late.
-    staleRequest.reject(new ws.RemoteError('command timed out', 'internal_error'))
+    staleRequest.reject(
+      new ws.RemoteError('command timed out', 'internal_error'),
+    )
     await settle()
 
     expect(controlState('reboot')).toBe('pending')
@@ -1269,7 +1515,12 @@ describe('a rejection is matched to the request that sent it, not to whichever r
 describe('at most one pending request at a time (4.5.2.2)', () => {
   it('the other three controls are disabled while one is pending', async () => {
     const { client } = await mountDashboard()
-    client.emitMessage(statsEnvelope({ mode: 'AUTO', capabilities: capabilitiesData({ pasv: true }) }))
+    client.emitMessage(
+      statsEnvelope({
+        mode: 'AUTO',
+        capabilities: capabilitiesData({ pasv: true }),
+      }),
+    )
     await settle()
     await arm('reboot')
     await confirm('reboot')
@@ -1287,7 +1538,14 @@ describe('at most one pending request at a time (4.5.2.2)', () => {
 // ---------------------------------------------------------------------------
 
 describe('enabling a control asks canSendCommand rather than restating its list (4.5.2.2, 4.3.3)', () => {
-  const states: ConnectionState[] = ['connecting', 'connected', 'degraded', 'offline', 'unauthorized', 'restarting']
+  const states: ConnectionState[] = [
+    'connecting',
+    'connected',
+    'degraded',
+    'offline',
+    'unauthorized',
+    'restarting',
+  ]
 
   // One fresh mount per state, not a single mount cycled through all six:
   // 'unauthorized' clears every store (SPEC 4.4.2), which would otherwise
@@ -1309,7 +1567,9 @@ describe('enabling a control asks canSendCommand rather than restating its list 
       // rule for "read from the same graph you mounted against", not a rule
       // plus a carved-out exception for the one symbol that happened to be
       // safe to get wrong.
-      expect(isDisabled(controlButton('reboot', 'request'))).toBe(!ws.canSendCommand(state))
+      expect(isDisabled(controlButton('reboot', 'request'))).toBe(
+        !ws.canSendCommand(state),
+      )
     })
   }
 
@@ -1339,7 +1599,9 @@ describe('enabling a control asks canSendCommand rather than restating its list 
 describe('a control does not survive a switch to a different unit (4.5.2.2, 4.4.2, 4.8)', () => {
   it('a pending request on unit A leaves neither its pending state nor its message once unit B becomes active', async () => {
     const created: FakeWsClient[] = []
-    const { settings } = await mountDashboard('connected', (client) => created.push(client))
+    const { settings } = await mountDashboard('connected', (client) =>
+      created.push(client),
+    )
 
     expect(created).toHaveLength(1)
     const clientA = created[0] as FakeWsClient
@@ -1377,7 +1639,9 @@ describe('a control does not survive a switch to a different unit (4.5.2.2, 4.4.
 
   it('an armed control on unit A is not armed on unit B, and B accepts its own tap normally', async () => {
     const created: FakeWsClient[] = []
-    const { settings } = await mountDashboard('connected', (client) => created.push(client))
+    const { settings } = await mountDashboard('connected', (client) =>
+      created.push(client),
+    )
 
     const clientA = created[0] as FakeWsClient
     clientA.emitMessage(statsEnvelope({ mode: 'AUTO' }))

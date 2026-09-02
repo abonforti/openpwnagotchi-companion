@@ -82,7 +82,9 @@
   // rather than true only for the callers this file has seen so far.
   function tabButtons(): HTMLButtonElement[] {
     if (!tablistEl) return []
-    return Array.from(tablistEl.querySelectorAll<HTMLButtonElement>(':scope > [role="tab"]'))
+    return Array.from(
+      tablistEl.querySelectorAll<HTMLButtonElement>(':scope > [role="tab"]'),
+    )
   }
 
   // Arrow/Home/End movement, with automatic activation: moving focus also

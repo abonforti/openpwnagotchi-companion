@@ -22,6 +22,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import weakref
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -592,6 +593,22 @@ def tls_material(tmp_path_factory) -> dict[str, Path]:
 # ---------------------------------------------------------------------------
 
 
+#: Sockets the harness itself opened to probe for a free port (SPEC 2.3.0,
+#: issue #16). `BindRecorder` uses membership here - which socket made the
+#: call - to tell the harness's own probing apart from a plugin bind, rather
+#: than inspecting what the call looked like (e.g. filtering by port 0), which
+#: cannot distinguish "the harness asked for an ephemeral port" from "the
+#: plugin bound the wildcard on a port nobody chose". A `WeakSet` so a probe
+#: socket that has since been closed and garbage-collected does not linger.
+_PROBE_SOCKETS: "weakref.WeakSet[socket.socket]" = weakref.WeakSet()
+
+
+def _mark_probe_socket(sock: socket.socket) -> socket.socket:
+    """Marks `sock` as harness noise, not a bind `BindRecorder` should watch."""
+    _PROBE_SOCKETS.add(sock)
+    return sock
+
+
 class BindRecorder:
     """Records every address any socket is bound to during a test.
 
@@ -604,11 +621,12 @@ class BindRecorder:
     def __init__(self) -> None:
         self.addresses: list[Any] = []
 
-    def record(self, address: Any) -> None:
-        # A bind to port 0 asks the kernel for an ephemeral port. The plugin
-        # never does that - its ports come from the configuration - so those are
-        # the test harness probing for a free port, not a listener.
-        if isinstance(address, tuple) and len(address) >= 2 and address[1] == 0:
+    def record(self, sock: socket.socket, address: Any) -> None:
+        # The harness's own free-port probes are told apart by which socket
+        # made the call, not by the port in the address (SPEC 2.3.0): a plugin
+        # bind to port 0 - refused configuration reaching the kernel anyway -
+        # must still be recorded rather than mistaken for harness noise.
+        if sock in _PROBE_SOCKETS:
             return
         self.addresses.append(address)
 
@@ -634,7 +652,7 @@ def bind_recorder(monkeypatch) -> BindRecorder:
     original = socket.socket.bind
 
     def recording_bind(self, address):
-        recorder.record(address)
+        recorder.record(self, address)
         return original(self, address)
 
     monkeypatch.setattr(socket.socket, "bind", recording_bind)
@@ -656,14 +674,19 @@ def free_ports() -> tuple[int, int]:
     only in a full run, once enough listeners had come and gone for something to
     be sitting on the neighbour.
 
-    Both probes ask for port 0, which `BindRecorder` deliberately ignores as
-    harness noise. Reserving a concrete port here instead would show up as a
-    bind the plugin never made, and the tests that assert a broken certificate
-    binds nothing would fail on this fixture's own socket.
+    Both probes ask for port 0, and `BindRecorder` tells them apart from a
+    plugin bind by which socket made the call - each probe socket is marked
+    with `_mark_probe_socket` before it binds, and `BindRecorder.record`
+    checks that marker, not the port. Reserving a concrete port here instead
+    would show up as a bind the plugin never made, and the tests that assert
+    a broken certificate binds nothing would fail on this fixture's own
+    socket.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as first, socket.socket(
         socket.AF_INET, socket.SOCK_STREAM
     ) as second:
+        _mark_probe_socket(first)
+        _mark_probe_socket(second)
         first.bind(("127.0.0.1", 0))
         second.bind(("127.0.0.1", 0))
         return first.getsockname()[1], second.getsockname()[1]

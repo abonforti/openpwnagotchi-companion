@@ -62,7 +62,9 @@ async function auditPage(
         return parseFloat(value ?? '0')
       }
 
-      function parseColor(value: string): [number, number, number, number] | null {
+      function parseColor(
+        value: string,
+      ): [number, number, number, number] | null {
         const rgb = value.match(
           /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+%?))?\s*\)$/i,
         )
@@ -98,11 +100,16 @@ async function auditPage(
 
       function luminance(color: [number, number, number]): number {
         return (
-          0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+          0.2126 * channel(color[0]) +
+          0.7152 * channel(color[1]) +
+          0.0722 * channel(color[2])
         )
       }
 
-      function ratio(a: [number, number, number], b: [number, number, number]): number {
+      function ratio(
+        a: [number, number, number],
+        b: [number, number, number],
+      ): number {
         const la = luminance(a)
         const lb = luminance(b)
         const light = Math.max(la, lb)
@@ -160,7 +167,9 @@ async function auditPage(
           }
           const parsed = parseColor(style.backgroundColor)
           if (!parsed) {
-            unverifiable.push(`${describe(node)} has unparseable background ${style.backgroundColor}`)
+            unverifiable.push(
+              `${describe(node)} has unparseable background ${style.backgroundColor}`,
+            )
             return null
           }
           if (parsed[3] > 0) layers.push(parsed)
@@ -169,9 +178,13 @@ async function auditPage(
         }
         // Nothing opaque all the way up: the canvas shows through. The engine
         // paints the canvas colour there, which is what the user sees.
-        const canvas = parseColor(getComputedStyle(document.documentElement).backgroundColor)
+        const canvas = parseColor(
+          getComputedStyle(document.documentElement).backgroundColor,
+        )
         let base: [number, number, number] =
-          canvas && canvas[3] >= 1 ? [canvas[0], canvas[1], canvas[2]] : [255, 255, 255]
+          canvas && canvas[3] >= 1
+            ? [canvas[0], canvas[1], canvas[2]]
+            : [255, 255, 255]
         for (let i = layers.length - 1; i >= 0; i -= 1) {
           const layer = layers[i]
           if (layer) base = over(layer, base)
@@ -181,7 +194,8 @@ async function auditPage(
 
       function visible(element: Element): boolean {
         const style = getComputedStyle(element)
-        if (style.visibility !== 'visible' || style.display === 'none') return false
+        if (style.visibility !== 'visible' || style.display === 'none')
+          return false
         if (parseFloat(style.opacity) === 0) return false
         const rect = element.getBoundingClientRect()
         return rect.width > 0 && rect.height > 0
@@ -189,7 +203,10 @@ async function auditPage(
 
       function hasOwnText(element: Element): boolean {
         for (const node of Array.from(element.childNodes)) {
-          if (node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() !== '') {
+          if (
+            node.nodeType === Node.TEXT_NODE &&
+            (node.textContent || '').trim() !== ''
+          ) {
             return true
           }
         }
@@ -228,14 +245,17 @@ async function auditPage(
         if (isIcon) {
           const fill = style.fill
           const stroke = style.stroke
-          if (fill && fill !== 'none' && fill !== 'currentcolor') foregroundValue = fill
+          if (fill && fill !== 'none' && fill !== 'currentcolor')
+            foregroundValue = fill
           else if (stroke && stroke !== 'none' && stroke !== 'currentcolor')
             foregroundValue = stroke
         }
 
         const parsedForeground = parseColor(foregroundValue)
         if (!parsedForeground) {
-          unverifiable.push(`${describe(element)} has unparseable colour ${foregroundValue}`)
+          unverifiable.push(
+            `${describe(element)} has unparseable colour ${foregroundValue}`,
+          )
           continue
         }
         if (parsedForeground[3] === 0) continue
@@ -269,14 +289,20 @@ async function auditPage(
         }
       }
 
-      return { failures, unverifiable: Array.from(new Set(unverifiable)), pairs }
+      return {
+        failures,
+        unverifiable: Array.from(new Set(unverifiable)),
+        pairs,
+      }
     },
     { view, scheme },
   )
 }
 
 for (const scheme of ['dark', 'light'] as const) {
-  test(`every foreground meets its WCAG AA floor in the ${scheme} palette`, async ({ page }) => {
+  test(`every foreground meets its WCAG AA floor in the ${scheme} palette`, async ({
+    page,
+  }) => {
     await page.emulateMedia({ colorScheme: scheme })
 
     const failures: Finding[] = []
@@ -302,9 +328,10 @@ for (const scheme of ['dark', 'light'] as const) {
 
     // A contrast suite that measured nothing reports as green, which is worse
     // than reporting red. Pin that the walk found real pairs.
-    expect(pairs, 'the contrast walk found no foreground/surface pair to measure').toBeGreaterThan(
-      20,
-    )
+    expect(
+      pairs,
+      'the contrast walk found no foreground/surface pair to measure',
+    ).toBeGreaterThan(20)
 
     const report = failures
       .map(
@@ -319,9 +346,9 @@ for (const scheme of ['dark', 'light'] as const) {
       failures.length === 0
         ? ''
         : `${failures.length} of ${pairs} foreground/surface pairs are below their WCAG AA floor:\n${report}\n` +
-          (unverifiable.size
-            ? `not computable (reported, not asserted):\n  ${Array.from(unverifiable).join('\n  ')}`
-            : ''),
+            (unverifiable.size
+              ? `not computable (reported, not asserted):\n  ${Array.from(unverifiable).join('\n  ')}`
+              : ''),
     ).toEqual([])
   })
 }

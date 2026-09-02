@@ -5,8 +5,19 @@ import gpsDataSchema from '../../../docs/schemas/incoming/gps_data.json'
 
 import { formatGeoStateMessage, formatGeoToggleLabel } from '../lib/format'
 import type { GeoState } from '../lib/geo'
-import type { Capabilities, Gps, OutgoingMessage, OutgoingStats } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  Capabilities,
+  Gps,
+  OutgoingMessage,
+  OutgoingStats,
+} from '../lib/protocol'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 // Written from SPEC.md 4.6 and 4.6.2 ("Acquiring the position: the tap, the
 // third timer, and what backgrounding takes away", issue #175), which is
@@ -79,19 +90,31 @@ import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClie
 
 interface JsonSchemaLike {
   title: string
-  properties: Record<string, { const?: string; enum?: unknown[]; type?: string | string[] }>
+  properties: Record<
+    string,
+    { const?: string; enum?: unknown[]; type?: string | string[] }
+  >
   required: string[]
 }
 
 const GPS_DATA_SCHEMA = gpsDataSchema as JsonSchemaLike
 
-function assertConformsToSchema(frame: Record<string, unknown>, schema: JsonSchemaLike): void {
+function assertConformsToSchema(
+  frame: Record<string, unknown>,
+  schema: JsonSchemaLike,
+): void {
   const allowedKeys = Object.keys(schema.properties)
   for (const key of Object.keys(frame)) {
-    expect(allowedKeys, `"${key}" is not a property of ${schema.title}`).toContain(key)
+    expect(
+      allowedKeys,
+      `"${key}" is not a property of ${schema.title}`,
+    ).toContain(key)
   }
   for (const key of schema.required) {
-    expect(Object.prototype.hasOwnProperty.call(frame, key), `missing required "${key}"`).toBe(true)
+    expect(
+      Object.prototype.hasOwnProperty.call(frame, key),
+      `missing required "${key}"`,
+    ).toBe(true)
   }
   expect(frame.type).toBe(schema.properties.type?.const)
 }
@@ -173,7 +196,9 @@ class FakeWsClient implements WsClient {
     return new Promise(() => {})
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the geolocation module must never send a command'))
+    return Promise.reject(
+      new Error('the geolocation module must never send a command'),
+    )
   }
   sendGps(data: Record<string, unknown>): void {
     this.sendGpsCalls.push(data)
@@ -185,7 +210,10 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -220,10 +248,19 @@ function gpsReading(overrides: Partial<Gps> = {}): Gps {
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'auto', pluginVersion: '0.1.0', ...overrides }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'auto',
+    pluginVersion: '0.1.0',
+    ...overrides,
+  }
 }
 
-function statsEnvelope(gps: Gps, capabilities: Capabilities = capabilitiesData()): OutgoingStats {
+function statsEnvelope(
+  gps: Gps,
+  capabilities: Capabilities = capabilitiesData(),
+): OutgoingStats {
   return {
     type: 'stats',
     timestamp: 1_700_000_000,
@@ -250,14 +287,24 @@ function statsEnvelope(gps: Gps, capabilities: Capabilities = capabilitiesData()
 // would be exactly the case 4.6 forbids.
 function piFixStats(): OutgoingStats {
   return statsEnvelope(
-    gpsReading({ enabled: true, source: 'gpsd', piFix: true, fix: true, lat: 10.1, lon: -30.2, updated: 1_700_000_000 }),
+    gpsReading({
+      enabled: true,
+      source: 'gpsd',
+      piFix: true,
+      fix: true,
+      lat: 10.1,
+      lon: -30.2,
+      updated: 1_700_000_000,
+    }),
   )
 }
 
 // The ordinary "nothing on the Pi" case that makes the phone the source
 // worth having (SPEC 4.6.1's own framing).
 function noPiFixStats(): OutgoingStats {
-  return statsEnvelope(gpsReading({ enabled: false, source: null, piFix: false, fix: false }))
+  return statsEnvelope(
+    gpsReading({ enabled: false, source: null, piFix: false, fix: false }),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -351,8 +398,17 @@ class FakeGeolocation {
   emitError(code: 1 | 2 | 3): void {
     const watcher = this.activeWatch()
     expect(watcher, 'expected an active watchPosition() watcher').not.toBeNull()
-    expect(watcher!.error, 'expected an error callback to have been supplied').toBeTypeOf('function')
-    const error = { code, message: 'synthetic geolocation error', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 } as unknown as GeolocationPositionError
+    expect(
+      watcher!.error,
+      'expected an error callback to have been supplied',
+    ).toBeTypeOf('function')
+    const error = {
+      code,
+      message: 'synthetic geolocation error',
+      PERMISSION_DENIED: 1,
+      POSITION_UNAVAILABLE: 2,
+      TIMEOUT: 3,
+    } as unknown as GeolocationPositionError
     watcher!.error!(error)
   }
 }
@@ -375,7 +431,10 @@ class FakePermissions {
 
   query(): Promise<PermissionStatus> {
     this.queryCalls++
-    const status = { state: this.state, onchange: null } as unknown as PermissionStatus
+    const status = {
+      state: this.state,
+      onchange: null,
+    } as unknown as PermissionStatus
     return Promise.resolve(status)
   }
 }
@@ -392,25 +451,39 @@ let geolocation: FakeGeolocation | null = null
 
 function installGeolocation(): FakeGeolocation {
   const fake = new FakeGeolocation()
-  Object.defineProperty(window.navigator, 'geolocation', { value: fake, configurable: true })
+  Object.defineProperty(window.navigator, 'geolocation', {
+    value: fake,
+    configurable: true,
+  })
   geolocation = fake
   return fake
 }
 
 function removeGeolocation(): void {
-  Object.defineProperty(window.navigator, 'geolocation', { value: undefined, configurable: true })
+  Object.defineProperty(window.navigator, 'geolocation', {
+    value: undefined,
+    configurable: true,
+  })
   geolocation = null
 }
 
-function installPermissions(state: PermissionState = 'prompt'): FakePermissions {
+function installPermissions(
+  state: PermissionState = 'prompt',
+): FakePermissions {
   const fake = new FakePermissions()
   fake.state = state
-  Object.defineProperty(window.navigator, 'permissions', { value: fake, configurable: true })
+  Object.defineProperty(window.navigator, 'permissions', {
+    value: fake,
+    configurable: true,
+  })
   return fake
 }
 
 function removePermissions(): void {
-  Object.defineProperty(window.navigator, 'permissions', { value: undefined, configurable: true })
+  Object.defineProperty(window.navigator, 'permissions', {
+    value: undefined,
+    configurable: true,
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -427,8 +500,14 @@ function removePermissions(): void {
 // until a mutant exposed it: both are set here so a fake can never test
 // "whichever property the implementation happens to read".
 function setVisibility(state: DocumentVisibilityState): void {
-  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
-  Object.defineProperty(document, 'hidden', { value: state !== 'visible', configurable: true })
+  Object.defineProperty(document, 'visibilityState', {
+    value: state,
+    configurable: true,
+  })
+  Object.defineProperty(document, 'hidden', {
+    value: state !== 'visible',
+    configurable: true,
+  })
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
@@ -493,7 +572,9 @@ async function turnSharingOffIfOn(): Promise<void> {
   if (!container || !svelte) return
   const toggle = container.querySelector('[data-geo-toggle]')
   if (!toggle || toggle.getAttribute('aria-pressed') !== 'true') return
-  toggle.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  toggle.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   svelte.flushSync()
   await svelte.tick()
 }
@@ -523,7 +604,12 @@ async function settle(): Promise<void> {
 
 async function mountSettingsGeo(
   onClientCreated?: (client: FakeWsClient) => void,
-): Promise<{ client: FakeWsClient; settings: SettingsModule; session: SessionModule; target: HTMLElement }> {
+): Promise<{
+  client: FakeWsClient
+  settings: SettingsModule
+  session: SessionModule
+  target: HTMLElement
+}> {
   svelte = await import('svelte')
   const settings = await import('../lib/settings')
   const session = await import('../lib/session')
@@ -544,13 +630,18 @@ async function mountSettingsGeo(
   const mountTarget = document.createElement('div')
   document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, target: mountTarget }
 }
 
 async function click(element: Element): Promise<void> {
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  element.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   await settle()
 }
 
@@ -562,7 +653,10 @@ async function click(element: Element): Promise<void> {
 function root(): HTMLElement {
   if (!container) throw new Error('Settings is not mounted')
   const viewRoot = container.querySelector('[data-view="settings"]')
-  expect(viewRoot, 'expected [data-view="settings"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="settings"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -578,7 +672,10 @@ function geoState(): string | null {
 
 function geoToggle(): HTMLElement {
   const found = geoSection().querySelector('[data-geo-toggle]')
-  expect(found, 'expected [data-geo-toggle] inside the geolocation section').not.toBeNull()
+  expect(
+    found,
+    'expected [data-geo-toggle] inside the geolocation section',
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -590,7 +687,10 @@ function geoToggle(): HTMLElement {
 // through this, never through geoSection().textContent.
 function geoMessage(): HTMLElement {
   const found = geoSection().querySelector('[data-geo-message]')
-  expect(found, 'expected [data-geo-message] inside the geolocation section').not.toBeNull()
+  expect(
+    found,
+    'expected [data-geo-message] inside the geolocation section',
+  ).not.toBeNull()
   return found as HTMLElement
 }
 
@@ -657,7 +757,7 @@ describe('off at launch, and not persisted across a reload', () => {
 //    called at all (SPEC 4.6.2's own amendment, G2).
 // =============================================================================
 
-describe('the tap: watchPosition inside the tap\'s own call stack, nothing awaited first (SPEC 4.6.2, G1)', () => {
+describe("the tap: watchPosition inside the tap's own call stack, nothing awaited first (SPEC 4.6.2, G1)", () => {
   it('watchPosition is called synchronously by the click, before any microtask runs', async () => {
     await mountSettingsGeo()
     expect(geolocation!.watchCalls).toHaveLength(0)
@@ -665,10 +765,12 @@ describe('the tap: watchPosition inside the tap\'s own call stack, nothing await
     // Deliberately not awaited: the assertion below has to observe the
     // state immediately after the synchronous part of the click handler
     // runs, before Svelte's own microtask flush or this file's settle().
-    geoToggle().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    geoToggle().dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
     expect(
       geolocation!.watchCalls,
-      'expected watchPosition to have been called inside the tap\'s own call stack, before any await',
+      "expected watchPosition to have been called inside the tap's own call stack, before any await",
     ).toHaveLength(1)
 
     await settle()
@@ -1000,7 +1102,7 @@ describe('the push cadence is at most 5 s, and a stationary phone (no further wa
   // past the interval before asserting, which cannot tell the optimisation
   // apart from the floor timer alone -- this is deliberately the only one
   // that does not.
-  it('a position received while sharing pushes immediately, before the timer\'s own interval elapses', async () => {
+  it("a position received while sharing pushes immediately, before the timer's own interval elapses", async () => {
     vi.useFakeTimers()
     try {
       const { client } = await mountSettingsGeo()
@@ -1039,7 +1141,9 @@ describe('the push cadence is at most 5 s, and a stationary phone (no further wa
       expect(client.sendGpsCalls.length).toBe(callsAfterFirstPosition)
 
       await vi.advanceTimersByTimeAsync(1)
-      expect(client.sendGpsCalls.length).toBeGreaterThan(callsAfterFirstPosition)
+      expect(client.sendGpsCalls.length).toBeGreaterThan(
+        callsAfterFirstPosition,
+      )
     } finally {
       vi.useRealTimers()
     }
@@ -1174,7 +1278,7 @@ describe('nothing is pushed while stats.gps.piFix is true, read from the gps sto
       await vi.advanceTimersByTimeAsync(1)
       expect(
         client.sendGpsCalls.length,
-        'expected a push at the timer\'s own t=5000 boundary, not a fresh window started when piFix cleared at t=2000',
+        "expected a push at the timer's own t=5000 boundary, not a fresh window started when piFix cleared at t=2000",
       ).toBeGreaterThan(0)
     } finally {
       vi.useRealTimers()
@@ -1193,7 +1297,8 @@ describe('no usable socket: nothing thrown with no client, and a later client is
     vi.useFakeTimers()
     try {
       const { settings } = await mountSettingsGeo()
-      for (const host of get(settings.settings).hosts) settings.removeHost(host.id)
+      for (const host of get(settings.settings).hosts)
+        settings.removeHost(host.id)
       await settle()
 
       await click(geoToggle())
@@ -1217,7 +1322,8 @@ describe('no usable socket: nothing thrown with no client, and a later client is
     try {
       const created: FakeWsClient[] = []
       const { settings } = await mountSettingsGeo((c) => created.push(c))
-      for (const host of get(settings.settings).hosts) settings.removeHost(host.id)
+      for (const host of get(settings.settings).hosts)
+        settings.removeHost(host.id)
       await settle()
 
       await click(geoToggle())
@@ -1450,7 +1556,7 @@ describe('backgrounding: hidden clears the watch and stops the timer, visible re
     }
   })
 
-  it('a stale watch surviving the trip would push the last position it saw -- G3\'s own reason -- so the watch must actually be a new one, not the same id reused', async () => {
+  it("a stale watch surviving the trip would push the last position it saw -- G3's own reason -- so the watch must actually be a new one, not the same id reused", async () => {
     await mountSettingsGeo()
     await click(geoToggle())
     const before = geolocation!.activeWatch()!.id
@@ -1484,8 +1590,13 @@ describe('backgrounding: hidden clears the watch and stops the timer, visible re
     setVisibility('visible')
     await settle()
 
-    const liveWatches = geolocation!.watchCalls.filter((w) => !geolocation!.clearedIds.includes(w.id))
-    expect(liveWatches, 'expected exactly one live watch after a spurious visible event').toHaveLength(1)
+    const liveWatches = geolocation!.watchCalls.filter(
+      (w) => !geolocation!.clearedIds.includes(w.id),
+    )
+    expect(
+      liveWatches,
+      'expected exactly one live watch after a spurious visible event',
+    ).toHaveLength(1)
     expect(liveWatches[0]!.id).not.toBe(first)
   })
 
@@ -1551,7 +1662,7 @@ describe('the pushed frame validates against incoming/gps_data.json (SPEC 4.6.1/
 //     them says anything about what the unit has (SPEC 4.6.2's own table).
 // =============================================================================
 
-describe('copy: the five sentences, pinned by equality against 4.6.2\'s own table', () => {
+describe("copy: the five sentences, pinned by equality against 4.6.2's own table", () => {
   // Literal, hand-transcribed from SPEC 4.6.2's copy table -- the DOM
   // assertions below check the section against these, which is what
   // catches the section's own wording drifting from the table. The two
@@ -1564,7 +1675,8 @@ describe('copy: the five sentences, pinned by equality against 4.6.2\'s own tabl
     off: "Not sharing this phone's position.",
     waiting: 'Waiting for a position.',
     sharing: "Sharing this phone's position.",
-    denied: "This browser refused location access. Allow it in the browser's settings, then try again.",
+    denied:
+      "This browser refused location access. Allow it in the browser's settings, then try again.",
     unsupported: 'This browser cannot supply a position.',
   }
 
@@ -1616,12 +1728,21 @@ describe('copy: the five sentences, pinned by equality against 4.6.2\'s own tabl
   // true by construction: a sixth state added to production with the word
   // "unit" in it, or two states given the same sentence, would not fail
   // against a copy of itself.
-  const ALL_STATES: GeoState[] = ['off', 'waiting', 'sharing', 'denied', 'unsupported']
+  const ALL_STATES: GeoState[] = [
+    'off',
+    'waiting',
+    'sharing',
+    'denied',
+    'unsupported',
+  ]
 
   it('none of the five sentences says anything about what the unit has: the word "unit" does not appear in any of them', () => {
     for (const state of ALL_STATES) {
       const sentence = formatGeoStateMessage(state)
-      expect(sentence.toLowerCase(), `the ${state} sentence must not mention the unit`).not.toContain('unit')
+      expect(
+        sentence.toLowerCase(),
+        `the ${state} sentence must not mention the unit`,
+      ).not.toContain('unit')
     }
   })
 

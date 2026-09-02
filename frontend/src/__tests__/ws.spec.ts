@@ -14,7 +14,13 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClientOptions, WsDeps } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClientOptions,
+  WsDeps,
+} from '../lib/ws'
 import { createWsClient, readStoredToken, storeToken } from '../lib/ws'
 
 // Written from SPEC.md §4.3 and its subsections, docs/schemas/, and the
@@ -55,7 +61,12 @@ function defaultBattery(): Battery {
 }
 
 function defaultCapabilities(): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'none', pluginVersion: '0.1.0' }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'none',
+    pluginVersion: '0.1.0',
+  }
 }
 
 function defaultStats(): Stats {
@@ -78,7 +89,10 @@ function defaultStats(): Stats {
 }
 
 /** sessionAge is the one field every staleness test drives directly. */
-function statsEnvelope(sessionAge: number | null, overrides: Partial<Stats> = {}): OutgoingStats {
+function statsEnvelope(
+  sessionAge: number | null,
+  overrides: Partial<Stats> = {},
+): OutgoingStats {
   return {
     type: 'stats',
     timestamp: 1700000000,
@@ -86,7 +100,11 @@ function statsEnvelope(sessionAge: number | null, overrides: Partial<Stats> = {}
   }
 }
 
-function errorEnvelope(code: ErrorCode, message = 'error', message_id?: string): OutgoingError {
+function errorEnvelope(
+  code: ErrorCode,
+  message = 'error',
+  message_id?: string,
+): OutgoingError {
   return {
     type: 'error',
     timestamp: 1700000000,
@@ -95,11 +113,17 @@ function errorEnvelope(code: ErrorCode, message = 'error', message_id?: string):
   }
 }
 
-function restartingEnvelope(reason: RestartReason, mode: Mode | null): OutgoingRestarting {
+function restartingEnvelope(
+  reason: RestartReason,
+  mode: Mode | null,
+): OutgoingRestarting {
   return { type: 'restarting', timestamp: 1700000000, data: { reason, mode } }
 }
 
-function ackEnvelope(acknowledged: string, message_id?: string): OutgoingAcknowledgment {
+function ackEnvelope(
+  acknowledged: string,
+  message_id?: string,
+): OutgoingAcknowledgment {
   return {
     type: 'acknowledgment',
     timestamp: 1700000000,
@@ -118,7 +142,10 @@ function pongEnvelope(message_id?: string): OutgoingPong {
 }
 
 /** Stamps message_id onto an envelope whose builder does not take one directly - used to make a `stats` push read as the typed reply to a specific `get_stats` (§4.3.8), not merely another broadcast. */
-function withMessageId<T extends { message_id?: string }>(envelope: T, message_id: string): T {
+function withMessageId<T extends { message_id?: string }>(
+  envelope: T,
+  message_id: string,
+): T {
   return { ...envelope, message_id }
 }
 
@@ -184,7 +211,10 @@ class FakeSocket {
   }
 }
 
-function makeDeps(overrides: Partial<WsDeps> = {}): { deps: WsDeps; sockets: FakeSocket[] } {
+function makeDeps(overrides: Partial<WsDeps> = {}): {
+  deps: WsDeps
+  sockets: FakeSocket[]
+} {
   const sockets: FakeSocket[] = []
   const deps: WsDeps = {
     createSocket: (_url: string) => {
@@ -207,11 +237,13 @@ function makeDeps(overrides: Partial<WsDeps> = {}): { deps: WsDeps; sockets: Fak
   return { deps, sockets }
 }
 
-
 /** Indexed access that throws instead of silently typing as possibly-undefined, matching the project's noUncheckedIndexedAccess setting. A throw here means the test's own setup assumption was wrong, not the client under test. */
 function nth<T>(list: readonly T[], index: number): T {
   const item = list[index]
-  if (item === undefined) throw new Error(`expected an element at index ${index}, only ${list.length} present`)
+  if (item === undefined)
+    throw new Error(
+      `expected an element at index ${index}, only ${list.length} present`,
+    )
   return item
 }
 
@@ -220,12 +252,19 @@ function setup(
   depsOverrides: Partial<WsDeps> = {},
 ) {
   const { deps, sockets } = makeDeps(depsOverrides)
-  const client = createWsClient({ url: 'wss://192.0.2.1:8082/ws', ...optionOverrides, deps })
+  const client = createWsClient({
+    url: 'wss://192.0.2.1:8082/ws',
+    ...optionOverrides,
+    deps,
+  })
   return { client, sockets, deps }
 }
 
 /** Opens the newest socket and delivers a first `stats` frame. */
-function firstStats(sockets: FakeSocket[], sessionAge: number | null): FakeSocket {
+function firstStats(
+  sockets: FakeSocket[],
+  sessionAge: number | null,
+): FakeSocket {
   const socket = nth(sockets, sockets.length - 1)
   socket.open()
   socket.push(statsEnvelope(sessionAge))
@@ -311,7 +350,10 @@ describe('token storage (§4.3.6)', () => {
     client.connect()
     nth(sockets, 0).open()
     expect(nth(sockets, 0).sent).toHaveLength(1)
-    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'configured-token-value' })
+    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'configured-token-value',
+    })
   })
 
   it('a token-configured client sends nothing before its auth is acknowledged, then flushes the queue once it is (§4.3.1)', () => {
@@ -319,7 +361,10 @@ describe('token storage (§4.3.6)', () => {
     client.connect()
     const s = nth(sockets, 0)
     s.open()
-    expect(s.parsedSent()[0]).toMatchObject({ type: 'auth', token: 'configured-token-value' })
+    expect(s.parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'configured-token-value',
+    })
 
     void client.request('get_stats')
     expect(s.sentOf('get_stats')).toHaveLength(0) // queued: the auth is not acknowledged yet
@@ -353,12 +398,16 @@ describe('a disabled localStorage does not stop readStoredToken or connect() (SP
     // produce that, so it is spied here or it is never exercised at all: a
     // guard whose failure the coverage report cannot see is the shape SPEC
     // 10.7 asks to be named rather than assumed.
-    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new DOMException('quota', 'QuotaExceededError')
-    })
-    const removeSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
-      throw new DOMException('disabled', 'SecurityError')
-    })
+    const setSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('quota', 'QuotaExceededError')
+      })
+    const removeSpy = vi
+      .spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => {
+        throw new DOMException('disabled', 'SecurityError')
+      })
     try {
       expect(() => storeToken('a-token-that-cannot-be-written')).not.toThrow()
     } finally {
@@ -368,9 +417,11 @@ describe('a disabled localStorage does not stop readStoredToken or connect() (SP
   })
 
   it('readStoredToken returns null rather than throwing when storage is disabled', () => {
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('storage is disabled')
-    })
+    const spy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage is disabled')
+      })
     try {
       expect(() => readStoredToken()).not.toThrow()
       expect(readStoredToken()).toBeNull()
@@ -380,9 +431,11 @@ describe('a disabled localStorage does not stop readStoredToken or connect() (SP
   })
 
   it('connect() does not throw when storage is disabled, and falls back to the tokenless path', () => {
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('storage is disabled')
-    })
+    const spy = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage is disabled')
+      })
     try {
       const { client, sockets } = setup()
       expect(() => client.connect()).not.toThrow()
@@ -409,7 +462,7 @@ describe('guards: a throwing subscriber, and a send against an already-closed so
     client.connect()
     const s = toConnected(sockets)
     const unsubscribe = client.onMessage(() => {
-      throw new Error('a subscriber bug must not be this file\'s problem')
+      throw new Error("a subscriber bug must not be this file's problem")
     })
 
     const pending = client.request('get_stats')
@@ -429,7 +482,9 @@ describe('guards: a throwing subscriber, and a send against an already-closed so
     // moved past OPEN - the window trySend exists for.
     s.closed = true
 
-    expect(() => client.sendGps({ latitude: 12.34, longitude: 56.78 })).not.toThrow()
+    expect(() =>
+      client.sendGps({ latitude: 12.34, longitude: 56.78 }),
+    ).not.toThrow()
     expect(s.sent).toHaveLength(0)
   })
 })
@@ -446,7 +501,9 @@ describe('state machine: connecting', () => {
     s.open()
 
     expect(() => s.pushRaw('this is not json at all')).not.toThrow()
-    expect(() => s.pushRaw(JSON.stringify({ no: 'type field here' }))).not.toThrow()
+    expect(() =>
+      s.pushRaw(JSON.stringify({ no: 'type field here' })),
+    ).not.toThrow()
     expect(client.state()).toBe('connecting') // still waiting for a real admitting frame
 
     void client.request('get_stats')
@@ -503,7 +560,9 @@ describe('state machine: connecting', () => {
     nth(sockets, 0).push(errorEnvelope('unauthorized', 'bad token'))
     nth(sockets, 0).serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('rejected' satisfies UnauthorizedReason)
+    expect(client.unauthorizedReason()).toBe(
+      'rejected' satisfies UnauthorizedReason,
+    )
   })
 
   it('connecting -> unauthorized (required): a bare 1008 with no auth frame ever sent', () => {
@@ -513,7 +572,9 @@ describe('state machine: connecting', () => {
     expect(nth(sockets, 0).sentOf('auth')).toHaveLength(0)
     nth(sockets, 0).serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('required' satisfies UnauthorizedReason)
+    expect(client.unauthorizedReason()).toBe(
+      'required' satisfies UnauthorizedReason,
+    )
   })
 
   it('connecting -> offline: a bare 1008 after an auth frame WAS sent (not unauthorized)', () => {
@@ -565,7 +626,9 @@ describe('state machine: connecting', () => {
     nth(sockets, 2).open()
     nth(sockets, 2).serverClose(1006, '') // 3rd consecutive open-then-drop, still nothing but drops
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('required' satisfies UnauthorizedReason)
+    expect(client.unauthorizedReason()).toBe(
+      'required' satisfies UnauthorizedReason,
+    )
   })
 
   it('does not infer unauthorized-required when a token IS stored - three drops just stay offline', () => {
@@ -688,7 +751,10 @@ describe('state machine: connected', () => {
   })
 
   it('a close arriving between a ping and its pong clears the pong timer, so a dead pong timer cannot open a second connection alongside the backoff reconnect', () => {
-    const { client, sockets } = setup({ token: 'configured-token-value' }, { random: () => 1 })
+    const { client, sockets } = setup(
+      { token: 'configured-token-value' },
+      { random: () => 1 },
+    )
     client.connect()
     const s = toConnected(sockets)
     vi.advanceTimersByTime(15000) // the ping goes out, arming a 10s pong timer
@@ -732,7 +798,9 @@ describe('state machine: connected', () => {
     s.push(errorEnvelope('unauthorized', 'token rejected'))
     s.serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('rejected' satisfies UnauthorizedReason)
+    expect(client.unauthorizedReason()).toBe(
+      'rejected' satisfies UnauthorizedReason,
+    )
   })
 
   it('connected -> unauthorized (required): a bare 1008 with no auth frame ever sent - the table\'s "same four close rules" applies here too, not only from connecting', () => {
@@ -742,7 +810,9 @@ describe('state machine: connected', () => {
     expect(s.sentOf('auth')).toHaveLength(0)
     s.serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('required' satisfies UnauthorizedReason)
+    expect(client.unauthorizedReason()).toBe(
+      'required' satisfies UnauthorizedReason,
+    )
   })
 
   it('connected -> offline: a bare 1008 after an auth frame WAS sent (not unauthorized) - the fourth close rule, from connected', () => {
@@ -869,7 +939,10 @@ describe('state machine: unauthorized', () => {
     const { client, sockets } = setup() // no options.token: storage wins and is re-read per attempt
     client.connect()
     nth(sockets, 0).open()
-    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'wrong-token' })
+    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'wrong-token',
+    })
     nth(sockets, 0).push(errorEnvelope('unauthorized', 'bad token'))
     nth(sockets, 0).serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
@@ -878,7 +951,10 @@ describe('state machine: unauthorized', () => {
     client.connect()
     expect(client.state()).toBe('connecting')
     nth(sockets, 1).open()
-    expect(nth(sockets, 1).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'a-corrected-token-value' })
+    expect(nth(sockets, 1).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'a-corrected-token-value',
+    })
   })
 
   it('unauthorizedReason() is null whenever the state is not unauthorized, including right after close() resets it from unauthorized', () => {
@@ -892,7 +968,9 @@ describe('state machine: unauthorized', () => {
     s.push(errorEnvelope('unauthorized', 'token rejected'))
     s.serverClose(1008, '')
     expect(client.state()).toBe('unauthorized')
-    expect(client.unauthorizedReason()).toBe('rejected' satisfies UnauthorizedReason) // the claim this test used to skip
+    expect(client.unauthorizedReason()).toBe(
+      'rejected' satisfies UnauthorizedReason,
+    ) // the claim this test used to skip
 
     client.close()
     expect(client.unauthorizedReason()).toBeNull()
@@ -1167,8 +1245,12 @@ describe('§4.3.8: a read resolves on its typed reply, a command on its acknowle
     s.push(withMessageId(ackEnvelope('get_log'), messageId))
     let settled = false
     void pending.then(
-      () => { settled = true },
-      () => { settled = true },
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
     )
     await Promise.resolve()
     expect(settled).toBe(false)
@@ -1252,13 +1334,19 @@ describe('§4.3.9: token re-read per attempt, and a tokenless client staying sil
     const { client, sockets } = setup() // no options.token: storage drives it
     client.connect()
     nth(sockets, 0).open()
-    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'first-token-value' })
+    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'first-token-value',
+    })
 
     nth(sockets, 0).serverClose(1006, '') // an ordinary drop, unrelated to the token
     storeToken('second-token-value')
     waitOutBackoff(nth(BACKOFF_CAPS_S, 0))
     nth(sockets, 1).open()
-    expect(nth(sockets, 1).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'second-token-value' })
+    expect(nth(sockets, 1).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'second-token-value',
+    })
   })
 
   it('options.token overrides storage on every attempt when a caller supplies one explicitly', () => {
@@ -1266,7 +1354,10 @@ describe('§4.3.9: token re-read per attempt, and a tokenless client staying sil
     const { client, sockets } = setup({ token: 'explicit-token-value' })
     client.connect()
     nth(sockets, 0).open()
-    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({ type: 'auth', token: 'explicit-token-value' })
+    expect(nth(sockets, 0).parsedSent()[0]).toMatchObject({
+      type: 'auth',
+      token: 'explicit-token-value',
+    })
   })
 
   it('an empty stored token is treated as absent, the same as clearing it', () => {
@@ -1324,7 +1415,10 @@ describe('reconnect backoff: full jitter over a growing, capped sequence (§4.3.
     // A token is configured so the unrelated three-consecutive-closes
     // inference (also tested above, under "connecting") cannot fire and
     // reclassify a later iteration as unauthorized instead of offline.
-    const { client, sockets } = setup({ token: 'configured-token-value' }, { random: () => 1 })
+    const { client, sockets } = setup(
+      { token: 'configured-token-value' },
+      { random: () => 1 },
+    )
     client.connect()
 
     for (const capS of BACKOFF_CAPS_S) {
@@ -1398,8 +1492,12 @@ describe('the outbound queue (§4.3.3)', () => {
     s2.push(withMessageId(ackEnvelope('get_stats'), messageId)) // the receipt SPEC 4.3.8 says precedes the reply
     let settled = false
     void pending.then(
-      () => { settled = true },
-      () => { settled = true },
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
     )
     await Promise.resolve()
     expect(settled).toBe(false) // must not have settled on the acknowledgment alone
@@ -1496,7 +1594,9 @@ describe('subscriptions', () => {
   it('onMessage delivers every envelope pushed by the server, and stops after unsubscribe', () => {
     const { client, sockets } = setup()
     const messages: Array<Record<string, unknown>> = []
-    const unsubscribe = client.onMessage((message) => messages.push(message as unknown as Record<string, unknown>))
+    const unsubscribe = client.onMessage((message) =>
+      messages.push(message as unknown as Record<string, unknown>),
+    )
     client.connect()
     const s = toConnected(sockets)
     s.push(restartingEnvelope('mode_change', 'AUTO'))
@@ -1550,9 +1650,15 @@ describe('diagnostics: the last error records every code, including the ones §4
   // still the point of the last row, and a code the client has never heard
   // of is the case that proves it.
   const codes: Array<{ code: string; label: string }> = [
-    { code: 'pasv_requires_auto', label: 'a code §4.3.5 routes to a specific control' },
+    {
+      code: 'pasv_requires_auto',
+      label: 'a code §4.3.5 routes to a specific control',
+    },
     { code: 'log_unavailable', label: 'a code §4.3.5 routes to the Log view' },
-    { code: 'an_unrecognised_diagnostic_code', label: 'a code unknown to the client entirely' },
+    {
+      code: 'an_unrecognised_diagnostic_code',
+      label: 'a code unknown to the client entirely',
+    },
   ]
 
   for (const { code, label } of codes) {
@@ -1594,7 +1700,10 @@ describe('diagnostics: the last error records every code, including the ones §4
     const s = toConnected(sockets)
     s.push(errorEnvelope('bad_request', 'first'))
     s.push(errorEnvelope('not_supported', 'second'))
-    expect(client.diagnostics().lastError).toMatchObject({ code: 'not_supported', message: 'second' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      code: 'not_supported',
+      message: 'second',
+    })
   })
 })
 
@@ -1619,7 +1728,11 @@ describe('diagnostics: a close writes the last error only when the app did not a
     client.connect()
     const s = toConnected(sockets)
     s.serverClose(1006, '')
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'close', code: '1006', message: '' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'close',
+      code: '1006',
+      message: '',
+    })
   })
 
   it('a close following an error frame on the same connection does NOT overwrite the frame - the unauthorized shape from §4.3.1', () => {
@@ -1629,7 +1742,11 @@ describe('diagnostics: a close writes the last error only when the app did not a
     s.push(errorEnvelope('unauthorized', 'token rejected'))
     s.serverClose(1008, '')
     expect(client.diagnostics().lastError).toEqual(
-      expect.objectContaining({ source: 'frame', code: 'unauthorized', message: 'token rejected' }),
+      expect.objectContaining({
+        source: 'frame',
+        code: 'unauthorized',
+        message: 'token rejected',
+      }),
     )
     // The mutation this guards against: recording the close last, which
     // would replace "unauthorized" with a number that only says something
@@ -1649,7 +1766,10 @@ describe('diagnostics: a close writes the last error only when the app did not a
     client.connect()
     const s = toConnected(sockets)
     s.push(errorEnvelope('pasv_unavailable', 'PASV mode requires AUTO'))
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'frame', code: 'pasv_unavailable' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'frame',
+      code: 'pasv_unavailable',
+    })
 
     s.serverClose(1006, 'link dropped four hours later')
     expect(client.diagnostics().lastError).toEqual({
@@ -1696,7 +1816,10 @@ describe('diagnostics: a close writes the last error only when the app did not a
     expect(closeHandler).not.toBeNull()
     client.close()
     closeHandler?.({ code: 1005, reason: '' })
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'frame', code: 'internal_error' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'frame',
+      code: 'internal_error',
+    })
   })
 })
 
@@ -1707,13 +1830,19 @@ describe('diagnostics: the last error survives a failed retry, and is cleared on
     client.connect()
     nth(sockets, 0).open()
     nth(sockets, 0).serverClose(1006, 'first drop')
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'close', code: '1006' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'close',
+      code: '1006',
+    })
 
     // The backoff loop reconnects underneath; the reconnection itself must
     // not be read as "fixed", only an admitted connection is.
     waitOutBackoff(1)
     expect(sockets.length).toBe(2)
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'close', code: '1006' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'close',
+      code: '1006',
+    })
 
     nth(sockets, 1).open()
     nth(sockets, 1).serverClose(1006, 'second drop, still failing')
@@ -1775,14 +1904,20 @@ describe('diagnostics: the last error survives a failed retry, and is cleared on
     expect(client.state()).toBe('connected')
 
     s.push(errorEnvelope('pasv_unavailable', 'PASV mode requires AUTO'))
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'frame', code: 'pasv_unavailable' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'frame',
+      code: 'pasv_unavailable',
+    })
 
     // An ordinary broadcast on the same, still-live connection - not a
     // reconnection, and the state was already `connected` before this
     // frame arrived.
     s.push(statsEnvelope(6))
     expect(client.state()).toBe('connected')
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'frame', code: 'pasv_unavailable' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'frame',
+      code: 'pasv_unavailable',
+    })
   })
 
   it('a transition into a state that is NOT admitted - restarting - does not clear the last error, the negative that keeps the rule honest', () => {
@@ -1913,7 +2048,9 @@ describe('reconnect: createSocket throwing on a later attempt does not escape th
             // to createSocket already has to survive this file's other
             // tests, so a version of this test that threw on attempt 1
             // would prove only what §4.3.9's guard already proves.
-            throw new Error('ENETUNREACH: the browser refused this attempt synchronously')
+            throw new Error(
+              'ENETUNREACH: the browser refused this attempt synchronously',
+            )
           }
           const socket = new FakeSocket()
           liveSockets.push(socket)
@@ -1942,7 +2079,10 @@ describe('reconnect: createSocket throwing on a later attempt does not escape th
     // trying. Dropping to `offline` would tell a screen the app had given
     // up while a timer is pending.
     expect(client.state()).toBe('connecting') // survives: not stuck, not thrown into some other state
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'local', code: 'socket_failed' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'local',
+      code: 'socket_failed',
+    })
 
     // The schedule itself is still alive underneath the caught throw: a
     // further backoff step produces a third attempt, and this one is
@@ -1985,7 +2125,9 @@ describe('reconnect: the pong timeout also rebuilds through a guarded beginConne
             // The pong timeout's own immediate rebuild, not the first
             // connect(): the first attempt has to succeed and reach
             // 'connected' for a pong timeout to be possible at all.
-            throw new Error('ENETUNREACH: the browser refused this attempt synchronously')
+            throw new Error(
+              'ENETUNREACH: the browser refused this attempt synchronously',
+            )
           }
           const socket = new FakeSocket()
           liveSockets.push(socket)
@@ -2013,7 +2155,10 @@ describe('reconnect: the pong timeout also rebuilds through a guarded beginConne
     // throwing - the same signature the #122 suite above relies on.
     expect(() => vi.advanceTimersByTime(10000)).not.toThrow()
     expect(attempt).toBe(2)
-    expect(client.diagnostics().lastError).toMatchObject({ source: 'local', code: 'socket_failed' })
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'local',
+      code: 'socket_failed',
+    })
 
     // SPEC 4.3.1/review issue #131 follow-up: a retry is scheduled, so the
     // state stays `connecting`, the same as the #122 suite above - dropping
@@ -2064,7 +2209,10 @@ describe('diagnostics: latency is a measured local round trip, never the remote 
 
     clock.advance(64)
     const remoteClockDisagreesByYears = 1_000_000_000 // seconds, i.e. 1970-ish - wildly wrong on purpose
-    s.push({ ...withMessageId(pongEnvelope(), pingId), timestamp: remoteClockDisagreesByYears })
+    s.push({
+      ...withMessageId(pongEnvelope(), pingId),
+      timestamp: remoteClockDisagreesByYears,
+    })
     expect(client.diagnostics().latencyMs).toBe(64)
   })
 
@@ -2123,7 +2271,10 @@ describe('diagnostics: onDiagnostics', () => {
 
     s.push(errorEnvelope('internal_error', 'boom'))
     expect(seen.length).toBeGreaterThan(0)
-    expect(seen[seen.length - 1]?.lastError).toMatchObject({ code: 'internal_error', message: 'boom' })
+    expect(seen[seen.length - 1]?.lastError).toMatchObject({
+      code: 'internal_error',
+      message: 'boom',
+    })
 
     unsubscribe()
     const countBefore = seen.length

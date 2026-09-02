@@ -14,7 +14,11 @@
   import markerShadow from 'leaflet/dist/images/marker-shadow.png'
   import { onDestroy, onMount } from 'svelte'
 
-  import { formatMapCaption, formatMapEmptyMessage, REFRESH_LABEL } from '../lib/format'
+  import {
+    formatMapCaption,
+    formatMapEmptyMessage,
+    REFRESH_LABEL,
+  } from '../lib/format'
   import { hasListDataArrived } from '../lib/lists'
   import {
     capturesWithGps,
@@ -65,7 +69,9 @@
   // what was already plotted, and an empty sentence must never sit over a
   // map that is still showing pins from before the disconnect.
   const showEmptyMessage = $derived(pins.length === 0)
-  const emptyText = $derived(formatMapEmptyMessage(fetched, captureList.length > 0))
+  const emptyText = $derived(
+    formatMapEmptyMessage(fetched, captureList.length > 0),
+  )
 
   // SPEC 4.5.2.7's caption: "state three is a spectrum rather than a
   // switch" -- shown once there is a reply to count, the same gate the

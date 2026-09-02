@@ -17,7 +17,13 @@ import type {
   RestartReason,
   Stats,
 } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, StatsSnapshot, UnauthorizedReason, WsClient } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  StatsSnapshot,
+  UnauthorizedReason,
+  WsClient,
+} from '../lib/ws'
 import {
   DASH,
   EMPTY_LABEL,
@@ -60,7 +66,13 @@ function battery(overrides: Partial<Battery> = {}): Battery {
 }
 
 function capabilitiesData(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { pasv: true, pisugar: false, gpsSource: 'gpsd', pluginVersion: '0.1.0', ...overrides }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'gpsd',
+    pluginVersion: '0.1.0',
+    ...overrides,
+  }
 }
 
 function gpsReading(overrides: Partial<Gps> = {}): Gps {
@@ -79,7 +91,13 @@ function gpsReading(overrides: Partial<Gps> = {}): Gps {
 }
 
 function lastHandshake(overrides: Partial<LastHandshake> = {}): LastHandshake {
-  return { filename: 'TestNet_001_aabbccddeeff.pcapng', ssid: 'TestNet_001', bssid: 'aabbccddeeff', mtime: T, ...overrides }
+  return {
+    filename: 'TestNet_001_aabbccddeeff.pcapng',
+    ssid: 'TestNet_001',
+    bssid: 'aabbccddeeff',
+    mtime: T,
+    ...overrides,
+  }
 }
 
 function peer(overrides: Partial<Peer> = {}): Peer {
@@ -131,7 +149,9 @@ function faceStatusData(overrides: Partial<FaceStatus> = {}): FaceStatus {
   return { face: '(-_-)', status: 'idle', mode: 'AUTO', ...overrides }
 }
 
-function faceStatusEnvelope(overrides: Partial<FaceStatus> = {}): OutgoingFaceStatus {
+function faceStatusEnvelope(
+  overrides: Partial<FaceStatus> = {},
+): OutgoingFaceStatus {
   return { type: 'face_status', timestamp: T, data: faceStatusData(overrides) }
 }
 
@@ -143,7 +163,10 @@ function gpsUpdateEnvelope(reading: Gps): OutgoingGpsUpdate {
   return { type: 'gps_update', timestamp: T, data: reading }
 }
 
-function restartingEnvelope(reason: RestartReason, mode: Mode | null = null): OutgoingRestarting {
+function restartingEnvelope(
+  reason: RestartReason,
+  mode: Mode | null = null,
+): OutgoingRestarting {
   return { type: 'restarting', timestamp: T, data: { reason, mode } }
 }
 
@@ -191,7 +214,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('Dashboard read-only tests never issue a command'))
+    return Promise.reject(
+      new Error('Dashboard read-only tests never issue a command'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -201,17 +226,25 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
   }
 
   emitMessage(message: OutgoingMessage): void {
-    if (message.type === 'stats') this.lastStatsValue = { stats: message.data, timestamp: message.timestamp }
+    if (message.type === 'stats')
+      this.lastStatsValue = {
+        stats: message.data,
+        timestamp: message.timestamp,
+      }
     // Mirrors ws.ts's own handleRestarting: the reason is captured off the
     // wire frame itself, before the state transition that follows it.
-    if (message.type === 'restarting') this.restartReasonValue = message.data.reason
+    if (message.type === 'restarting')
+      this.restartReasonValue = message.data.reason
     for (const handler of [...this.messageHandlers]) handler(message)
   }
 }
@@ -231,7 +264,9 @@ let container: HTMLElement | null = null
 let instance: Record<string, unknown> | null = null
 let teardownStores: (() => void) | null = null
 
-async function mountDashboard(client?: FakeWsClient): Promise<{ root: HTMLElement; client: FakeWsClient | null }> {
+async function mountDashboard(
+  client?: FakeWsClient,
+): Promise<{ root: HTMLElement; client: FakeWsClient | null }> {
   svelte = await import('svelte')
   if (client) {
     teardownStores = connectStores(asClient(client))
@@ -241,7 +276,10 @@ async function mountDashboard(client?: FakeWsClient): Promise<{ root: HTMLElemen
   }
   container = document.createElement('div')
   document.body.appendChild(container)
-  instance = svelte.mount(module.default, { target: container }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: container }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { root: container, client: client ?? null }
 }
@@ -336,7 +374,9 @@ function accessibleText(name: string): string {
   const el = field(name)
   const ariaLabel = el.getAttribute('aria-label') ?? ''
   const describedBy = el.getAttribute('aria-describedby')
-  const describedText = describedBy ? (document.getElementById(describedBy)?.textContent ?? '') : ''
+  const describedText = describedBy
+    ? (document.getElementById(describedBy)?.textContent ?? '')
+    : ''
   const ownText = el.textContent ?? ''
   return `${ariaLabel} ${describedText} ${ownText}`.toLowerCase()
 }
@@ -351,7 +391,9 @@ function rowFor(name: string): HTMLElement {
   const valueEl = field(name)
   let node: HTMLElement | null = valueEl.parentElement
   while (node && node !== root()) {
-    const otherFields = [...node.querySelectorAll('[data-field]')].filter((el) => el !== valueEl)
+    const otherFields = [...node.querySelectorAll('[data-field]')].filter(
+      (el) => el !== valueEl,
+    )
     if (otherFields.length === 0) return node
     node = node.parentElement
   }
@@ -393,9 +435,10 @@ describe('before the first frame, every field is a dash', () => {
     // accessibleText() accepts all three - shared with the empty-string
     // (§4.5.1.1, issue #142) tests below so the two cannot drift apart.
     for (const name of FIELD_NAMES) {
-      expect(accessibleText(name), `field ${name} must carry "${EMPTY_LABEL}" accessibly`).toContain(
-        EMPTY_LABEL.toLowerCase(),
-      )
+      expect(
+        accessibleText(name),
+        `field ${name} must carry "${EMPTY_LABEL}" accessibly`,
+      ).toContain(EMPTY_LABEL.toLowerCase())
     }
   })
 
@@ -415,8 +458,14 @@ describe('before the first frame, every field is a dash', () => {
       const row = rowFor(name)
       const rowText = (row.textContent ?? '').replace(/\s+/g, ' ').trim()
       const valueText = (valueEl.textContent ?? '').replace(/\s+/g, ' ').trim()
-      expect(rowText, `row for ${name} must carry more than its own value`).not.toBe(valueText)
-      expect(rowText.length, `row for ${name} must carry a label`).toBeGreaterThan(valueText.length)
+      expect(
+        rowText,
+        `row for ${name} must carry more than its own value`,
+      ).not.toBe(valueText)
+      expect(
+        rowText.length,
+        `row for ${name} must carry a label`,
+      ).toBeGreaterThan(valueText.length)
     }
   })
 
@@ -449,13 +498,26 @@ describe('a frame carrying nulls still renders every row, dashed where the schem
     )
     await settle()
 
-    for (const name of ['channel', 'temperature', 'battery', 'charging', 'lastHandshake', 'lastPeer']) {
+    for (const name of [
+      'channel',
+      'temperature',
+      'battery',
+      'charging',
+      'lastHandshake',
+      'lastPeer',
+    ]) {
       expect(isEmpty(name), `field ${name}`).toBe(true)
       expect(visibleFieldText(name), `field ${name}`).toBe(DASH)
     }
 
     // Non-nullable Stats members present in the same frame are not dashed.
-    for (const name of ['uptime', 'mode', 'accessPoints', 'handshakes', 'peers']) {
+    for (const name of [
+      'uptime',
+      'mode',
+      'accessPoints',
+      'handshakes',
+      'peers',
+    ]) {
       expect(isEmpty(name), `field ${name}`).toBe(false)
       expect(fieldText(name), `field ${name}`).not.toBe(DASH)
     }
@@ -480,12 +542,22 @@ describe('a GPS source that is switched off', () => {
     await mountDashboard(client)
     client.emitMessage(
       statsEnvelope({
-        gps: gpsReading({ enabled: false, source: null, fix: false, piFix: false }),
+        gps: gpsReading({
+          enabled: false,
+          source: null,
+          fix: false,
+          piFix: false,
+        }),
       }),
     )
     await settle()
 
-    const off = gpsReading({ enabled: false, source: null, fix: false, piFix: false })
+    const off = gpsReading({
+      enabled: false,
+      source: null,
+      fix: false,
+      piFix: false,
+    })
     expect(fieldText('gpsFix')).toBe(formatGpsFix(off))
     expect(fieldText('gpsFix')).toBe('off')
     // "off" is a real answer for the fix indicator, not an absent one.
@@ -531,12 +603,20 @@ describe('GPS rows follow the gps store, not the last stats.gps', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ gps: gpsReading({ enabled: true, source: 'gpsd', fix: false }) }))
+    client.emitMessage(
+      statsEnvelope({
+        gps: gpsReading({ enabled: true, source: 'gpsd', fix: false }),
+      }),
+    )
     await settle()
     expect(fieldText('gpsSource')).toBe('gpsd')
     expect(fieldText('gpsFix')).toBe('no fix')
 
-    client.emitMessage(gpsUpdateEnvelope(gpsReading({ enabled: true, source: 'browser', fix: true })))
+    client.emitMessage(
+      gpsUpdateEnvelope(
+        gpsReading({ enabled: true, source: 'browser', fix: true }),
+      ),
+    )
     await settle()
 
     // stats.gps (the last stats snapshot) still says gpsd/no fix; the two
@@ -572,16 +652,19 @@ describe('mode badge', () => {
     ['AUTO', 'AUTO'],
     ['PASV', 'PASV'],
     ['MANUAL', 'MANU'],
-  ] as const)('renders stats.mode %s as formatMode(%s)', async (mode, expected) => {
-    const client = new FakeWsClient()
-    client.emitState('connected')
-    await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ mode }))
-    await settle()
+  ] as const)(
+    'renders stats.mode %s as formatMode(%s)',
+    async (mode, expected) => {
+      const client = new FakeWsClient()
+      client.emitState('connected')
+      await mountDashboard(client)
+      client.emitMessage(statsEnvelope({ mode }))
+      await settle()
 
-    expect(fieldText('mode')).toBe(formatMode(mode))
-    expect(fieldText('mode')).toBe(expected)
-  })
+      expect(fieldText('mode')).toBe(formatMode(mode))
+      expect(fieldText('mode')).toBe(expected)
+    },
+  )
 
   it('follows stats.mode, never face.mode, when the two disagree', async () => {
     const client = new FakeWsClient()
@@ -665,7 +748,10 @@ describe('the handshake counters', () => {
 
     expect(fieldText('handshakes')).toBe('5')
     const onUnit = fieldOrNull('handshakesOnUnit')
-    expect(onUnit, 'handshakesOnUnit must appear when the two disagree').not.toBeNull()
+    expect(
+      onUnit,
+      'handshakesOnUnit must appear when the two disagree',
+    ).not.toBeNull()
     expect((onUnit?.textContent ?? '').trim()).toContain('3')
   })
 
@@ -677,7 +763,9 @@ describe('the handshake counters', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ handshakes: null, handshakesTotal: null }))
+    client.emitMessage(
+      statsEnvelope({ handshakes: null, handshakesTotal: null }),
+    )
     await settle()
 
     expect(visibleFieldText('handshakes')).toBe(DASH)
@@ -695,7 +783,9 @@ describe('the handshake counters', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ handshakes: null, handshakesTotal: null }))
+    client.emitMessage(
+      statsEnvelope({ handshakes: null, handshakesTotal: null }),
+    )
     await settle()
 
     expect(fieldOrNull('handshakesOnUnit')).toBeNull()
@@ -773,7 +863,11 @@ describe('lastHandshake', () => {
       const client = new FakeWsClient()
       client.emitState('connected')
       await mountDashboard(client)
-      client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime }) }))
+      client.emitMessage(
+        statsEnvelope({
+          lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime }),
+        }),
+      )
       await settle()
 
       expect(fieldText('lastHandshake')).toBe('TestNet_001 at 5 Aug 09:14')
@@ -801,7 +895,11 @@ describe('lastHandshake', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime: NaN }) }))
+    client.emitMessage(
+      statsEnvelope({
+        lastHandshake: lastHandshake({ ssid: 'TestNet_001', mtime: NaN }),
+      }),
+    )
     await settle()
 
     expect(fieldText('lastHandshake')).toBe('TestNet_001')
@@ -814,7 +912,9 @@ describe('lastHandshake', () => {
     client.emitState('connected')
     await mountDashboard(client)
     const mtime = 1_700_000_460
-    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: '', mtime }) }))
+    client.emitMessage(
+      statsEnvelope({ lastHandshake: lastHandshake({ ssid: '', mtime }) }),
+    )
     await settle()
 
     expect(fieldText('lastHandshake')).toBe(formatUnitTime(mtime))
@@ -833,7 +933,9 @@ describe('lastHandshake', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: '', mtime: NaN }) }))
+    client.emitMessage(
+      statsEnvelope({ lastHandshake: lastHandshake({ ssid: '', mtime: NaN }) }),
+    )
     await settle()
 
     expect(visibleFieldText('lastHandshake')).toBe(DASH)
@@ -865,12 +967,16 @@ describe('lastPeer', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date(2026, 7, 15, 12, 0, 0)) // "now": 15 Aug 2026
-      const lastSeen = Math.floor(new Date(2026, 7, 5, 9, 14, 0).getTime() / 1000) // 5 Aug 2026
+      const lastSeen = Math.floor(
+        new Date(2026, 7, 5, 9, 14, 0).getTime() / 1000,
+      ) // 5 Aug 2026
 
       const client = new FakeWsClient()
       client.emitState('connected')
       await mountDashboard(client)
-      client.emitMessage(statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen }) }))
+      client.emitMessage(
+        statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen }) }),
+      )
       await settle()
 
       expect(fieldText('lastPeer')).toBe('unit-bravo at 5 Aug 09:14')
@@ -889,7 +995,9 @@ describe('lastPeer', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen: null }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: 'unit-bravo', lastSeen: null }) }),
+    )
     await settle()
 
     expect(fieldText('lastPeer')).toBe('unit-bravo')
@@ -902,7 +1010,9 @@ describe('lastPeer', () => {
     client.emitState('connected')
     await mountDashboard(client)
     const lastSeen = 1_700_000_460
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: '', lastSeen }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: '', lastSeen }) }),
+    )
     await settle()
 
     expect(fieldText('lastPeer')).toBe(formatUnitTime(lastSeen))
@@ -921,7 +1031,9 @@ describe('lastPeer', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: '', lastSeen: null }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: '', lastSeen: null }) }),
+    )
     await settle()
 
     expect(visibleFieldText('lastPeer')).toBe(DASH)
@@ -997,7 +1109,9 @@ describe('battery percentage', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ battery: { percent: null, charging: true } }))
+    client.emitMessage(
+      statsEnvelope({ battery: { percent: null, charging: true } }),
+    )
     await settle()
 
     expect(visibleFieldText('battery')).toBe(DASH)
@@ -1010,7 +1124,9 @@ describe('charging', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ battery: battery({ percent: 84, charging: true }) }))
+    client.emitMessage(
+      statsEnvelope({ battery: battery({ percent: 84, charging: true }) }),
+    )
     await settle()
     expect(fieldText('charging')).toBe(formatCharging(true))
     expect(fieldText('charging')).toBe('charging')
@@ -1019,7 +1135,9 @@ describe('charging', () => {
     // The exact case SPEC.md gives for the two-row split: a percentage-less
     // reading with charging known false must render "on battery", not the
     // dash a combined row once produced for it.
-    client.emitMessage(statsEnvelope({ battery: { percent: null, charging: false } }))
+    client.emitMessage(
+      statsEnvelope({ battery: { percent: null, charging: false } }),
+    )
     await settle()
     expect(fieldText('charging')).toBe(formatCharging(false))
     expect(fieldText('charging')).toBe('on battery')
@@ -1030,7 +1148,9 @@ describe('charging', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ battery: { percent: 84, charging: null } }))
+    client.emitMessage(
+      statsEnvelope({ battery: { percent: 84, charging: null } }),
+    )
     await settle()
 
     expect(visibleFieldText('charging')).toBe(DASH)
@@ -1058,7 +1178,14 @@ describe('plain counters', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ accessPoints: 0, peers: 0, handshakes: 0, handshakesTotal: 0 }))
+    client.emitMessage(
+      statsEnvelope({
+        accessPoints: 0,
+        peers: 0,
+        handshakes: 0,
+        handshakesTotal: 0,
+      }),
+    )
     await settle()
 
     expect(fieldText('accessPoints')).toBe('0')
@@ -1090,7 +1217,9 @@ describe('face and status', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(faceStatusEnvelope({ face: '(o_o)', status: 'scanning' }))
+    client.emitMessage(
+      faceStatusEnvelope({ face: '(o_o)', status: 'scanning' }),
+    )
     await settle()
 
     expect(fieldText('face')).toBe('(o_o)')
@@ -1110,7 +1239,9 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(faceStatusEnvelope({ face: HOSTILE_SCRIPT, status: 'idle' }))
+    client.emitMessage(
+      faceStatusEnvelope({ face: HOSTILE_SCRIPT, status: 'idle' }),
+    )
     await settle()
 
     const el = field('face')
@@ -1127,7 +1258,9 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(faceStatusEnvelope({ face: '(-_-)', status: HOSTILE_QUOTES }))
+    client.emitMessage(
+      faceStatusEnvelope({ face: '(-_-)', status: HOSTILE_QUOTES }),
+    )
     await settle()
 
     const el = field('status')
@@ -1137,11 +1270,13 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     expect((window as unknown as { __pwned?: boolean }).__pwned).not.toBe(true)
   })
 
-  it("renders a hostile lastPeer.name verbatim, isolated inside a <bdi>, with no other element created", async () => {
+  it('renders a hostile lastPeer.name verbatim, isolated inside a <bdi>, with no other element created', async () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: HOSTILE_SCRIPT }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: HOSTILE_SCRIPT }) }),
+    )
     await settle()
 
     const el = field('lastPeer')
@@ -1162,7 +1297,9 @@ describe('hostile remote strings render as text (SPEC 4.5.3)', () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastHandshake: lastHandshake({ ssid: HOSTILE_SCRIPT }) }))
+    client.emitMessage(
+      statsEnvelope({ lastHandshake: lastHandshake({ ssid: HOSTILE_SCRIPT }) }),
+    )
     await settle()
 
     const el = field('lastHandshake')
@@ -1217,7 +1354,9 @@ describe('data-empty is decided by the value, not by the rendered string', () =>
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: '-', lastSeen: null }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: '-', lastSeen: null }) }),
+    )
     await settle()
 
     expect(fieldText('lastPeer')).toBe('-')
@@ -1258,7 +1397,9 @@ describe('data-empty is decided by the value, not by the rendered string', () =>
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ lastPeer: peer({ name: ' ', lastSeen: null }) }))
+    client.emitMessage(
+      statsEnvelope({ lastPeer: peer({ name: ' ', lastSeen: null }) }),
+    )
     await settle()
 
     expect(field('lastPeer').textContent).toBe(' ')
@@ -1308,7 +1449,11 @@ describe('a remote string that is empty is empty (§4.5.1.1, issue #142)', () =>
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
-    client.emitMessage(statsEnvelope({ gps: gpsReading({ source: '' as unknown as Gps['source'] }) }))
+    client.emitMessage(
+      statsEnvelope({
+        gps: gpsReading({ source: '' as unknown as Gps['source'] }),
+      }),
+    )
     await settle()
 
     expect(visibleFieldText('gpsSource')).toBe(DASH)
@@ -1358,7 +1503,7 @@ describe('the connection banner', () => {
     )
   })
 
-  it('carries the degraded state with the data\'s age, from stats.sessionAge', async () => {
+  it("carries the degraded state with the data's age, from stats.sessionAge", async () => {
     const client = new FakeWsClient()
     client.emitState('connected')
     await mountDashboard(client)
@@ -1373,7 +1518,9 @@ describe('the connection banner', () => {
     // below were folded into this one (formatAge(null) substituted into
     // this same template reads "the data is never refreshed old"), which is
     // exactly the mutant this exact-match guards against.
-    expect((banner().textContent ?? '').trim()).toBe(`Connected, and the data is ${formatAge(125)} old.`)
+    expect((banner().textContent ?? '').trim()).toBe(
+      `Connected, and the data is ${formatAge(125)} old.`,
+    )
   })
 
   it('reads the exact "has never refreshed" sentence in degraded when sessionAge is null, not an age of zero', async () => {
@@ -1389,7 +1536,9 @@ describe('the connection banner', () => {
     // has never refreshed." A null sessionAge is not an age, so this must
     // not be the age sentence with formatAge(null) spliced in (which would
     // read "the data is never refreshed old").
-    expect((banner().textContent ?? '').trim()).toBe('Connected, and the data has never refreshed.')
+    expect((banner().textContent ?? '').trim()).toBe(
+      'Connected, and the data has never refreshed.',
+    )
   })
 
   it('reads the exact "has never refreshed" sentence for a non-finite sessionAge too, not only for null', async () => {
@@ -1413,7 +1562,9 @@ describe('the connection banner', () => {
     await settle()
 
     expect(banner().getAttribute('data-banner')).toBe('degraded')
-    expect((banner().textContent ?? '').trim()).toBe('Connected, and the data has never refreshed.')
+    expect((banner().textContent ?? '').trim()).toBe(
+      'Connected, and the data has never refreshed.',
+    )
   })
 
   it('renders the exact pinned sentence for the unauthorized "rejected" reason', async () => {
@@ -1426,7 +1577,9 @@ describe('the connection banner', () => {
     // (both mention "token" and are unequal) still passes with the two arms
     // swapped, per SPEC.md's own account of the review that found it; only
     // an exact match against each pinned sentence catches that.
-    expect((banner().textContent ?? '').trim()).toBe('The unit refused the stored token. Fix it in Settings.')
+    expect((banner().textContent ?? '').trim()).toBe(
+      'The unit refused the stored token. Fix it in Settings.',
+    )
 
     // SPEC.md 4.5.2.1 (amended): "Those two sentences are also half of the
     // Dashboard's banner ... the banner is this sentence followed by its

@@ -52,7 +52,11 @@ let controlOn = false
 // SPEC 4.6.2: sticky for the life of the app once `PERMISSION_DENIED`
 // (code 1, G4) is seen, cleared only by a fresh attempt through `turnOn`.
 let deniedSticky = false
-let lastPosition: { latitude: number; longitude: number; accuracy: number | null } | null = null
+let lastPosition: {
+  latitude: number
+  longitude: number
+  accuracy: number | null
+} | null = null
 let watchId: number | null = null
 let pushTimer: ReturnType<typeof setInterval> | null = null
 
@@ -87,7 +91,9 @@ function computeState(): GeoState {
 const stateWritable = writable<GeoState>(computeState())
 
 /** The control's own state (SPEC 4.6.2's table), for `views/Settings.svelte` to render. */
-export const geoState: Readable<GeoState> = { subscribe: stateWritable.subscribe }
+export const geoState: Readable<GeoState> = {
+  subscribe: stateWritable.subscribe,
+}
 
 function publish(): void {
   stateWritable.set(computeState())

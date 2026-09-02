@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import getLogSchema from '../../../docs/schemas/incoming/get_log.json'
 
 import type { OutgoingLogLines, OutgoingMessage } from '../lib/protocol'
-import type { ConnectionState, Diagnostics, UnauthorizedReason, WsClient, WsClientOptions } from '../lib/ws'
+import type {
+  ConnectionState,
+  Diagnostics,
+  UnauthorizedReason,
+  WsClient,
+  WsClientOptions,
+} from '../lib/ws'
 
 import { assertRemoteStringIsolated } from './helpers/remoteText'
 
@@ -53,19 +59,31 @@ import { assertRemoteStringIsolated } from './helpers/remoteText'
 
 interface JsonSchemaLike {
   title: string
-  properties: Record<string, { const?: string; enum?: unknown[]; type?: string }>
+  properties: Record<
+    string,
+    { const?: string; enum?: unknown[]; type?: string }
+  >
   required: string[]
 }
 
 const GET_LOG_SCHEMA = getLogSchema as JsonSchemaLike
 
-function assertConformsToSchema(frame: Record<string, unknown>, schema: JsonSchemaLike): void {
+function assertConformsToSchema(
+  frame: Record<string, unknown>,
+  schema: JsonSchemaLike,
+): void {
   const allowedKeys = Object.keys(schema.properties)
   for (const key of Object.keys(frame)) {
-    expect(allowedKeys, `"${key}" is not a property of ${schema.title}`).toContain(key)
+    expect(
+      allowedKeys,
+      `"${key}" is not a property of ${schema.title}`,
+    ).toContain(key)
   }
   for (const key of schema.required) {
-    expect(Object.prototype.hasOwnProperty.call(frame, key), `missing required "${key}"`).toBe(true)
+    expect(
+      Object.prototype.hasOwnProperty.call(frame, key),
+      `missing required "${key}"`,
+    ).toBe(true)
   }
   expect(frame.type).toBe(schema.properties.type?.const)
 }
@@ -166,7 +184,9 @@ class FakeWsClient implements WsClient {
     })
   }
   command(): Promise<OutgoingMessage> {
-    return Promise.reject(new Error('the log view must never send a command, only a read'))
+    return Promise.reject(
+      new Error('the log view must never send a command, only a read'),
+    )
   }
   sendGps(): void {}
   diagnostics(): Diagnostics {
@@ -176,7 +196,10 @@ class FakeWsClient implements WsClient {
     return () => {}
   }
 
-  emitState(state: ConnectionState, reason: UnauthorizedReason | null = null): void {
+  emitState(
+    state: ConnectionState,
+    reason: UnauthorizedReason | null = null,
+  ): void {
     this.currentState = state
     this.reasonValue = reason
     for (const handler of [...this.stateHandlers]) handler(state)
@@ -317,13 +340,18 @@ async function mountLog(
   const mountTarget = document.createElement('div')
   document.body.appendChild(mountTarget)
   container = mountTarget
-  instance = svelte.mount(module.default, { target: mountTarget }) as Record<string, unknown>
+  instance = svelte.mount(module.default, { target: mountTarget }) as Record<
+    string,
+    unknown
+  >
   await settle()
   return { client, settings, session, router, ws, target: mountTarget }
 }
 
 async function click(element: Element): Promise<void> {
-  element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  element.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, cancelable: true }),
+  )
   await settle()
 }
 
@@ -341,7 +369,10 @@ function typeInto(element: Element, value: string): void {
 function root(): HTMLElement {
   if (!container) throw new Error('Log view is not mounted')
   const viewRoot = container.querySelector('[data-view="log"]')
-  expect(viewRoot, 'expected [data-view="log"] inside the mount container').not.toBeNull()
+  expect(
+    viewRoot,
+    'expected [data-view="log"] inside the mount container',
+  ).not.toBeNull()
   return viewRoot as HTMLElement
 }
 
@@ -423,8 +454,9 @@ function accessibleName(el: HTMLElement): string {
   return ''
 }
 
-const GET_LOG_TYPE = (getLogSchema as { properties: { type: { const: string } } }).properties.type
-  .const
+const GET_LOG_TYPE = (
+  getLogSchema as { properties: { type: { const: string } } }
+).properties.type.const
 
 // =============================================================================
 // 1. The refresh: route becoming /log, the refresh control, and a host
@@ -434,7 +466,7 @@ const GET_LOG_TYPE = (getLogSchema as { properties: { type: { const: string } } 
 //    wire schema and against 4.5.2.5's "no lines value".
 // =============================================================================
 
-describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\'s own adoption of 4.5.2.3\'s rule', () => {
+describe("the refresh: route becoming /log and the refresh control, per 4.5.2.5's own adoption of 4.5.2.3's rule", () => {
   it('mounting the view issues exactly one get_log request', async () => {
     const { client } = await mountLog()
     expect(client.countRequestCalls(GET_LOG_TYPE)).toBe(1)
@@ -444,14 +476,19 @@ describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\
     const { client } = await mountLog()
     const call = client.lastRequestCall(GET_LOG_TYPE)
     if (call.data !== undefined && call.data !== null) {
-      expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(
+        false,
+      )
     }
   })
 
   it('the request frame conforms to incoming/get_log.json', async () => {
     const { client } = await mountLog()
     const call = client.lastRequestCall(GET_LOG_TYPE)
-    const frame = { type: call.type, ...(call.data as Record<string, unknown> | undefined) }
+    const frame = {
+      type: call.type,
+      ...(call.data as Record<string, unknown> | undefined),
+    }
     assertConformsToSchema(frame, GET_LOG_SCHEMA)
   })
 
@@ -492,7 +529,11 @@ describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\
 
   it('a host switch in place asks the new unit for its own log', async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA, settings } = await mountLog('connected', '/log', (c) => created.push(c))
+    const { client: clientA, settings } = await mountLog(
+      'connected',
+      '/log',
+      (c) => created.push(c),
+    )
     expect(created).toHaveLength(1)
     expect(clientA.countRequestCalls(GET_LOG_TYPE)).toBe(1)
 
@@ -565,7 +606,10 @@ describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\
 
     // B's own, still-outstanding request settling normally afterward still
     // reaches the screen -- A's rejection did not leave B's view stuck.
-    clientB.settle(GET_LOG_TYPE, logLinesEnvelope(['line from the unit B is now attached to']))
+    clientB.settle(
+      GET_LOG_TYPE,
+      logLinesEnvelope(['line from the unit B is now attached to']),
+    )
     await settle()
     expect(emptyMessage()).toBeNull()
     expect(lineElements().map((el) => el.textContent)).toEqual([
@@ -610,7 +654,11 @@ describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\
   // token used to close.
   it('switching back to a previously active host does not resurrect the original client object', async () => {
     const created: FakeWsClient[] = []
-    const { client: clientA1, settings, ws } = await mountLog('connected', '/log', (c) => created.push(c))
+    const {
+      client: clientA1,
+      settings,
+      ws,
+    } = await mountLog('connected', '/log', (c) => created.push(c))
     expect(created).toHaveLength(1)
 
     const hostB = settings.addHost({
@@ -655,10 +703,15 @@ describe('the refresh: route becoming /log and the refresh control, per 4.5.2.5\
       'The unit could not read its log. With no agent it has no configuration to find the path in.',
     )
 
-    clientA2.settle(GET_LOG_TYPE, logLinesEnvelope(['line from the reattached unit']))
+    clientA2.settle(
+      GET_LOG_TYPE,
+      logLinesEnvelope(['line from the reattached unit']),
+    )
     await settle()
     expect(emptyMessage()).toBeNull()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line from the reattached unit'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line from the reattached unit',
+    ])
   })
 })
 
@@ -735,7 +788,9 @@ describe('the follow timer: off on arrival, an immediate ask plus a 10 s interva
       await click(followControl())
       const call = client.lastRequestCall(GET_LOG_TYPE)
       if (call.data !== undefined && call.data !== null) {
-        expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(false)
+        expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(
+          false,
+        )
       }
     } finally {
       vi.useRealTimers()
@@ -754,7 +809,9 @@ describe('the follow timer: off on arrival, an immediate ask plus a 10 s interva
       await vi.advanceTimersByTimeAsync(10_000)
       const call = client.lastRequestCall(GET_LOG_TYPE)
       if (call.data !== undefined && call.data !== null) {
-        expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(false)
+        expect(Object.prototype.hasOwnProperty.call(call.data, 'lines')).toBe(
+          false,
+        )
       }
     } finally {
       vi.useRealTimers()
@@ -798,7 +855,9 @@ describe('the follow timer: off on arrival, an immediate ask plus a 10 s interva
     vi.useFakeTimers()
     try {
       const created: FakeWsClient[] = []
-      const { client, settings } = await mountLog('connected', '/log', (c) => created.push(c))
+      const { client, settings } = await mountLog('connected', '/log', (c) =>
+        created.push(c),
+      )
       client.settle(GET_LOG_TYPE, logLinesEnvelope([]))
       await settle()
 
@@ -968,7 +1027,7 @@ function spyOnScrollTop(el: HTMLElement): { readonly calls: number[] } {
 }
 
 describe('scrolling to the end after every buffer change, and only while following', () => {
-  it('with Follow off, a new buffer leaves the container\'s scrollTop untouched', async () => {
+  it("with Follow off, a new buffer leaves the container's scrollTop untouched", async () => {
     const { client } = await mountLog()
     const spy = spyOnScrollTop(linesContainer())
     client.settle(GET_LOG_TYPE, logLinesEnvelope(['line one', 'line two']))
@@ -976,14 +1035,17 @@ describe('scrolling to the end after every buffer change, and only while followi
     expect(spy.calls).toHaveLength(0)
   })
 
-  it('with Follow on, a new buffer writes the container\'s scrollTop (scrolled to its end)', async () => {
+  it("with Follow on, a new buffer writes the container's scrollTop (scrolled to its end)", async () => {
     const { client } = await mountLog()
     client.settle(GET_LOG_TYPE, logLinesEnvelope(['line one']))
     await settle()
 
     const spy = spyOnScrollTop(linesContainer())
     await click(followControl()) // immediate ask, Follow now on
-    client.settle(GET_LOG_TYPE, logLinesEnvelope(['line one', 'line two', 'line three']))
+    client.settle(
+      GET_LOG_TYPE,
+      logLinesEnvelope(['line one', 'line two', 'line three']),
+    )
     await settle()
 
     expect(spy.calls.length).toBeGreaterThanOrEqual(1)
@@ -1029,7 +1091,10 @@ describe('scrolling to the end after every buffer change, and only while followi
 describe('log_unavailable: its own sentence, only for that code, only while nothing is held, and cleared by a later success', () => {
   it('the unit answering log_unavailable renders the pinned sentence', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
     const message = emptyMessage()
     expect(message).not.toBeNull()
@@ -1041,23 +1106,34 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
 
   it('the raw error code string never appears anywhere in the view (SPEC 4.5.3)', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
     expect(root().textContent ?? '').not.toContain('log_unavailable')
   })
 
   it('log_unavailable is distinct from the empty-log sentence', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
     expect(emptyMessage()?.textContent).not.toBe("The unit's log is empty.")
   })
 
   it('log_unavailable is distinct from the not-connected sentence', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
-    expect(emptyMessage()?.textContent).not.toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).not.toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   // SPEC 4.5.2.5: "Not connected outranks an unreadable log." Nothing clears
@@ -1069,7 +1145,10 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
   // saw.
   it('not connected outranks an unreadable log: log_unavailable followed by a drop shows the not-connected sentence, not the unavailable one', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
     expect(emptyMessage()?.textContent).toBe(
       'The unit could not read its log. With no agent it has no configuration to find the path in.',
@@ -1077,7 +1156,9 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
 
     client.emitState('offline')
     await settle()
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   // Every rejection above is a RemoteError carrying log_unavailable, which
@@ -1106,20 +1187,29 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
     const { client } = await mountLog()
     client.settle(GET_LOG_TYPE, logLinesEnvelope(['line one', 'line two']))
     await settle()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line one', 'line two'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line one',
+      'line two',
+    ])
 
     await click(refreshControl())
     client.rejectPending(GET_LOG_TYPE, new Error('request timed out'))
     await settle()
 
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line one', 'line two'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line one',
+      'line two',
+    ])
     expect(emptyMessage()).toBeNull()
   })
 
   it('a RemoteError with a different code leaves the screen where it was', async () => {
     const { client, ws } = await mountLog()
     const before = emptyMessage()?.textContent
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('something else went wrong', 'internal_error'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('something else went wrong', 'internal_error'),
+    )
     await settle()
     expect(emptyMessage()?.textContent).toBe(before)
     expect(emptyMessage()?.textContent).not.toBe(
@@ -1133,7 +1223,10 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
     await settle()
 
     await click(refreshControl())
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('malformed request', 'bad_request'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('malformed request', 'bad_request'),
+    )
     await settle()
 
     expect(lineElements().map((el) => el.textContent)).toEqual(['line one'])
@@ -1147,7 +1240,10 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
   // cleared it would still pass everything above.
   it('a later successful refresh clears the unavailable sentence and shows the new lines', async () => {
     const { client, ws } = await mountLog()
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
     expect(emptyMessage()?.textContent).toBe(
       'The unit could not read its log. With no agent it has no configuration to find the path in.',
@@ -1158,7 +1254,9 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
     await settle()
 
     expect(emptyMessage()).toBeNull()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line after recovery'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line after recovery',
+    ])
   })
 
   // SPEC 4.5.2.5: the copy table's log_unavailable row is qualified -- "no
@@ -1174,13 +1272,22 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
     const { client, ws } = await mountLog()
     client.settle(GET_LOG_TYPE, logLinesEnvelope(['line one', 'line two']))
     await settle()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line one', 'line two'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line one',
+      'line two',
+    ])
 
     await click(refreshControl())
-    client.rejectPending(GET_LOG_TYPE, new ws.RemoteError('log path not configured', 'log_unavailable'))
+    client.rejectPending(
+      GET_LOG_TYPE,
+      new ws.RemoteError('log path not configured', 'log_unavailable'),
+    )
     await settle()
 
-    expect(lineElements().map((el) => el.textContent)).toEqual(['line one', 'line two'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'line one',
+      'line two',
+    ])
     expect(emptyMessage()).toBeNull()
   })
 })
@@ -1190,7 +1297,7 @@ describe('log_unavailable: its own sentence, only for that code, only while noth
 //    by equality against 4.5.2.5's table.
 // =============================================================================
 
-describe('the three sentences, pinned by equality against 4.5.2.5\'s table', () => {
+describe("the three sentences, pinned by equality against 4.5.2.5's table", () => {
   it('no lines, connected: "The unit\'s log is empty."', async () => {
     const { client } = await mountLog('connected')
     client.settle(GET_LOG_TYPE, logLinesEnvelope([]))
@@ -1205,14 +1312,18 @@ describe('the three sentences, pinned by equality against 4.5.2.5\'s table', () 
     expect(emptyMessage()?.textContent).toBe("The unit's log is empty.")
   })
 
-  it('no lines, not connected: the shared not-connected sentence, identical to the other list views\'', async () => {
+  it("no lines, not connected: the shared not-connected sentence, identical to the other list views'", async () => {
     await mountLog('connecting')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('no lines, offline: the same not-connected sentence', async () => {
     await mountLog('offline')
-    expect(emptyMessage()?.textContent).toBe('Not connected, so this list has not been read.')
+    expect(emptyMessage()?.textContent).toBe(
+      'Not connected, so this list has not been read.',
+    )
   })
 
   it('the empty message is absent once lines are rendered', async () => {
@@ -1234,7 +1345,11 @@ describe('the filter filters the rendered lines and never the request (SPEC 4.5.
     const { client } = await mountLog()
     client.settle(
       GET_LOG_TYPE,
-      logLinesEnvelope(['starting monitor mode', 'associated with TestNet_001', 'entering AUTO mode']),
+      logLinesEnvelope([
+        'starting monitor mode',
+        'associated with TestNet_001',
+        'entering AUTO mode',
+      ]),
     )
     await settle()
     expect(lineElements()).toHaveLength(3)
@@ -1250,16 +1365,23 @@ describe('the filter filters the rendered lines and never the request (SPEC 4.5.
 
   it('the match is case-insensitive in both directions', async () => {
     const { client } = await mountLog()
-    client.settle(GET_LOG_TYPE, logLinesEnvelope(['UPPER CASE LINE', 'lower case line']))
+    client.settle(
+      GET_LOG_TYPE,
+      logLinesEnvelope(['UPPER CASE LINE', 'lower case line']),
+    )
     await settle()
 
     typeInto(filterInput(), 'UPPER')
     await settle()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['UPPER CASE LINE'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'UPPER CASE LINE',
+    ])
 
     typeInto(filterInput(), 'lower')
     await settle()
-    expect(lineElements().map((el) => el.textContent)).toEqual(['lower case line'])
+    expect(lineElements().map((el) => el.textContent)).toEqual([
+      'lower case line',
+    ])
   })
 
   it('a filter matching nothing renders its own sentence, distinct from the empty-log one', async () => {
@@ -1352,11 +1474,13 @@ describe('a matched substring is not highlighted: no highlighting element create
 //    Rendered as text, both unfiltered and while a filter is matching it.
 // =============================================================================
 
-const HOSTILE_LINE = '2026-08-21 12:00:00 [INFO] associated with <script>window.__logViewPwned = true</script>"><img src=x onerror="window.__logViewPwned = true">'
+const HOSTILE_LINE =
+  '2026-08-21 12:00:00 [INFO] associated with <script>window.__logViewPwned = true</script>"><img src=x onerror="window.__logViewPwned = true">'
 
 describe('every log line renders as text, no element created (SPEC 4.5.3)', () => {
   beforeEach(() => {
-    ;(window as unknown as { __logViewPwned?: boolean }).__logViewPwned = undefined
+    ;(window as unknown as { __logViewPwned?: boolean }).__logViewPwned =
+      undefined
   })
 
   it('a hostile line renders as text, unfiltered', async () => {
@@ -1368,7 +1492,9 @@ describe('every log line renders as text, no element created (SPEC 4.5.3)', () =
     assertRemoteStringIsolated(el, HOSTILE_LINE)
     expect(root().querySelector('script')).toBeNull()
     expect(root().querySelector('[onerror]')).toBeNull()
-    expect((window as unknown as { __logViewPwned?: boolean }).__logViewPwned).toBeUndefined()
+    expect(
+      (window as unknown as { __logViewPwned?: boolean }).__logViewPwned,
+    ).toBeUndefined()
   })
 
   it('a hostile line renders as text while a filter is matching it', async () => {
@@ -1384,7 +1510,9 @@ describe('every log line renders as text, no element created (SPEC 4.5.3)', () =
     assertRemoteStringIsolated(el, HOSTILE_LINE)
     expect(root().querySelector('script')).toBeNull()
     expect(root().querySelector('[onerror]')).toBeNull()
-    expect((window as unknown as { __logViewPwned?: boolean }).__logViewPwned).toBeUndefined()
+    expect(
+      (window as unknown as { __logViewPwned?: boolean }).__logViewPwned,
+    ).toBeUndefined()
   })
 })
 
@@ -1449,7 +1577,7 @@ describe('the buffer replaces, never appends (SPEC 4.4.1)', () => {
 // 9. Control copy, pinned by equality against 4.5.2.5's own table.
 // =============================================================================
 
-describe('control copy, pinned by equality against SPEC 4.5.2.5\'s table', () => {
+describe("control copy, pinned by equality against SPEC 4.5.2.5's table", () => {
   it('the refresh control reads "Refresh"', async () => {
     await mountLog()
     expect(refreshControl().textContent).toBe('Refresh')
@@ -1485,7 +1613,10 @@ describe('the font-size control cycles small -> medium -> large -> small, carrie
     await mountLog()
     const start = fontSize()
     const startIndex = ORDER.indexOf(start as (typeof ORDER)[number])
-    expect(startIndex, `expected a recognised starting step, got "${start}"`).not.toBe(-1)
+    expect(
+      startIndex,
+      `expected a recognised starting step, got "${start}"`,
+    ).not.toBe(-1)
 
     await click(fontSizeControl())
     expect(fontSize()).toBe(ORDER[(startIndex + 1) % 3])

@@ -6,7 +6,8 @@
    * `orientation` underneath the layout, so the height bound is what keeps a
    * tall landscape window on the bottom bar.
    */
-  export const RAIL_MEDIA_QUERY = '(orientation: landscape) and (max-height: 560px)'
+  export const RAIL_MEDIA_QUERY =
+    '(orientation: landscape) and (max-height: 560px)'
 </script>
 
 <script lang="ts">
@@ -123,7 +124,11 @@
            Geometry paragraph says why (app.css's rule keyed on it says the
            rest). A plain attribute selector, not :has(), whose support on
            SPEC 4.2.1's pinned iOS floor was not verified for this change. -->
-      <div class="view-slot" data-view-slot={route.id} hidden={$currentRoute.id !== route.id}>
+      <div
+        class="view-slot"
+        data-view-slot={route.id}
+        hidden={$currentRoute.id !== route.id}
+      >
         <View />
       </div>
     {/each}
@@ -156,7 +161,7 @@
      out of the way everywhere else, where 100vh is the large viewport and would
      put the bar under Safari toolbar. The flag is set from navigator.standalone
      in main.ts, because the display-mode query does not match on iOS. */
-  :global(html[data-standalone=true]) .shell {
+  :global(html[data-standalone='true']) .shell {
     bottom: auto;
     height: 100vh;
   }

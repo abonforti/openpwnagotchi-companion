@@ -39,9 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
@@ -81,6 +81,8 @@ jobs:
           # a fenced block and the length is capped: a class name carrying a
           # fence would break out, and an @name in it would mention people.
           report="$(tr -d '`' < report.txt | head -c 4000)"
+          # shellcheck disable=SC2016  # the single quotes are the point: this is a
+          # printf format string, and the only expansion in it is printf's own %s.
           body="$(printf 'A scheduled check found that one or more symbols pinned in `SPEC.md` section 11 no longer hold against current upstream.\n\n```\n%s\n```\n\nWhat this means: section 11 is now wrong about them, and `tests/fakes/pwnagotchi_stub/` is built from section 11, so the test suite is green about something that is no longer true.\n\nBefore changing any code, re-read the upstream source. The fix is often to widen what the plugin tolerates rather than to follow the change, as `SPEC.md` section 2.3.2 already does for the websockets API.\n\nRaised by `.github/workflows/upstream-drift.yml`. Run %s.\n' "$report" "${{ github.run_id }}")"
 
           # The phrase is quoted, so the search cannot match some other open

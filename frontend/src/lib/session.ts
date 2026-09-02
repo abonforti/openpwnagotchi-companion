@@ -43,7 +43,10 @@ function identityOf(host: Host): ConnectionIdentity {
   return { address: host.address, wsPort: host.wsPort, token: host.token }
 }
 
-function sameIdentity(a: ConnectionIdentity | null, b: ConnectionIdentity | null): boolean {
+function sameIdentity(
+  a: ConnectionIdentity | null,
+  b: ConnectionIdentity | null,
+): boolean {
   if (a === null || b === null) return a === b
   return a.address === b.address && a.wsPort === b.wsPort && a.token === b.token
 }

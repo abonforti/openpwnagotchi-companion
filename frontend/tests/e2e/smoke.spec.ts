@@ -9,7 +9,9 @@ import { expect, test } from '@playwright/test'
  * The screenshot is captured as an artifact and deliberately not compared:
  * SPEC 10.5 rules out baselines because CI is amd64 and the review host arm64.
  */
-test('the shell loads and shows five navigation entries', async ({ page }, testInfo) => {
+test('the shell loads and shows five navigation entries', async ({
+  page,
+}, testInfo) => {
   await page.goto('/')
 
   const nav = page.getByRole('navigation', { name: 'Primary' })

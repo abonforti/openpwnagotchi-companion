@@ -24,9 +24,14 @@ import { expect } from 'vitest'
  * deliberately tolerant of either.
  */
 export function assertRemoteStringIsolated(el: Element, text: string): void {
-  const selfIsBdi = el.tagName.toLowerCase() === 'bdi' && el.textContent === text
-  const nestedMatches = Array.from(el.querySelectorAll('bdi')).filter((b) => b.textContent === text)
-  const matches: HTMLElement[] = selfIsBdi ? [el as HTMLElement, ...nestedMatches] : nestedMatches
+  const selfIsBdi =
+    el.tagName.toLowerCase() === 'bdi' && el.textContent === text
+  const nestedMatches = Array.from(el.querySelectorAll('bdi')).filter(
+    (b) => b.textContent === text,
+  )
+  const matches: HTMLElement[] = selfIsBdi
+    ? [el as HTMLElement, ...nestedMatches]
+    : nestedMatches
 
   expect(
     matches,
@@ -34,6 +39,11 @@ export function assertRemoteStringIsolated(el: Element, text: string): void {
   ).toHaveLength(1)
   const bdi = matches[0] as HTMLElement
 
-  const others = Array.from(el.querySelectorAll('*')).filter((node) => node !== bdi && !bdi.contains(node))
-  expect(others, 'expected no element in the field other than the isolation <bdi>').toEqual([])
+  const others = Array.from(el.querySelectorAll('*')).filter(
+    (node) => node !== bdi && !bdi.contains(node),
+  )
+  expect(
+    others,
+    'expected no element in the field other than the isolation <bdi>',
+  ).toEqual([])
 }

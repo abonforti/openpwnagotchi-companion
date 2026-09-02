@@ -35,7 +35,10 @@ export type NearbySortOrder = 'rssi' | 'channel'
  * present exactly that set in an order that hides what it is a set of.
  * There is therefore no `sortHandshakes` beside this function, by design.
  */
-export function sortAccessPoints(list: AccessPoint[], order: NearbySortOrder): AccessPoint[] {
+export function sortAccessPoints(
+  list: AccessPoint[],
+  order: NearbySortOrder,
+): AccessPoint[] {
   const sorted = [...list]
   sorted.sort((a, b) => {
     const primary =

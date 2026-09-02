@@ -56,7 +56,9 @@ export function orientationOf(testInfo: TestInfo): 'portrait' | 'landscape' {
 }
 
 /** The layout SPEC 4.5 requires for an orientation at the device profile. */
-export function expectedLayout(orientation: 'portrait' | 'landscape'): 'bar' | 'rail' {
+export function expectedLayout(
+  orientation: 'portrait' | 'landscape',
+): 'bar' | 'rail' {
   // The rail applies at exactly `(orientation: landscape) and (max-height:
   // 560px)`. The landscape project is 874x402, so 402 <= 560 holds and the
   // rail is required; the portrait project is 402x874 and keeps the bar.

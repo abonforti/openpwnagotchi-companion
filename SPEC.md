@@ -3503,6 +3503,20 @@ than by rule. The visible consequence is stated plainly: a plugin that emits onl
 `stats` leaves `connecting` to expire at 55 s into `offline`, which is the honest reading of a
 socket that is open against something that is not answering in a language this app knows.
 
+**An `error` whose `code` is not in `ErrorCode` is dropped too, and that costs something worth
+naming.** `ErrorCode` is an enum in `common.json`, so the rule above applies to it with no
+exception: a code from a plugin newer than this app fails the guard. The consequence is not the
+same as it is for `restarting`. An `error` usually answers a request, and a dropped one leaves
+that request to fail on its own 15 s timeout (§4.3.8) instead of immediately, with the Settings
+row saying the unit sent something this app could not read rather than saying what the unit
+actually refused. That is worse than the generic sentence §4.3.5 keeps for exactly this shape
+of surprise, and it is still the right trade: a code with no branch behind it cannot be routed
+by §4.3.5's table anyway, an app that admitted it would be showing a word it has no sentence
+for, and the alternative -- an enum enforced everywhere except where it is inconvenient -- is a
+rule nobody can predict from the schema. §4.3.5's "everything else" row keeps its meaning: four
+of the nine codes in the enum today have no dedicated surface and land on the diagnostics line,
+which is what that row is for and what a test of it must use.
+
 **Cost.** The guard for a message is a walk of the object the parse just built, linear in the
 frame, with no allocation beyond the walk. `stats` arrives every 20 s (§2.4) and is fourteen keys
 over a handful of nested shapes. The bundle cost of the generated guards, measured on the built

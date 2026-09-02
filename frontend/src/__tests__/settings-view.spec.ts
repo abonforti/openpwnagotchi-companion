@@ -252,7 +252,11 @@ class FakeWsClient implements WsClient {
   reasonValue: UnauthorizedReason | null = null
   private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
-  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null, droppedFrames: 0 }
+  private diagnosticsValue: Diagnostics = {
+    lastError: null,
+    latencyMs: null,
+    droppedFrames: 0,
+  }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
@@ -1175,7 +1179,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: null, latencyMs: 123, droppedFrames: 0 })
+      client.emitDiagnostics({
+        lastError: null,
+        latencyMs: 123,
+        droppedFrames: 0,
+      })
       await settle()
 
       const el = diagnosticField('latency')
@@ -1192,7 +1200,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: null, latencyMs: 0, droppedFrames: 0 })
+      client.emitDiagnostics({
+        lastError: null,
+        latencyMs: 0,
+        droppedFrames: 0,
+      })
       await settle()
 
       const el = diagnosticField('latency')
@@ -1620,7 +1632,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: sampleLastError(), latencyMs: null, droppedFrames: 0 })
+      client.emitDiagnostics({
+        lastError: sampleLastError(),
+        latencyMs: null,
+        droppedFrames: 0,
+      })
       await settle()
 
       expect(diagnosticFieldOrNull('at')).toBeNull()
@@ -1837,7 +1853,11 @@ describe('diagnostics (SPEC 4.5.2.1)', () => {
       const { settings: api, stores } = await mountSettings()
       api.loadSettings(() => 'not-an-ip-address')
       teardownStores = stores.connectStores(asClient(client))
-      client.emitDiagnostics({ lastError: null, latencyMs: null, droppedFrames: 7 })
+      client.emitDiagnostics({
+        lastError: null,
+        latencyMs: null,
+        droppedFrames: 7,
+      })
       await settle()
 
       const el = diagnosticField('droppedFrames')

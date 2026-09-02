@@ -1669,7 +1669,8 @@ describe('diagnostics: the last error records every code, including the ones §4
     { code: 'log_unavailable', label: 'a code §4.3.5 routes to the Log view' },
     {
       code: 'unknown_command',
-      label: 'a code with no dedicated §4.3.5 surface, routed to the generic diagnostics line',
+      label:
+        'a code with no dedicated §4.3.5 surface, routed to the generic diagnostics line',
     },
   ]
 

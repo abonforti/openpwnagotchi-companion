@@ -312,7 +312,11 @@ class FakeWsClient implements WsClient {
   private restartReasonValue: RestartReason | null = null
   private lastStatsValue: StatsSnapshot | null = null
   // SPEC 4.3.10: absent, not zero, until something sets it.
-  private diagnosticsValue: Diagnostics = { lastError: null, latencyMs: null, droppedFrames: 0 }
+  private diagnosticsValue: Diagnostics = {
+    lastError: null,
+    latencyMs: null,
+    droppedFrames: 0,
+  }
   readonly stateHandlers = new Set<(state: ConnectionState) => void>()
   readonly messageHandlers = new Set<(message: OutgoingMessage) => void>()
   readonly diagnosticsHandlers = new Set<(diagnostics: Diagnostics) => void>()
@@ -715,7 +719,11 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it('seeds lastError and latencyMs from the client at mount, before any onDiagnostics push', () => {
     const fake = new FakeWsClient()
     const seededError = sampleLastError()
-    fake.primeDiagnostics({ lastError: seededError, latencyMs: 42, droppedFrames: 0 })
+    fake.primeDiagnostics({
+      lastError: seededError,
+      latencyMs: 42,
+      droppedFrames: 0,
+    })
     mount(fake)
     expect(get(connection)).toEqual({
       state: 'offline',
@@ -774,7 +782,11 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   // seed from a field the seeding code hardcodes to zero.
   it('seeds a non-zero droppedFrames count from the client at mount, not a hardcoded zero', () => {
     const fake = new FakeWsClient()
-    fake.primeDiagnostics({ lastError: null, latencyMs: null, droppedFrames: 3 })
+    fake.primeDiagnostics({
+      lastError: null,
+      latencyMs: null,
+      droppedFrames: 3,
+    })
     mount(fake)
     expect(get(connection).droppedFrames).toBe(3)
   })
@@ -794,7 +806,11 @@ describe('connection: the diagnostics pair mirrors the client, not a second opin
   it("reads a null lastError and null latencyMs once no client is attached, not the client's last reported diagnostics (SPEC 4.4.2)", () => {
     const fake = new FakeWsClient()
     mount(fake)
-    fake.emitDiagnostics({ lastError: sampleLastError(), latencyMs: 15, droppedFrames: 0 })
+    fake.emitDiagnostics({
+      lastError: sampleLastError(),
+      latencyMs: 15,
+      droppedFrames: 0,
+    })
     expect(get(connection).lastError).not.toBeNull()
     expect(get(connection).latencyMs).toBe(15)
 

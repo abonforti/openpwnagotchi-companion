@@ -108,7 +108,10 @@ function setup(optionOverrides: Partial<Omit<WsClientOptions, 'deps'>> = {}) {
 }
 
 /** Opens the newest socket and delivers a first well-formed `stats` frame. */
-function firstStats(sockets: FakeSocket[], sessionAge: number | null): FakeSocket {
+function firstStats(
+  sockets: FakeSocket[],
+  sessionAge: number | null,
+): FakeSocket {
   const socket = nth(sockets, sockets.length - 1)
   socket.open()
   socket.push(validStatsEnvelope({ sessionAge }))
@@ -152,7 +155,12 @@ function validBattery(): Record<string, unknown> {
 }
 
 function validCapabilities(): Record<string, unknown> {
-  return { pasv: true, pisugar: false, gpsSource: 'none', pluginVersion: '0.1.0' }
+  return {
+    pasv: true,
+    pisugar: false,
+    gpsSource: 'none',
+    pluginVersion: '0.1.0',
+  }
 }
 
 function validStatsData(
@@ -268,7 +276,11 @@ describe('§4.3.11: an unrecognised type is dropped', () => {
     const s = nth(sockets, 0)
     s.open()
 
-    s.push({ type: 'not_a_real_outgoing_type', timestamp: 1700000000, data: {} })
+    s.push({
+      type: 'not_a_real_outgoing_type',
+      timestamp: 1700000000,
+      data: {},
+    })
 
     expect(client.state()).toBe('connecting') // never admitted: this was not a frame
     expect(messages).toHaveLength(0)
@@ -590,7 +602,11 @@ describe('§4.3.11 + §4.3.10: diagnostics for a dropped frame', () => {
 
     expect(client.diagnostics().droppedFrames).toBe(2) // the reconnection did not reset it
 
-    s2.push({ type: 'yet_another_unknown_type', timestamp: 1700000000, data: {} })
+    s2.push({
+      type: 'yet_another_unknown_type',
+      timestamp: 1700000000,
+      data: {},
+    })
     expect(client.diagnostics().droppedFrames).toBe(3) // and it keeps climbing afterwards
   })
 
@@ -658,7 +674,11 @@ describe('§4.3.11 + §4.3.10: diagnostics for a dropped frame', () => {
     })
 
     expect(() =>
-      s.push({ type: 'not_a_real_type_for_double_count', timestamp: 1700000000, data: {} }),
+      s.push({
+        type: 'not_a_real_type_for_double_count',
+        timestamp: 1700000000,
+        data: {},
+      }),
     ).toThrow() // not isolated the way the message-handler loop is (SPEC 4.3.11)
 
     expect(client.diagnostics().droppedFrames).toBe(1)

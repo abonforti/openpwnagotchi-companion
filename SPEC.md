@@ -8668,6 +8668,20 @@ Enforcement, in layers, because a single gate gets forgotten:
    between two commits, which is the whole requirement, and it is recorded nowhere by the
    hook itself, so a wrong list cannot be laundered into a remembered one.
 
+8. **A branch must be current with `master` before it merges (issue #222).** Two pull
+   requests once went green apart and made `master` red together: one added a file, the other
+   added the test that inventories files, and each was checked against the base it was written
+   on. A status check answers "is this branch good against its base", not "is the merged
+   result good", and the second question is the one that matters. The ruleset on `master`
+   therefore requires the branch to be up to date with the base before the checks count,
+   which makes GitHub rerun them against the merged result. The cost is one rebase, or one
+   "Update branch" merge from GitHub, per pull request whenever another one lands first; with
+   one or two open at a time that is the honest fit, and a merge queue is more machinery than
+   the project has earned. So when a branch suddenly needs a rebase, this is why. The setting
+   is `strict_required_status_checks_policy` on the ruleset, and it is written here because
+   the ruleset is not in the repository and would otherwise be the only rule of this section
+   nobody could read.
+
 If an agent needs to know how the device is reached in order to do a task, the answer is to ask
 the owner, in the conversation, and not write it down.
 

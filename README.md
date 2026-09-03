@@ -35,7 +35,8 @@ else.
 | Platforms | iOS 16.6+ | anything with a modern browser |
 
 The backend of that app was always open source: only the iOS client was paid. Its plugin,
-[`pwnios.py`](https://github.com/BraedenP232/PwnIOS), is published under the GPL, so this project
+[`pwnios.py`](https://github.com/BraedenP232/PwnIOS), is published under a free licence (the
+file says GPL3 and the repository's LICENSE says MIT; see `docs/LICENSING.md`), so this project
 forks and hardens it and replaces the client with an installable web app. Credit where it is
 due - that project made this one possible by publishing the hard part.
 
@@ -140,8 +141,11 @@ the pinned list in `SPEC.md` §11 and nowhere else, and changes ship with their 
 ## Licence and credit
 
 GPL-3.0. This project is a fork of the `pwnios.py` plugin from
-[`BraedenP232/PwnIOS`](https://github.com/BraedenP232/PwnIOS), used and redistributed under the
-GPL with attribution preserved. Thanks to that project for publishing the backend.
+[`BraedenP232/PwnIOS`](https://github.com/BraedenP232/PwnIOS). That project says two things
+about its own licence: the plugin file declares GPL3 and the repository's LICENSE file is MIT.
+This project is GPL-3.0 under either reading, keeps the attribution both require, and retains
+the MIT notice verbatim in `NOTICE` in case that is the one that applies. The detail is in
+`docs/LICENSING.md`. Thanks to that project for publishing the backend.
 
 pwnagotchi itself is by [evilsocket](https://github.com/evilsocket) and maintained in the
 [jayofelony fork](https://github.com/jayofelony/pwnagotchi).

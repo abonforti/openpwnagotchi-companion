@@ -81,6 +81,14 @@ git config core.hooksPath .githooks
 git config companion.denylist /path/to/your/denylist.txt   # outside this repo
 ```
 
+The denylist itself belongs in the owner's own home directory, not in this repository and not
+under a temporary directory. `.githooks/pre-commit` tells three states apart: not configured
+(the setup line above, and it refuses to commit); configured but unreadable (it names the path
+it was given and says a repointed or wiped list is the likely cause); and present but implausible
+(a list with no pattern, or one that resolves under `/tmp`, `/var/tmp`, `/dev/shm`, or `$TMPDIR`,
+is refused outright, because a list a reboot or an unrelated cleanup can wipe is a gate that will
+one day be missing). See SPEC.md §13 rule 7.
+
 ## Tickets
 
 **Every problem becomes a GitHub issue.** A defect, a gap, an audit finding, a dead link, a
@@ -126,6 +134,11 @@ end-to-end run on the device, after which the rule above applies without excepti
   named for their deliverable, never after a version number.
 - **Every commit is GPG-signed** (SPEC.md §13.1). `commit.gpgsign` is on; never disable it and
   never use `--no-gpg-sign`. If signing fails, report it rather than working around it.
+- **An agent never reconfigures this repository.** No `git config` on this checkout, nothing
+  under `.git/`, not the hooks path, not the signing settings, not `companion.denylist`. A task
+  that needs a differently configured repository gets a worktree or a throwaway clone. This
+  happened once, on 2026-08-30: an implementer repointed the denylist at its own scratch file,
+  and only the hook failing closed made it visible (SPEC §13 rule 7, issue #216).
 - **A denied permission is a stop, not a detour.** When the permission system refuses a command,
   the answer is to say so and ask. It is never to reach the same effect another way: not the same
   action through a different tool, not a shell out of a language runtime, not a rewritten path,

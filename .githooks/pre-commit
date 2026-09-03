@@ -14,10 +14,35 @@ This is the cheap automatic layer. The companion-security-auditor agent is the
 thorough one and applies judgement this script cannot. Run both.
 """
 
+import hashlib
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+# Roots a denylist must never resolve under: a list that a reboot or an
+# unrelated cleanup can wipe is a gate that will one day be missing. Checked
+# against the real, symlink-resolved path and compared by path components
+# (`/tmpfoo` is not `/tmp`), not by string prefix.
+_TEMP_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")
+# Environment-named roots, same argument: $TMPDIR by convention, and
+# $XDG_RUNTIME_DIR is a tmpfs wiped at logout.
+_TEMP_ROOT_VARIABLES = ("TMPDIR", "XDG_RUNTIME_DIR")
+
+
+def _resolves_under_temp_dir(path):
+    resolved = Path(os.path.realpath(path)).parts
+    roots = list(_TEMP_ROOTS)
+    for variable in _TEMP_ROOT_VARIABLES:
+        value = os.environ.get(variable)
+        if value:
+            roots.append(value)
+    for root in roots:
+        root_parts = Path(os.path.realpath(root)).parts
+        if resolved[: len(root_parts)] == root_parts:
+            return True
+    return False
 
 
 def git(*args, tolerate=()):
@@ -117,11 +142,42 @@ if not denylist_path:
         "  Refusing to commit without the leak gate. See SPEC.md section 13.",
     )
 
+if not os.path.isabs(denylist_path):
+    fail(
+        f"pre-commit: companion.denylist is set to {denylist_path}, which is not an "
+        "absolute path.",
+        "  A relative value resolves against wherever git runs the hook from, which is "
+        "inside this repository.",
+        "  Point it at an absolute path in your own home directory. Refusing to commit.",
+    )
+
+if _resolves_under_temp_dir(denylist_path):
+    fail(
+        f"pre-commit: companion.denylist is set to {denylist_path}, which resolves under "
+        "a temporary directory.",
+        "  A leak gate whose list can be wiped by a reboot or an unrelated cleanup is a "
+        "gate that will one day be missing.",
+        "  Point it at a file in your own home directory instead. Refusing to commit.",
+    )
+
 try:
-    with open(denylist_path, encoding="utf-8") as fp:
-        raw = fp.read().splitlines()
+    with open(denylist_path, "rb") as fp:
+        raw_bytes = fp.read()
 except OSError as err:
-    fail(f"pre-commit: denylist unreadable ({err.strerror}). Refusing to commit.")
+    fail(
+        f"pre-commit: companion.denylist is set to {denylist_path}, but that file could "
+        f"not be read ({err.strerror or err}).",
+        "  A repointed or wiped list is the likely cause. Refusing to commit.",
+    )
+
+try:
+    raw = raw_bytes.decode("utf-8").splitlines()
+except UnicodeDecodeError as err:
+    fail(
+        f"pre-commit: companion.denylist is set to {denylist_path}, which is not UTF-8 "
+        f"text (byte {err.start}).",
+        "  A denylist is a text file of one regex per line. Refusing to commit.",
+    )
 
 patterns = []
 for lineno, line in enumerate(raw, 1):
@@ -136,6 +192,14 @@ for lineno, line in enumerate(raw, 1):
 if not patterns:
     fail("pre-commit: denylist contains no patterns. Refusing to commit.")
 
+# Fingerprint of the list, not its content: enough for the owner to notice
+# the list changed between two commits, without printing the path or a
+# pattern into a log a leak gate is supposed to keep those out of.
+fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:8]
+fingerprint_line = (
+    f"pre-commit: denylist compiled {len(patterns)} pattern(s), fingerprint {fingerprint}."
+)
+
 # This is `d` - exclude deletions, admit everything else - and not an
 # allow-list of the letters that were thought of. It started as `ACM`, missed
 # a commit that renamed a file and edited it in the same breath (`git mv`,
@@ -147,6 +211,7 @@ if not patterns:
 # which is what the diff below needs anyway.
 staged = [n for n in git("diff", "--cached", "--name-only", "--diff-filter=d").split("\n") if n]
 if not staged:
+    print(fingerprint_line)
     sys.exit(0)
 
 # Added lines only. An untouched pre-existing line is a separate problem, not this
@@ -154,6 +219,7 @@ if not staged:
 diff = git("diff", "--cached", "--unified=0", "--", *staged)
 added = [ln[1:] for ln in diff.split("\n") if ln.startswith("+") and not ln.startswith("+++")]
 if not added:
+    print(fingerprint_line)
     sys.exit(0)
 
 hits = sum(1 for p in patterns if any(p.search(ln) for ln in added))
@@ -167,4 +233,5 @@ if hits:
         "  Review with: git diff --cached",
     )
 
+print(fingerprint_line)
 sys.exit(0)

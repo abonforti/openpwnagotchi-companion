@@ -462,8 +462,6 @@ export interface OutgoingHandshake {
     "filename": string;
     /** Access point MAC. */
     "ap": string | null;
-    /** Client station MAC. */
-    "station": string | null;
     /** Present when a fix was available and a sidecar was written. */
     "gps": HandshakeGps | null;
   };
@@ -763,7 +761,7 @@ export function isOutgoingGpsUpdate(v: unknown): v is OutgoingGpsUpdate {
 }
 
 export function isOutgoingHandshake(v: unknown): v is OutgoingHandshake {
-  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "handshake" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["filename"] === 'string' && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === 'string' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === null) && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["station"] === 'string' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["station"] === null) && (isHandshakeGps(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"]) || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"] === null)) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "handshake" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["filename"] === 'string' && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === 'string' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === null) && (isHandshakeGps(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"]) || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"] === null)) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
 }
 
 export function isOutgoingHandshakesList(v: unknown): v is OutgoingHandshakesList {

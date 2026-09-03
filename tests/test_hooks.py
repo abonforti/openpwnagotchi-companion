@@ -213,7 +213,7 @@ def test_a_captured_handshake_is_pushed(hooked, check_message):
     data = check_message(hooked.only("handshake"), "handshake")
     assert data["filename"] == "TestNet_002_aabbccddee01.pcapng"
     assert data["ap"] == AP_MAC
-    assert data["station"] == STA_MAC
+    assert "station" not in data
 
 
 def test_both_argument_shapes_reach_the_wire_identically(hooked):
@@ -228,7 +228,22 @@ def test_both_argument_shapes_reach_the_wire_identically(hooked):
     from_strings, from_dicts = hooked.sent
     assert from_strings["data"] == from_dicts["data"]
     assert from_strings["data"]["ap"] == AP_MAC
-    assert from_strings["data"]["station"] == STA_MAC
+
+
+def test_the_station_mac_is_absent_from_the_wire_in_both_shapes(hooked):
+    """SPEC 2.13, issue #33: the hook is handed a client station beside the
+    access point, and the push is `{filename, ap, gps}` - the station is
+    dropped after normalising nothing from it. Both argument shapes (F20)
+    are checked, since a fix scoped to only one would still leak a client
+    MAC through the other."""
+    capture = hooked.capture("TestNet_002_aabbccddee01.pcapng")
+
+    hooked.plugin.on_handshake(hooked.agent, str(capture), *STRING_SHAPE)
+    hooked.plugin.on_handshake(hooked.agent, str(capture), *DICT_SHAPE)
+
+    from_strings, from_dicts = hooked.sent
+    assert "station" not in from_strings["data"]
+    assert "station" not in from_dicts["data"]
 
 
 def test_a_fix_writes_the_sidecar_next_to_the_capture(hooked, check_message):
@@ -306,13 +321,15 @@ def test_a_filename_the_filesystem_refuses_outright_costs_only_the_sidecar(
 def test_an_unreadable_mac_becomes_null_rather_than_a_dropped_push(hooked, check_message):
     capture = hooked.capture("TestNet_002_aabbccddee01.pcapng")
 
+    # The unusable dict sits in the access point slot: the station slot is
+    # no longer read (SPEC 2.13, issue #33), so a value there exercises nothing.
     hooked.plugin.on_handshake(
-        hooked.agent, str(capture), None, {"hostname": "no mac here"}
+        hooked.agent, str(capture), {"hostname": "no mac here"}, None
     )
 
     data = check_message(hooked.only("handshake"), "handshake")
     assert data["ap"] is None
-    assert data["station"] is None
+    assert "station" not in data
 
 
 # ---------------------------------------------------------------------------

@@ -618,6 +618,24 @@ describe('empty vs. not-yet-fetched, decided by connection state', () => {
     )
   })
 
+  // SPEC 4.5.2.4, issue #33: the mockup showed a permanent "Grid up" pill,
+  // but nothing on the wire reports pwngrid health (`peers_list` carries
+  // entries and nothing else), so the empty state says only that no peer
+  // has been reported, never that the grid is up or down.
+  it('the empty state says nothing about grid health, connected or not', async () => {
+    const { client } = await mountPeers('connected')
+    client.settle('get_peers', peersListEnvelope([]))
+    await settle()
+    expect(emptyMessage()?.textContent).not.toMatch(/grid (up|down)/i)
+    expect(root().textContent).not.toMatch(/grid (up|down)/i)
+  })
+
+  it('the not-connected empty state says nothing about grid health either', async () => {
+    await mountPeers('offline')
+    expect(emptyMessage()?.textContent).not.toMatch(/grid (up|down)/i)
+    expect(root().textContent).not.toMatch(/grid (up|down)/i)
+  })
+
   it('the empty message is absent once the list has rows', async () => {
     const { client } = await mountPeers('connected')
     client.settle('get_peers', peersListEnvelope([peer()]))

@@ -388,6 +388,31 @@ describe('the view root', () => {
 })
 
 // ---------------------------------------------------------------------------
+// "No reachability pill on a host" (SPEC 4.5.2.1, issue #33): there is no
+// probe in the protocol, so a host that has never been tried says nothing -
+// never "Reachable" or "Unreachable".
+// ---------------------------------------------------------------------------
+
+describe('no reachability pill on a host (SPEC 4.5.2.1, issue #33)', () => {
+  it('the host row carries no "Reachable" or "Unreachable" text', async () => {
+    const { settings: api } = await mountSettings()
+    api.loadSettings(() => 'not-an-ip-address')
+    await settle()
+
+    const row = hostRow('bluetooth')
+    expect(row.textContent).not.toMatch(/\bun?reachable\b/i)
+  })
+
+  it('the view as a whole carries no such text either', async () => {
+    const { settings: api } = await mountSettings()
+    api.loadSettings(() => 'not-an-ip-address')
+    await settle()
+
+    expect(root().textContent).not.toMatch(/\bun?reachable\b/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // "The host list comes first and the add-host form sits under it." (4.5.2.1)
 // ---------------------------------------------------------------------------
 

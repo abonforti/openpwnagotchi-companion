@@ -110,6 +110,13 @@ against real hardware.
 
 ### Changed
 
+- **The `handshake` push no longer carries `station`.** A client MAC is the identifier of a
+  person's device; nothing in the app showed it, and the Wi-Fi view already promised that
+  station MACs stay on the unit. The push is `{filename, ap, gps}`. A change to the shape of an
+  existing message, so a MINOR bump under SPEC §12 (issue #33): an app older than its plugin
+  still requires `station` at the boundary and drops every `handshake` push, so its handshakes
+  list stops refreshing on a capture until the next explicit refresh, and the Settings
+  diagnostics count the drops. Update the plugin and the app together.
 - **`stats` carries the unit's own name, and the field is required.** `Stats.name` is
   `pwnagotchi.name()`, the hostname, or `null` when the unit has none; the header names the
   unit by it when the owner gave the host no label of their own (issues #30, #200). A change to

@@ -21,13 +21,6 @@
           ],
           "description": "Access point MAC."
         },
-        "station": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Client station MAC."
-        },
         "gps": {
           "oneOf": [
             {
@@ -43,7 +36,6 @@
       "required": [
         "filename",
         "ap",
-        "station",
         "gps"
       ],
       "additionalProperties": false

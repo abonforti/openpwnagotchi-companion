@@ -214,7 +214,6 @@ function handshakePushEnvelope(
     data: {
       filename: 'TestNet_002_112233445566.pcapng',
       ap: 'AA:BB:CC:DD:EE:02',
-      station: 'AA:BB:CC:DD:EE:03',
       gps: null,
       ...overrides,
     },
@@ -1142,6 +1141,29 @@ describe('handshakes: written by the list reply only, holding the whole payload'
     const fake = new FakeWsClient()
     mount(fake)
     fake.emitMessage(handshakePushEnvelope())
+    expect(fake.requestCalls).toHaveLength(1)
+    expect(fake.requestCalls[0]?.type).toBe('get_handshakes')
+    fake.settleOldestRequest(handshakesListEnvelope([]))
+  })
+
+  it('handling a handshake push does not depend on a station field (SPEC 2.13, issue #33)', () => {
+    // The wire no longer carries `station` at all, but SPEC 4.3.11 accepts
+    // unknown keys on any incoming shape, so a message built by an older
+    // unit that still sends one must be handled identically to the current
+    // `{filename, ap, gps}` shape: one refresh request either way, nothing
+    // read out of the field itself. The cast is required because the
+    // generated type no longer has a `station` property to assign.
+    const withStation = {
+      ...handshakePushEnvelope({ filename: 'legacy_shape.pcapng' }),
+      data: {
+        ...handshakePushEnvelope({ filename: 'legacy_shape.pcapng' }).data,
+        station: 'AA:BB:CC:DD:EE:03',
+      },
+    } as unknown as ReturnType<typeof handshakePushEnvelope>
+
+    const fake = new FakeWsClient()
+    mount(fake)
+    fake.emitMessage(withStation)
     expect(fake.requestCalls).toHaveLength(1)
     expect(fake.requestCalls[0]?.type).toBe('get_handshakes')
     fake.settleOldestRequest(handshakesListEnvelope([]))

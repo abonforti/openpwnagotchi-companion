@@ -1052,6 +1052,51 @@ describe('formatLastErrorCode', () => {
     expect(socketFailed).not.toBe(connectTimeout)
     expect(socketFailed).not.toBe(generic)
   })
+
+  // SPEC 4.3.11 (issue #109): `bad_frame` is the fourth local code, and the
+  // only one about the unit's own words rather than about the link or the
+  // phone -- a frame arrived and failed the boundary guard, so this client
+  // has no idea what the unit meant. Pinned verbatim, the same as
+  // `socket_failed` above and for the same reason: a case arm falling
+  // through to the generic sentence, or being worded to sound like a link
+  // failure instead of an unreadable one, is a defect this file catches
+  // only if the exact string is asserted.
+  it('bad_frame (source "local") renders the exact pinned sentence, distinct from the other three local codes', () => {
+    const badFrame = formatLastErrorCode({
+      source: 'local',
+      code: 'bad_frame',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    expect(badFrame).toBe('The unit sent something this app could not read.')
+    expect(badFrame).not.toContain('bad_frame')
+
+    const pongTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'pong_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    const connectTimeout = formatLastErrorCode({
+      source: 'local',
+      code: 'connect_timeout',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    const socketFailed = formatLastErrorCode({
+      source: 'local',
+      code: 'socket_failed',
+      message: '',
+      at: 1_700_000_000_000,
+    })
+    const generic = formatLastErrorCode(
+      frameLastError('an_unmapped_diagnostic_code_five'),
+    )
+    expect(badFrame).not.toBe(pongTimeout)
+    expect(badFrame).not.toBe(connectTimeout)
+    expect(badFrame).not.toBe(socketFailed)
+    expect(badFrame).not.toBe(generic)
+  })
 })
 
 describe('formatLastErrorMessage', () => {

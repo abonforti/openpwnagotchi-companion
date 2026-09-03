@@ -325,7 +325,7 @@ class FakeWsClient implements WsClient {
 
   diagnostics(): Diagnostics {
     // Not exercised: no test in this file asserts on diagnostics content.
-    return { lastError: null, latencyMs: null }
+    return { lastError: null, latencyMs: null, droppedFrames: 0 }
   }
 
   onDiagnostics(): () => void {

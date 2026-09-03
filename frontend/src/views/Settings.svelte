@@ -580,6 +580,15 @@
           >{/if}
       </span>
     </div>
+    <div class="field">
+      <span class="field-label">Dropped frames</span>
+      <!-- SPEC 4.5.2 (issue #109): a measurement, not a value that can be
+           absent -- zero is the figure, not the absence of one, so this
+           row carries no data-empty, unlike lastError and latency above. -->
+      <span class="field-value" data-field="droppedFrames"
+        >{conn.droppedFrames}</span
+      >
+    </div>
     {#if unauthorizedReasonText !== null}
       <div class="field">
         <span class="field-label">Unauthorized reason</span>

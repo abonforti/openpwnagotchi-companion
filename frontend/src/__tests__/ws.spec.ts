@@ -1637,18 +1637,30 @@ describe('subscriptions', () => {
 // ---------------------------------------------------------------------------
 
 describe('diagnostics: baseline (§4.3.10)', () => {
-  it('is null/null before connect() has ever been called, not a placeholder shape', () => {
+  it('is null/null/0 before connect() has ever been called, not a placeholder shape', () => {
     const { client } = setup()
-    expect(client.diagnostics()).toEqual({ lastError: null, latencyMs: null })
+    expect(client.diagnostics()).toEqual({
+      lastError: null,
+      latencyMs: null,
+      droppedFrames: 0,
+    })
   })
 })
 
 describe('diagnostics: the last error records every code, including the ones §4.3.5 routes elsewhere', () => {
-  // Three distinct codes: one §4.3.5 sends to the unauthorized state AND
-  // fatally closes the connection, one §4.3.5 sends to the Log view with its
-  // own sentence, and one no table entry names at all - "everything else" is
-  // still the point of the last row, and a code the client has never heard
-  // of is the case that proves it.
+  // Three distinct codes: one §4.3.5 sends to a specific control, one
+  // §4.3.5 sends to the Log view with its own sentence, and one no table
+  // entry names at all - "everything else" is still the point of the last
+  // row, and a code with no dedicated surface is the case that proves it.
+  // SPEC 4.3.11 (issue #109, amended): `ErrorCode` is an enum in
+  // common.json and the boundary guard enforces enums, so the third case
+  // must be a value the enum actually carries - an invented code is now
+  // dropped before it ever reaches the last error at all (see the separate
+  // describe block below). `unknown_command` is one of the four enum
+  // members §4.3.5's table gives no dedicated row to (the others are
+  // `bad_request`, `not_supported` and `internal_error`, all already used
+  // by name elsewhere in this file), so it is picked here specifically for
+  // being unused anywhere else in this file.
   const codes: Array<{ code: string; label: string }> = [
     {
       code: 'pasv_requires_auto',
@@ -1656,8 +1668,9 @@ describe('diagnostics: the last error records every code, including the ones §4
     },
     { code: 'log_unavailable', label: 'a code §4.3.5 routes to the Log view' },
     {
-      code: 'an_unrecognised_diagnostic_code',
-      label: 'a code unknown to the client entirely',
+      code: 'unknown_command',
+      label:
+        'a code with no dedicated §4.3.5 surface, routed to the generic diagnostics line',
     },
   ]
 
@@ -1704,6 +1717,61 @@ describe('diagnostics: the last error records every code, including the ones §4
       code: 'not_supported',
       message: 'second',
     })
+  })
+})
+
+// SPEC 4.3.11 (amended, issue #109): "An `error` whose `code` is not in
+// `ErrorCode` is dropped too... a dropped one leaves that request to fail
+// on its own 15s timeout (SPEC 4.3.8) instead of immediately, with the
+// Settings row saying the unit sent something this app could not read
+// rather than saying what the unit actually refused." A code outside the
+// enum fails the same guard as every other invalid frame (SPEC 4.3.11):
+// it is dropped before it reaches the last error, before it can settle a
+// correlated request, and it is counted the same as any other guard
+// failure. This is the behaviour change the amendment names, and nothing
+// before it in this file exercised an `error` frame that fails its own
+// guard.
+describe('diagnostics: an error frame carrying a code outside ErrorCode is dropped, not admitted (SPEC 4.3.11, amended)', () => {
+  it('is dropped and counted, recorded as bad_frame rather than the code the frame carried, and leaves a correlated request to its own 15s timeout instead of settling it', async () => {
+    const { client, sockets } = setup()
+    client.connect()
+    const s = toConnected(sockets)
+    const pending = client.request('get_handshakes')
+    const sent = s.sentOf('get_handshakes')
+    const messageId = sent[0]?.['message_id'] as string
+    expect(messageId).toBeTruthy()
+
+    s.push(
+      errorEnvelope(
+        'a_code_the_enum_does_not_carry' as unknown as ErrorCode,
+        'whatever the unit meant to refuse',
+        messageId,
+      ),
+    )
+
+    // Not settled by the dropped frame, despite carrying the correlating
+    // message_id: still pending just after it arrives.
+    let settled = false
+    void pending.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
+    )
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    expect(client.diagnostics().droppedFrames).toBe(1)
+    expect(client.diagnostics().lastError).toMatchObject({
+      source: 'local',
+      code: 'bad_frame',
+    })
+
+    // Left to its own request timeout (SPEC 4.3.8), not settled early.
+    vi.advanceTimersByTime(15000)
+    await expect(pending).rejects.toBeDefined()
   })
 })
 

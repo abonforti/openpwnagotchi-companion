@@ -413,13 +413,16 @@ export function formatLastErrorMessage(message: string): string {
  * it is the diagnosis.
  *
  * For `source: 'local'`, `code` names a drop this client detected itself --
- * `pong_timeout`, `connect_timeout`, `socket_failed` -- rather than anything
- * a remote said, so there is no message and no code shown beside the
- * sentence, unlike the close case above. `socket_failed` (issue #122) is
- * the one of the three that is about the phone rather than the unit -- the
+ * `pong_timeout`, `connect_timeout`, `socket_failed`, `bad_frame` -- rather
+ * than anything a remote said, so there is no message and no code shown
+ * beside the sentence, unlike the close case above. `socket_failed` (issue
+ * #122) is the one that is about the phone rather than the unit -- the
  * browser refused to open the connection, before there was anything on the
  * other end to fail to answer -- and its sentence says so, because an
  * owner told the unit is not answering will go and check the unit instead.
+ * `bad_frame` (SPEC 4.3.11, issue #109) is a frame this client received and
+ * refused to believe, checked against the generated guard in
+ * `lib/protocol.ts` before anything else the arrival of a frame does.
  */
 export function formatLastErrorCode(lastError: LastError): string {
   if (lastError.source === 'frame') {
@@ -440,7 +443,7 @@ export function formatLastErrorCode(lastError: LastError): string {
   }
   if (lastError.source === 'local') {
     // `LastError`'s `'local'` arm types `code` to `LocalErrorCode` (SPEC
-    // 4.3.10), so the switch below is total over the three codes it can
+    // 4.3.10/4.3.11), so the switch below is total over the codes it can
     // actually carry without needing a default arm no runtime value could
     // ever reach.
     switch (lastError.code) {
@@ -450,6 +453,8 @@ export function formatLastErrorCode(lastError: LastError): string {
         return 'The unit did not answer while connecting.'
       case 'socket_failed':
         return 'The browser refused to open the connection.'
+      case 'bad_frame':
+        return 'The unit sent something this app could not read.'
     }
   }
   return `The connection closed (code ${lastError.code}).`

@@ -671,3 +671,164 @@ export const OUTGOING_TYPES = [
 ] as const;
 
 export type OutgoingMessageType = (typeof OUTGOING_TYPES)[number];
+
+// ---------------------------------------------------------------------------
+// Runtime guards for outgoing messages (SPEC.md 4.3.11, issue #109)
+// ---------------------------------------------------------------------------
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isAccessPoint(v: unknown): v is AccessPoint {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["bssid"] === 'string' && typeof (v as Record<string, unknown>)["hostname"] === 'string' && typeof (v as Record<string, unknown>)["channel"] === 'number' && typeof (v as Record<string, unknown>)["rssi"] === 'number' && typeof (v as Record<string, unknown>)["encryption"] === 'string' && typeof (v as Record<string, unknown>)["vendor"] === 'string' && typeof (v as Record<string, unknown>)["clients"] === 'number');
+}
+
+export function isErrorCode(v: unknown): v is ErrorCode {
+  return (v === "bad_request" || v === "unknown_command" || v === "unauthorized" || v === "pasv_unavailable" || v === "pasv_requires_auto" || v === "no_frame" || v === "log_unavailable" || v === "not_supported" || v === "internal_error");
+}
+
+export function isFaceStatus(v: unknown): v is FaceStatus {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["face"] === 'string' && typeof (v as Record<string, unknown>)["status"] === 'string' && (isMode((v as Record<string, unknown>)["mode"]) || (v as Record<string, unknown>)["mode"] === null));
+}
+
+export function isMode(v: unknown): v is Mode {
+  return (v === "AUTO" || v === "PASV" || v === "MANUAL");
+}
+
+export function isGps(v: unknown): v is Gps {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["enabled"] === 'boolean' && isGpsSource((v as Record<string, unknown>)["source"]) && typeof (v as Record<string, unknown>)["piFix"] === 'boolean' && typeof (v as Record<string, unknown>)["fix"] === 'boolean' && (typeof (v as Record<string, unknown>)["lat"] === 'number' || (v as Record<string, unknown>)["lat"] === null) && (typeof (v as Record<string, unknown>)["lon"] === 'number' || (v as Record<string, unknown>)["lon"] === null) && (typeof (v as Record<string, unknown>)["altitude"] === 'number' || (v as Record<string, unknown>)["altitude"] === null) && (typeof (v as Record<string, unknown>)["accuracy"] === 'number' || (v as Record<string, unknown>)["accuracy"] === null) && (typeof (v as Record<string, unknown>)["updated"] === 'number' || (v as Record<string, unknown>)["updated"] === null));
+}
+
+export function isGpsSource(v: unknown): v is GpsSource {
+  return (v === "bettercap" || v === "gpsd" || v === "browser" || v === null);
+}
+
+export function isHandshakeGps(v: unknown): v is HandshakeGps {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["lat"] === 'number' && typeof (v as Record<string, unknown>)["lon"] === 'number' && (typeof (v as Record<string, unknown>)["accuracy"] === 'number' || (v as Record<string, unknown>)["accuracy"] === null) && isGpsSource((v as Record<string, unknown>)["source"]));
+}
+
+export function isHandshakeEntry(v: unknown): v is HandshakeEntry {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["filename"] === 'string' && typeof (v as Record<string, unknown>)["ssid"] === 'string' && (typeof (v as Record<string, unknown>)["bssid"] === 'string' || (v as Record<string, unknown>)["bssid"] === null) && typeof (v as Record<string, unknown>)["mtime"] === 'number' && typeof (v as Record<string, unknown>)["size"] === 'number' && (isHandshakeGps((v as Record<string, unknown>)["gps"]) || (v as Record<string, unknown>)["gps"] === null));
+}
+
+export function isPeer(v: unknown): v is Peer {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["name"] === 'string' && typeof (v as Record<string, unknown>)["fingerprint"] === 'string' && typeof (v as Record<string, unknown>)["fullName"] === 'string' && (typeof (v as Record<string, unknown>)["rssi"] === 'number' || (v as Record<string, unknown>)["rssi"] === null) && (typeof (v as Record<string, unknown>)["channel"] === 'number' || (v as Record<string, unknown>)["channel"] === null) && (typeof (v as Record<string, unknown>)["firstSeen"] === 'number' || (v as Record<string, unknown>)["firstSeen"] === null) && (typeof (v as Record<string, unknown>)["prevSeen"] === 'number' || (v as Record<string, unknown>)["prevSeen"] === null) && (typeof (v as Record<string, unknown>)["firstMet"] === 'number' || (v as Record<string, unknown>)["firstMet"] === null) && (typeof (v as Record<string, unknown>)["lastSeen"] === 'number' || (v as Record<string, unknown>)["lastSeen"] === null) && (typeof (v as Record<string, unknown>)["encounters"] === 'number' || (v as Record<string, unknown>)["encounters"] === null) && (typeof (v as Record<string, unknown>)["pwndRun"] === 'number' || (v as Record<string, unknown>)["pwndRun"] === null) && (typeof (v as Record<string, unknown>)["pwndTotal"] === 'number' || (v as Record<string, unknown>)["pwndTotal"] === null) && (typeof (v as Record<string, unknown>)["version"] === 'string' || (v as Record<string, unknown>)["version"] === null) && (typeof (v as Record<string, unknown>)["uptime"] === 'number' || (v as Record<string, unknown>)["uptime"] === null) && (typeof (v as Record<string, unknown>)["face"] === 'string' || (v as Record<string, unknown>)["face"] === null));
+}
+
+export function isRestartReason(v: unknown): v is RestartReason {
+  return (v === "mode_change" || v === "reboot" || v === "shutdown");
+}
+
+export function isStats(v: unknown): v is Stats {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["uptime"] === 'number' && (isMode((v as Record<string, unknown>)["mode"]) || (v as Record<string, unknown>)["mode"] === null) && (typeof (v as Record<string, unknown>)["channel"] === 'number' || (v as Record<string, unknown>)["channel"] === null) && isBattery((v as Record<string, unknown>)["battery"]) && (typeof (v as Record<string, unknown>)["temperature"] === 'number' || (v as Record<string, unknown>)["temperature"] === null) && (typeof (v as Record<string, unknown>)["handshakes"] === 'number' || (v as Record<string, unknown>)["handshakes"] === null) && (typeof (v as Record<string, unknown>)["handshakesTotal"] === 'number' || (v as Record<string, unknown>)["handshakesTotal"] === null) && typeof (v as Record<string, unknown>)["peers"] === 'number' && typeof (v as Record<string, unknown>)["accessPoints"] === 'number' && (isLastHandshake((v as Record<string, unknown>)["lastHandshake"]) || (v as Record<string, unknown>)["lastHandshake"] === null) && (isPeer((v as Record<string, unknown>)["lastPeer"]) || (v as Record<string, unknown>)["lastPeer"] === null) && isGps((v as Record<string, unknown>)["gps"]) && (typeof (v as Record<string, unknown>)["sessionAge"] === 'number' || (v as Record<string, unknown>)["sessionAge"] === null) && isCapabilities((v as Record<string, unknown>)["capabilities"]));
+}
+
+export function isBattery(v: unknown): v is Battery {
+  return (isRecord(v) && (typeof (v as Record<string, unknown>)["percent"] === 'number' || (v as Record<string, unknown>)["percent"] === null) && (typeof (v as Record<string, unknown>)["charging"] === 'boolean' || (v as Record<string, unknown>)["charging"] === null));
+}
+
+export function isLastHandshake(v: unknown): v is LastHandshake {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["filename"] === 'string' && typeof (v as Record<string, unknown>)["ssid"] === 'string' && (typeof (v as Record<string, unknown>)["bssid"] === 'string' || (v as Record<string, unknown>)["bssid"] === null) && typeof (v as Record<string, unknown>)["mtime"] === 'number');
+}
+
+export function isCapabilities(v: unknown): v is Capabilities {
+  return (isRecord(v) && typeof (v as Record<string, unknown>)["pasv"] === 'boolean' && typeof (v as Record<string, unknown>)["pisugar"] === 'boolean' && ((v as Record<string, unknown>)["gpsSource"] === "auto" || (v as Record<string, unknown>)["gpsSource"] === "bettercap" || (v as Record<string, unknown>)["gpsSource"] === "gpsd" || (v as Record<string, unknown>)["gpsSource"] === "none") && typeof (v as Record<string, unknown>)["pluginVersion"] === 'string');
+}
+
+export function isOutgoingAccessPoints(v: unknown): v is OutgoingAccessPoints {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "access_points" && (Array.isArray((v as Record<string, unknown>)["data"]) && ((v as Record<string, unknown>)["data"] as unknown[]).every((item0: unknown) => isAccessPoint(item0))) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingAcknowledgment(v: unknown): v is OutgoingAcknowledgment {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "acknowledgment" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["acknowledged"] === 'string') && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingChannelHop(v: unknown): v is OutgoingChannelHop {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "channel_hop" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["channel"] === 'number') && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingError(v: unknown): v is OutgoingError {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "error" && (isRecord((v as Record<string, unknown>)["data"]) && isErrorCode(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["code"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["message"] === 'string') && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingFaceStatus(v: unknown): v is OutgoingFaceStatus {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "face_status" && isFaceStatus((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingGpsUpdate(v: unknown): v is OutgoingGpsUpdate {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "gps_update" && isGps((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingHandshake(v: unknown): v is OutgoingHandshake {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "handshake" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["filename"] === 'string' && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === 'string' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["ap"] === null) && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["station"] === 'string' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["station"] === null) && (isHandshakeGps(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"]) || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["gps"] === null)) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingHandshakesList(v: unknown): v is OutgoingHandshakesList {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "handshakes_list" && (isRecord((v as Record<string, unknown>)["data"]) && (Array.isArray(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["entries"]) && (((v as Record<string, unknown>)["data"] as Record<string, unknown>)["entries"] as unknown[]).every((item0: unknown) => isHandshakeEntry(item0))) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["truncated"] === 'boolean' && (typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["total"] === 'number' || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["total"] === null)) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingKeepalive(v: unknown): v is OutgoingKeepalive {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "keepalive" && isRecord((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingLogLines(v: unknown): v is OutgoingLogLines {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "log_lines" && (isRecord((v as Record<string, unknown>)["data"]) && (Array.isArray(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["lines"]) && (((v as Record<string, unknown>)["data"] as Record<string, unknown>)["lines"] as unknown[]).every((item0: unknown) => typeof item0 === 'string')) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["path"] === 'string') && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingPeerDetected(v: unknown): v is OutgoingPeerDetected {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "peer_detected" && isPeer((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingPeersList(v: unknown): v is OutgoingPeersList {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "peers_list" && (isRecord((v as Record<string, unknown>)["data"]) && (Array.isArray(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["entries"]) && (((v as Record<string, unknown>)["data"] as Record<string, unknown>)["entries"] as unknown[]).every((item0: unknown) => isPeer(item0)))) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingPong(v: unknown): v is OutgoingPong {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "pong" && isRecord((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingRestarting(v: unknown): v is OutgoingRestarting {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "restarting" && (isRecord((v as Record<string, unknown>)["data"]) && isRestartReason(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["reason"]) && (isMode(((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mode"]) || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mode"] === null)) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingScreenImage(v: unknown): v is OutgoingScreenImage {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "screen_image" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["png"] === 'string' && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mtime"] === 'number') && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingStats(v: unknown): v is OutgoingStats {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "stats" && isStats((v as Record<string, unknown>)["data"]) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingStatusChange(v: unknown): v is OutgoingStatusChange {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "status_change" && (isRecord((v as Record<string, unknown>)["data"]) && typeof ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["status"] === 'string' && (((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mood"] === "bored" || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mood"] === "excited" || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mood"] === "lonely" || ((v as Record<string, unknown>)["data"] as Record<string, unknown>)["mood"] === "sad")) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingWifiUpdate(v: unknown): v is OutgoingWifiUpdate {
+  return (isRecord(v) && (v as Record<string, unknown>)["type"] === "wifi_update" && (Array.isArray((v as Record<string, unknown>)["data"]) && ((v as Record<string, unknown>)["data"] as unknown[]).every((item0: unknown) => isAccessPoint(item0))) && typeof (v as Record<string, unknown>)["timestamp"] === 'number' && ((v as Record<string, unknown>)["message_id"] === undefined || typeof (v as Record<string, unknown>)["message_id"] === 'string'));
+}
+
+export function isOutgoingMessage(type: string, v: unknown): v is OutgoingMessage {
+  switch (type) {
+    case "access_points": return isOutgoingAccessPoints(v);
+    case "acknowledgment": return isOutgoingAcknowledgment(v);
+    case "channel_hop": return isOutgoingChannelHop(v);
+    case "error": return isOutgoingError(v);
+    case "face_status": return isOutgoingFaceStatus(v);
+    case "gps_update": return isOutgoingGpsUpdate(v);
+    case "handshake": return isOutgoingHandshake(v);
+    case "handshakes_list": return isOutgoingHandshakesList(v);
+    case "keepalive": return isOutgoingKeepalive(v);
+    case "log_lines": return isOutgoingLogLines(v);
+    case "peer_detected": return isOutgoingPeerDetected(v);
+    case "peers_list": return isOutgoingPeersList(v);
+    case "pong": return isOutgoingPong(v);
+    case "restarting": return isOutgoingRestarting(v);
+    case "screen_image": return isOutgoingScreenImage(v);
+    case "stats": return isOutgoingStats(v);
+    case "status_change": return isOutgoingStatusChange(v);
+    case "wifi_update": return isOutgoingWifiUpdate(v);
+    default:
+      return false;
+  }
+}

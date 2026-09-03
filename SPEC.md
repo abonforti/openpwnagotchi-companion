@@ -80,6 +80,7 @@ openpwnagotchi-companion/
 │   │   ├── release.yml               # build dist.tgz + create Release on tag (§5.2)
 │   │   └── upstream-drift.yml        # scheduled run of check_pinned_facts.py
 │   ├── check_coverage.py             # the coverage ratchet (§10.7.1)
+│   ├── check_dependabot_node.py      # dependabot-core's Node against the floor (§5.1.1)
 │   ├── check_no_inline_script.py     # inline-script gate over the built page (§2.15.1)
 │   ├── check_pinned_facts.py         # §11 against upstream (§11.2)
 │   ├── check_release_version.py      # tag against CHANGELOG and package.json (§5.2)
@@ -180,6 +181,7 @@ openpwnagotchi-companion/
 │   ├── tools/
 │   │   ├── test_certs.py             # gen-ca.sh / gen-cert.sh assertions, see §10.6
 │   │   ├── test_check_coverage.py
+│   │   ├── test_check_dependabot_node.py
 │   │   ├── test_check_release_version.py
 │   │   ├── test_gen_protocol_types.py
 │   │   ├── test_install.py
@@ -6560,16 +6562,31 @@ because the failure would be invisible.** Dependabot's npm updater reads a repos
 `.npmrc` and honours `engine-strict`; an updater running below the floor fails the update with
 `EBADENGINE` and no pull request appears. There is no configuration option to make it ignore the
 file, and the upstream issue asking for one was closed as not planned. The updater's own Node
-version is pinned in `dependabot-core` and is not a version this repository can set or read: it
-was Node 24 when this was written, comfortably above the floor, and it has been on the Node 20
-line within the last year, which is below it.
+version is pinned in `dependabot-core` and is not a version this repository can set: it has
+been on the Node 20 line within the last year, which is below the floor, and where it is today
+is the measured fact the next paragraph records.
 
 So the hazard is not present today and is not hypothetical either, and its symptom is the
 dangerous part: **an update that does not happen looks exactly like a week with no updates.**
 There is nothing red to notice. It is kept rather than traded away because what it buys -- an
 install that refuses instead of warning -- is the whole of what issue #132 asked for, and the
 alternative on offer is to relax the floor to whatever the updater happens to run, which is the
-floor being set by the least relevant consumer of it. Issue #202 carries the watch.
+floor being set by the least relevant consumer of it.
+
+**The decision is to keep it and to make the silence loud (issue #202).** Of the three ways
+out, moving `engine-strict` into a CI step would keep the runner honest and hand the
+contributor back the scrolling `EBADENGINE` that #132 was opened to stop, and watching for a
+quiet week needs a number nobody can derive. What can be checked is the fact the hazard turns
+on: the updater's Node version is written down, in `npm_and_yarn/Dockerfile` of
+`dependabot/dependabot-core`, as `ARG NODEJS_VERSION=<major>`, and it was 24 when this was
+measured on 2026-09-03. `.github/check_dependabot_node.py`, run by the upstream drift workflow
+on its schedule after the drift issue has been filed or updated, so that this check can never
+suppress that one, reads that line from the default branch and fails, red and named, when the
+major it finds is below the major of `engines.node`, when the line cannot be found at all, or
+when the file carries two such lines that disagree, which is §13's rule that a check that could
+not run is not a clean one. A dependency that stops updating because the updater fell below the
+floor is then a failed scheduled run rather than an absence, and the way to re-check the claim
+by hand is the same line, fetched the same way.
 
 #### 5.1.2 The secret scan has three outcomes, and there were files it never opened (issue #199)
 

@@ -188,6 +188,26 @@ def test_gpsd_tpv_with_a_3d_fix():
     assert gps["altitude"] == pytest.approx(12.5)
 
 
+def test_gpsd_a_non_numeric_mode_is_not_a_fix():
+    tpv = {"class": "TPV", "mode": "not-a-number", "lat": -33.5, "lon": -25.0}
+
+    assert companion.gps_from_gpsd(tpv, NOW) is None
+
+
+@pytest.mark.parametrize(
+    "tpv",
+    [
+        {"class": "TPV", "mode": 3, "lat": 0.0, "lon": -25.0},
+        {"class": "TPV", "mode": 3, "lat": -33.5, "lon": 0.0},
+    ],
+    ids=["lat-zero", "lon-zero"],
+)
+def test_gpsd_an_axis_at_exactly_zero_is_not_a_fix(tpv):
+    # Mirrors the bettercap rule: 0.0 on either axis alone is "no lock", not
+    # a real reading that happens to sit off the coast of Ghana.
+    assert companion.gps_from_gpsd(tpv, NOW) is None
+
+
 def test_gpsd_two_dimensional_fix_is_still_a_fix():
     gps = companion.gps_from_gpsd(
         {"class": "TPV", "mode": 2, "lat": -33.5, "lon": -25.0}, NOW
@@ -669,6 +689,17 @@ def test_an_existing_sidecar_is_never_overwritten(handshake_dir):
     assert result is None
 
 
+def test_sidecar_payload_omits_accuracy_when_there_is_none():
+    # No HDOP means gps_from_bettercap reports accuracy: None; the on-disk
+    # shape must then drop the key rather than write "Accuracy": null.
+    gps = companion.gps_from_bettercap({"Latitude": -33.5, "Longitude": -25.0}, NOW)
+    assert gps["accuracy"] is None
+
+    payload = companion.sidecar_payload(gps, NOW)
+
+    assert "Accuracy" not in payload
+
+
 def test_sidecar_payload_is_the_disk_shape_not_the_wire_shape():
     payload = companion.sidecar_payload(
         companion.gps_from_bettercap(BETTERCAP_FIX, NOW), NOW
@@ -711,6 +742,18 @@ def test_a_sidecar_records_the_source_it_was_written_from():
 )
 def test_a_malformed_or_fixless_sidecar_reads_as_nothing(raw):
     assert companion.normalise_sidecar(raw) is None
+
+
+def test_a_sidecar_source_outside_the_three_known_ones_reads_as_null_source():
+    # "Source" is free text on disk (nothing else writes this file), so a
+    # value that is not one of the three the plugin itself ever writes must
+    # not be echoed back to a client uncritically.
+    raw = dict(BETTERCAP_FIX)
+    raw["Source"] = "some-other-tool"
+
+    normalised = companion.normalise_sidecar(raw)
+
+    assert normalised["source"] is None
 
 
 # ---------------------------------------------------------------------------

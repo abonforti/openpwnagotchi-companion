@@ -204,6 +204,20 @@ def test_directory_is_unknown_when_the_agents_config_read_raises(plugin_factory)
     assert plugin._handshake_store().counts() == (None, None)
 
 
+def test_directory_is_unknown_when_the_agents_config_has_no_bettercap_key(
+    plugin_factory, agent_factory, tmp_path
+):
+    """A `KeyError` from a real, present-but-incomplete config dict, rather
+    than `ConfigExplodes`'s deliberately raising property: the same "nowhere
+    to look" answer, reached through the plain `except Exception` around the
+    `agent._config['bettercap']['handshakes']` read rather than through a
+    fixture that raises on purpose."""
+    agent = agent_factory(config={"main": {"log": {"path": str(tmp_path / "unused.log")}}})
+    plugin = plugin_factory(agent=agent)
+
+    assert plugin._handshake_store().counts() == (None, None)
+
+
 @pytest.mark.parametrize("value", ["", 42], ids=["empty-string", "non-string"])
 def test_agent_directory_empty_or_non_string_is_unknown_not_a_real_zero(
     plugin_factory, agent_factory, tmp_path, value

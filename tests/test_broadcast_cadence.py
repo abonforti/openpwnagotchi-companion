@@ -343,6 +343,104 @@ def test_broadcast_reaches_every_admitted_client(wired_plugin):
 
 
 # ---------------------------------------------------------------------------
+# Companion.broadcast() itself: the guards ahead of the fan-out
+# ---------------------------------------------------------------------------
+
+
+def test_broadcast_of_an_empty_message_delivers_nothing(wired_plugin):
+    plugin, agent, sent = wired_plugin
+    plugin.broadcast = companion.Companion.broadcast.__get__(plugin)
+    plugin._listeners._ensure_loop()
+    client = RecordingClient()
+    plugin._clients.add(client)
+
+    plugin.broadcast({})  # falsy: no type, no data
+    plugin.broadcast(None)
+
+    time.sleep(0.2)
+    assert client.received == []
+
+
+def test_broadcast_before_the_plugin_is_loaded_does_not_raise():
+    """`_listeners` is `None` until `on_loaded` runs; a hook firing in that
+    window - or a stray call from a test double - must not crash reaching
+    for `self._listeners._loop`.
+
+    Asserting only "does not raise" would still pass with this guard
+    deleted: the per-client `except Exception: discard` further down catches
+    the resulting `AttributeError` on `None._loop` just as well, silently
+    discarding every admitted client instead. The membership check below is
+    what tells the early return apart from that fallback catching the same
+    fault by accident.
+    """
+    plugin = companion.Companion()
+    assert plugin._listeners is None
+    client = object()
+    plugin._clients.add(client)
+
+    plugin.broadcast({"type": "wifi_update", "data": {}})  # must not raise
+
+    assert client in plugin._clients.snapshot(), (
+        "a client must not be discarded by the no-listeners guard - only by "
+        "the fan-out's own per-client exception guard"
+    )
+
+
+def test_broadcast_with_the_loop_never_started_delivers_nothing(harness):
+    """`_listeners` exists but its asyncio loop has never been started
+    (`_ensure_loop` not yet called) - the state a freshly-`on_loaded` plugin
+    is in before any WSS listener has actually bound. Nothing may be
+    scheduled onto a loop that is not there.
+
+    Membership is asserted for the same reason as the no-listeners case
+    above: `run_coroutine_threadsafe(client.send(payload), None)` raises
+    synchronously too, and the per-client guard further down would discard
+    the client for that reason alone if this earlier return did not fire
+    first - "did not raise" cannot tell the two apart.
+    """
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    assert plugin._listeners._loop is None
+    client = RecordingClient()
+    plugin._clients.add(client)
+
+    plugin.broadcast({"type": "wifi_update", "data": {}})  # must not raise
+
+    assert client in plugin._clients.snapshot()
+    time.sleep(0.2)
+    assert client.received == []
+
+
+def test_a_client_whose_send_call_itself_raises_is_dropped(harness):
+    """The exception guard around the fan-out drops a client whose `send()`
+    call fails *synchronously*, when the coroutine object is constructed -
+    the shape a client with a broken `send` attribute produces. (A client
+    whose coroutine only raises once awaited on the loop is a separate
+    failure this guard does not see, because `run_coroutine_threadsafe`
+    schedules it without waiting on the result.)"""
+
+    class SyncFailingClient:
+        def send(self, payload):
+            raise RuntimeError("send is broken")
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    plugin._listeners._ensure_loop()
+    bad = SyncFailingClient()
+    plugin._clients.add(bad)
+
+    try:
+        plugin.broadcast({"type": "wifi_update", "data": {}})  # must not raise
+        time.sleep(0.2)
+
+        assert bad not in plugin._clients.snapshot()
+    finally:
+        plugin._listeners.stop()
+
+
+# ---------------------------------------------------------------------------
 # A stats failure must not cost that tick's keepalive (SPEC 10.2 test row)
 # ---------------------------------------------------------------------------
 

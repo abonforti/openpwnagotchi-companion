@@ -337,6 +337,36 @@ def test_mode_is_pasv_in_auto_while_the_plugin_reports_passive(
     assert router_factory(agent).stats()["mode"] == "PASV"
 
 
+def test_capabilities_pasv_survives_the_plugin_registry_lookup_itself_raising(
+    router, stub_plugins, monkeypatch
+):
+    """`_pasv_plugin()` guards `plugins.loaded.get(...)` itself, not only what
+    the entry it finds does once found (that is
+    `test_mode_survives_a_pasv_plugin_without_the_attribute` below, and
+    `test_mode_degrades_...` in test_face_status.py). A `loaded` whose `.get`
+    itself raises - the registry unavailable, rather than a
+    well-behaved-but-broken plugin sitting in it - must still leave
+    `capabilities.pasv` at its honest `False` rather than raising.
+
+    Driven through `capabilities()` rather than `stats()`: `stats()` also
+    reads `plugins.loaded` for the pisugar-plugin probe (`_loaded`,
+    `BatteryReader`), which is a different call site this hostile double
+    would break too and is not what this test is about.
+    """
+
+    class HostileRegistry:
+        def get(self, *args, **kwargs):
+            raise RuntimeError("plugin registry unavailable")
+
+    # monkeypatch, not a bare assignment: the stub's own `_reset()` calls
+    # `loaded.clear()`, which a plain reassignment left in place past this
+    # test's end would break for every test that runs after it, since the
+    # module-level `loaded` name would still resolve to this object.
+    monkeypatch.setattr(stub_plugins, "loaded", HostileRegistry())
+
+    assert router.capabilities()["pasv"] is False
+
+
 def test_mode_survives_a_pasv_plugin_without_the_attribute(
     router_factory, agent_factory, stub_plugins
 ):
@@ -473,6 +503,22 @@ def test_stats_has_exactly_the_schema_fields_with_no_agent(router_factory):
 # ---------------------------------------------------------------------------
 # Capabilities
 # ---------------------------------------------------------------------------
+
+
+def test_temperature_is_null_when_pwnagotchi_temperature_raises(
+    router, stub_pwnagotchi, monkeypatch
+):
+    """F2's reader is wrapped the same way `name()` is (SPEC 2.6): a failing
+    sysfs node must cost the temperature field, not the whole reply. The stub
+    has no built-in "raise" sentinel for `_TEMPERATURE` the way it does for
+    `_NAME`, so the function itself is replaced for this one test."""
+
+    def exploding_temperature(celsius=True):
+        raise OSError("thermal zone unavailable")
+
+    monkeypatch.setattr(stub_pwnagotchi, "temperature", exploding_temperature)
+
+    assert router.stats()["temperature"] is None
 
 
 def test_capabilities_pasv_follows_the_loaded_registry(router, load_pasv):

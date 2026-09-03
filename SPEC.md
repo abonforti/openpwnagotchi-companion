@@ -1884,7 +1884,8 @@ Additional rules:
 - A request for a directory must not produce a listing. Any of 200 (serving `index.html` through
   the SPA fallback), 403 or 404 is acceptable; what is forbidden is disclosing the contents.
 - Log at debug only; a request log at info would flood the pwnagotchi log.
-- Directory listings disabled.
+- A directory-shaped request is never listed: `send_head` answers it with `index.html`, since
+  a directory is not a file and the single-page fallback fires before any listing could.
 - The server must not raise out of its thread; wrap `serve_forever` in try/except and log.
 - **An exception raised while handling a request is logged as the exception itself, at debug,
   never as its frames.** `exc_info=True` (or an equivalent that lets the logger format the
@@ -7979,6 +7980,26 @@ theatre.
 - **`# pragma: no cover` is banned.** A CI grep fails the build on any occurrence. A lower floor
   makes this rule more important, not less: an opt-out plus a floor is a number that means
   nothing.
+- **A guard that cannot be reached is a guard that should not exist, with one named exception
+  (issue #96).** Twenty-eight branches of `plugin/companion.py` sat outside every test: guards
+  around a third-party or OS read, guards on absent or malformed input, and one raise that is
+  unreachable by design. Twenty-five got a test that kills a mutant, or were deleted, and the
+  per-site record is on the issue; one guard that looked unreachable turned out not to be,
+  because `as_int` did not catch the `OverflowError` an `Infinity` off the air produces, and
+  the fix was to make the field reader total rather than to keep a guard around it. Three stay
+  uncovered and are named here rather than counted: the `websockets < 14` import fallback in
+  `resolve_ws_serve`, which under the pinned `websockets` cannot be faked without a real pre-14
+  package on `sys.path` and waits for one; the web-root escape in `translate_path`, which is
+  issue #244 and whose real behaviour is decided there; and the auth-timeout close in the
+  connection handler, whose deadline race no seam reaches today. The exception is `_dispatch`'s
+  closing `unknown_command` raise: the conformance test makes it unreachable through the
+  socket, because every type in `INCOMING_FIELDS` has a route, and that is exactly why it
+  stays, so that a type added to the table without a route fails loudly rather than returning
+  nothing. It is reached the way it is meant to be reached, by calling the dispatch directly
+  with a kind the table does not hold, and asserted to raise `unknown_command`. No pragma, no
+  exemption. The issue asked for `--cov-fail-under=100`; that predates the floor this section
+  now sets, and the floor stays where this section puts it, with the baseline of §10.7.1
+  recording the figure these sites raised it to and reporting a fall from there.
 - **The frontend gate covers `src/lib/` and `src/shell/`.** The shell holds the focus trap, the
   `inert` handling and the Escape and Tab paths, which is logic, and logic that breaks quietly:
   an accessibility regression does not throw, it just stops helping someone. `src/views/` stays
@@ -8006,10 +8027,14 @@ Two honest limits, and what is done about each:
 **Design consequence, binding on the implementer:** every external effect sits behind an
 injectable seam — the clock, the gpsd socket, the I2C bus, `subprocess`, local address
 enumeration (`Deps.list_local_ipv4() -> list[str]`, §2.3.1), thread spawning, and
-`pwnagotchi.restart`/`reboot`/`shutdown`. Without those seams,
-full branch coverage of the I2C and gpsd paths is unreachable and the gate would have to be
-weakened. Constructor injection with real defaults; no monkeypatching of module internals from
-the tests.
+`pwnagotchi.restart`/`reboot`/`shutdown`. Without those seams, full branch coverage of the I2C
+and gpsd paths is unreachable and the gate would have to be weakened. Constructor injection
+with real defaults; no monkeypatching of module internals from the tests. One thing injection
+can never cover is a seam's own default, the real function a `Deps` falls back to, and a test
+of that default may patch the one third-party or stdlib name it calls, scoped to the call and
+for a stated reason: `socket.create_connection` under `default_read_gpsd`,
+`sys.modules["websockets"]` under `websockets_version`. That is not the plugin's internals, it
+is the world the default reaches for, and the seam rule above is about the former.
 
 **The seams do not cover themselves, and that gap is closed separately.** Injection reaches every
 *caller* of a seam and, by construction, never the default behind it: injecting is precisely how

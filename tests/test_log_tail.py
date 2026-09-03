@@ -151,6 +151,10 @@ def test_a_requested_count_is_honoured(router):
     assert len(router.log_lines(12)["lines"]) == 12
 
 
+def test_an_unparseable_count_falls_back_to_the_default(router):
+    assert len(router.log_lines("not-a-number")["lines"]) == companion.LOG_LINES_DEFAULT
+
+
 def test_the_count_is_capped(router, tmp_path, agent_factory, router_factory):
     big = tmp_path / "big.log"
     big.write_text("".join(f"line {index}\n" for index in range(3000)), "utf-8")
@@ -221,6 +225,23 @@ def test_no_agent_and_no_log_path_is_log_unavailable_not_a_crash(router_factory)
     unhandled exception reaching the transport.
     """
     router = router_factory(None)
+
+    replies = router.handle({"type": "get_log"}, authenticated=True)
+
+    assert replies[-1]["type"] == "error"
+    assert replies[-1]["data"]["code"] == "log_unavailable"
+
+
+def test_an_agent_config_missing_the_main_key_is_log_unavailable(
+    router_factory, agent_factory, tmp_path
+):
+    """The agent is present and answers `_config`, but the mapping has no
+    `main` key at all - a `KeyError` distinct from `test_a_missing_log_...`
+    (a real, empty path) and from the no-agent case above: the config read
+    itself is what fails here, through the plain `except Exception` around
+    `agent._config['main']['log']['path']`."""
+    agent = agent_factory(config={"bettercap": {"handshakes": str(tmp_path)}})
+    router = router_factory(agent)
 
     replies = router.handle({"type": "get_log"}, authenticated=True)
 

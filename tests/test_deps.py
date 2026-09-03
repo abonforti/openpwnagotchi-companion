@@ -375,6 +375,61 @@ def test_a_line_that_is_not_json_does_not_stop_the_poll(real_deps, gpsd):
     assert reading["lat"] == pytest.approx(-33.512345)
 
 
+class _FailingCloseSocket:
+    """Wraps one real socket so only *its* `close()` raises.
+
+    Patching `socket.socket.close` at the class level, as an earlier version
+    of this test did, makes every socket in the process raise on close for
+    the duration of the call - including the fake gpsd server's own accepted
+    connection, closed inside its `_serve` thread's `with connection:` block.
+    That exception has nowhere to go but "Exception in thread", which
+    pytest's thread-exception plugin turns into a test error unrelated to
+    the guard this test is actually about. Wrapping only the one socket
+    `default_read_gpsd` opens - the object `socket.create_connection`
+    hands back to it - keeps the failure on the client side alone, which is
+    what the guard under test (`default_read_gpsd`'s `finally: sock.close()`)
+    is there for in the first place.
+
+    Delegates everything else to the real socket unchanged: `default_read_gpsd`
+    also calls `settimeout`, `sendall` and `recv` on the object it gets back.
+    """
+
+    def __init__(self, real: socket.socket) -> None:
+        self._real = real
+
+    def close(self) -> None:
+        self._real.close()
+        raise OSError("close exploded")
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_a_failing_socket_close_does_not_cost_the_reading(real_deps, gpsd, monkeypatch):
+    """The `finally: sock.close()` around the whole poll is itself guarded: a
+    `close()` that raises `OSError` - a socket already torn down under it by
+    the peer - must not take the reading it already parsed down with it.
+
+    Only `socket.create_connection` - the one call `default_read_gpsd` makes
+    to open its own socket - is patched, and only the object it returns has
+    its `close()` made to fail (`_FailingCloseSocket` above). The fake gpsd
+    server's listening and accepted sockets, opened directly with
+    `socket.socket(...)` in the `gpsd` fixture, are never touched.
+    """
+    server = gpsd([VERSION_LINE, FIX])
+    original_create_connection = socket.create_connection
+
+    def failing_close_create_connection(*args, **kwargs):
+        return _FailingCloseSocket(original_create_connection(*args, **kwargs))
+
+    monkeypatch.setattr(socket, "create_connection", failing_close_create_connection)
+
+    reading = real_deps.read_gpsd("127.0.0.1", server.port, 2.0)
+
+    assert reading is not None
+    assert reading["lat"] == pytest.approx(-33.512345)
+
+
 # ---------------------------------------------------------------------------
 # The libraries that are only there on a unit
 # ---------------------------------------------------------------------------
@@ -1507,3 +1562,54 @@ def test_the_fallback_cannot_push_a_non_address_through_the_enumeration(fake_ip)
     addresses = companion.Deps().list_local_ipv4()
 
     assert addresses == [TETHER_ADDRESS]
+
+
+# ---------------------------------------------------------------------------
+# refresh_gpsd: the poll itself failing (as opposed to a refused connection,
+# which read_gpsd already turns into None rather than raising)
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_gpsd_survives_the_seam_raising():
+    """`read_gpsd` is trusted to return `None` on a refused connection
+    (test_a_gpsd_that_is_not_listening_is_not_an_exception above), but
+    `GpsResolver.refresh_gpsd` does not get to assume that of whatever seam it
+    was handed - an injected one, or a future default, may raise outright -
+    so the background thread that calls this every pass must not die on it."""
+
+    def exploding_read_gpsd(host, port, timeout):
+        raise OSError("gpsd connection reset")
+
+    deps = companion.Deps(now=lambda: 1.0, read_gpsd=exploding_read_gpsd)
+    options = {"gps_source": "auto", "gpsd_host": "127.0.0.1", "gpsd_port": 2947}
+    session = companion.SessionCache(lambda: None, deps)
+    resolver = companion.GpsResolver(options, deps, session)
+
+    resolver.refresh_gpsd()  # must not raise
+
+    assert resolver.current() == companion.gps_unavailable()
+
+
+# ---------------------------------------------------------------------------
+# websockets_version: the websockets import shim
+# ---------------------------------------------------------------------------
+#
+# resolve_ws_serve()'s own <14 fallback (`from websockets import serve`) is
+# NOT exercised here: under the websockets release pinned in
+# tests/requirements.txt, that name is itself a lazy alias into
+# `websockets.asyncio.server` (websockets/imports.py), so blocking that one
+# submodule to stand in for "an old installation" breaks the fallback import
+# too, rather than reaching a genuine pre-14 code path - blocking only
+# `websockets.asyncio.server` and asserting the resolver still returns
+# something callable raised ModuleNotFoundError instead of passing, which
+# would have meant the test was passing for the wrong reason. A faithful
+# test needs an actual pre-14 websockets on sys.path, the way
+# tests/fakes/i2c_stub and tests/fakes/netifaces_stub stand in for smbus2 and
+# netifaces (SPEC 10.7) - left to the implementer as a gap rather than
+# guessed at here with a technique already shown not to prove anything.
+
+
+def test_websockets_version_is_unavailable_when_the_package_cannot_be_imported(monkeypatch):
+    monkeypatch.setitem(sys.modules, "websockets", None)
+
+    assert companion.websockets_version() == "unavailable"

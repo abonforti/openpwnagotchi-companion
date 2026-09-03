@@ -164,6 +164,13 @@ def test_the_auth_timeout_default_is_ten_seconds():
     assert companion.option({}, "auth_timeout") == 10
 
 
+def test_option_with_no_mapping_at_all_falls_back_to_defaults():
+    # Distinct from `{}`, above: `options` itself may be `None` on a code path
+    # that has not built a config mapping yet, and that must not be an
+    # AttributeError on `.get`.
+    assert companion.option(None, "auth_timeout") == 10
+
+
 def test_an_unauthenticated_connection_is_closed_after_the_deadline():
     """The deadline of SPEC 2.3.3, which nothing in the module currently exposes.
 

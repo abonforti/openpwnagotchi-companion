@@ -275,6 +275,35 @@ def test_files_that_are_not_captures_are_ignored(handshake_dir):
     assert total == 4
 
 
+def test_a_sidecar_that_parses_but_is_not_a_mapping_reads_as_no_gps(handshake_dir):
+    # A .gps.json that is syntactically valid JSON but not an object - a bare
+    # list, say - must cost only that entry's coordinates, the same as any
+    # other malformed sidecar.
+    capture = handshake_dir / "no-bssid-here.pcapng"
+    sidecar = handshake_dir / "no-bssid-here.gps.json"
+    sidecar.write_text('["not", "a", "mapping"]')
+
+    entries, _, _ = companion.HandshakeStore(str(handshake_dir)).entries()
+    entry = next(item for item in entries if item["filename"] == capture.name)
+
+    assert entry["gps"] is None
+
+
+def test_newest_skips_a_capture_that_vanished_mid_scan(handshake_dir):
+    # A dangling symlink stands in for a file os.stat can no longer reach by
+    # the time newest() gets to it - the same technique
+    # test_an_unreadable_file_is_skipped_not_fatal uses for entries(), applied
+    # to the single-newest-entry path instead of the listing.
+    real = handshake_dir / "TestNet_001_aabbccddeeff.pcapng"
+    os.utime(real, (2_000_000_000, 2_000_000_000))
+    ghost = handshake_dir / "Ghost_112233445566.pcapng"
+    ghost.symlink_to(handshake_dir / "never-existed.pcapng")
+
+    newest = companion.HandshakeStore(str(handshake_dir)).newest()
+
+    assert newest["filename"] == "TestNet_001_aabbccddeeff.pcapng"
+
+
 def test_newest_is_the_last_handshake_shape(handshake_dir):
     capture = handshake_dir / "Ocean_Buoy_998877665544.pcapng"
     os.utime(capture, (2_100_000_000, 2_100_000_000))

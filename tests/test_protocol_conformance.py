@@ -162,6 +162,44 @@ def test_a_type_nobody_implements_is_an_unknown_command(router):
     assert replies[-1]["data"]["code"] == "unknown_command"
 
 
+# ---------------------------------------------------------------------------
+# _dispatch's own closing raise (SPEC 10.7: "A guard that cannot be reached is
+# a guard that should not exist, with one named exception (issue #96)")
+# ---------------------------------------------------------------------------
+#
+# `test_a_type_nobody_implements_is_an_unknown_command` above already proves
+# `unknown_command` end to end - but it goes through `Router.handle()`, which
+# calls `validate_incoming(message)` before ever calling `_dispatch`, and
+# `validate_incoming` refuses a `type` absent from `INCOMING_FIELDS` first
+# (SPEC 2.4). That means the test above exercises *that* raise, not the one
+# `_dispatch` itself closes with - the one the docstring in companion.py calls
+# unreachable "while INCOMING_FIELDS and this dispatch agree, which the
+# conformance test enforces". The two can only ever disagree if someone edits
+# one without the other, which is exactly the mistake this raise exists to
+# fail loudly on instead of silently returning nothing.
+#
+# So reaching it for real means calling `_dispatch` directly, past
+# `validate_incoming`, with a `kind` `INCOMING_FIELDS` has never held - the
+# same way a caller who skipped validation by mistake would reach it on a
+# real unit.
+
+
+def test_dispatch_itself_raises_unknown_command_for_a_kind_the_table_never_held(router):
+    with pytest.raises(companion.ProtocolError) as raised:
+        router._dispatch("not_a_command", {"type": "not_a_command"}, None)
+
+    assert raised.value.code == "unknown_command"
+
+
+def test_dispatch_itself_still_routes_a_real_type(router):
+    # The positive control: calling _dispatch directly is not itself what
+    # produces unknown_command - an ordinary, implemented type must still
+    # route normally through the same direct call.
+    replies = router._dispatch("ping", {"type": "ping"}, None)
+
+    assert replies[0]["type"] == "pong"
+
+
 def test_a_message_without_a_type_is_a_bad_request(router):
     replies = router.handle({"mode": "manual"}, authenticated=True)
 
@@ -311,6 +349,26 @@ def test_the_error_envelope_carries_a_closed_enum_code(schemas_dir):
 
     assert message["data"]["code"] in codes
     assert message["message_id"] == "c7f1"
+
+
+# ---------------------------------------------------------------------------
+# The catch-all inside handle(): a handler must never take the connection
+# down with it (SPEC 2.14)
+# ---------------------------------------------------------------------------
+
+
+def test_a_handler_that_raises_becomes_an_internal_error_not_a_crash(router, caplog):
+    router.stats = lambda: (_ for _ in ()).throw(RuntimeError("bettercap payload exploded"))
+
+    with caplog.at_level("ERROR"):
+        replies = router.handle(
+            {"type": "get_stats", "message_id": "c7f1"}, authenticated=True
+        )
+
+    assert [message["type"] for message in replies] == ["acknowledgment", "error"]
+    assert replies[-1]["data"]["code"] == "internal_error"
+    assert replies[-1]["message_id"] == "c7f1"
+    assert any(record.levelname == "ERROR" for record in caplog.records)
 
 
 def test_the_initial_burst_is_stats_then_access_points_then_face_status(router):

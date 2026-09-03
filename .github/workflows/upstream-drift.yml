@@ -95,3 +95,17 @@ jobs:
             gh issue create --title "$title" --body "$body" \
               --label "type: bug" --label "area: plugin"
           fi
+
+      - name: Check the Dependabot updater's Node version against the floor
+        # SPEC.md section 5.1.1: this runs after the drift issue step, not
+        # before it, and on purpose - after the drift issue has been filed
+        # or updated, so that this check can never suppress that one. It
+        # sat first for a moment and did not stay there: a network-dependent
+        # check with no continue-on-error aborts the job the instant it
+        # fails, and the pinned-facts drift issue above would never be filed
+        # for a run that got that far. This check has no continue-on-error
+        # either - it is meant to fail the job red on its own, per SPEC.md
+        # 5.1.1's "fails, red and named" - it is only the ordering that
+        # changed, so the check the workflow exists for runs unconditionally
+        # before the check that was added to it later.
+        run: python .github/check_dependabot_node.py

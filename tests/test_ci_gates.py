@@ -708,3 +708,80 @@ def test_upstream_drift_schedule_asks_latest():
     ref, which is the `--ref` branch, not this one).
     """
     assert any("--latest" in i["line"] for i in DRIFT_PINNED_FACTS_INVOCATIONS)
+
+
+# ---------------------------------------------------------------------------
+# check_dependabot_node.py runs after "Open or update the drift issue"
+# (SPEC.md 5.1.1, "The decision is to keep it and to make the silence
+# loud", issue #202, and the workflow's own comment on the step: "this runs
+# after the drift issue step, not before it, and on purpose ... this check
+# can never suppress that one"). Pinning position only relative to the
+# pinned-facts step would be satisfied by a mutant that put this step
+# between "Check the pinned symbols against upstream" and "Open or update
+# the drift issue" - exactly the ordering the workflow's own comment says
+# it moved away from, since a fatal, no-continue-on-error failure here
+# would then abort the job before the drift issue is ever filed. The
+# assertion below is against the later step by name, not merely against
+# the earlier one, so that regression is what it actually catches.
+# ---------------------------------------------------------------------------
+
+
+def test_upstream_drift_runs_check_dependabot_node_after_the_drift_issue_step():
+    with open(WORKFLOWS_DIR / "upstream-drift.yml", encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
+
+    job_keys = {i["job_key"] for i in DRIFT_PINNED_FACTS_INVOCATIONS}
+    assert len(job_keys) == 1, (
+        f"expected one job running check_pinned_facts.py in upstream-drift.yml, "
+        f"found {job_keys}"
+    )
+    steps = workflow["jobs"][job_keys.pop()]["steps"]
+
+    drift_issue_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if step.get("name") == "Open or update the drift issue"
+        ),
+        None,
+    )
+    dependabot_node_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if "check_dependabot_node.py" in (step.get("run") or "")
+        ),
+        None,
+    )
+
+    assert drift_issue_index is not None, (
+        'no step named "Open or update the drift issue" found'
+    )
+    assert dependabot_node_index is not None, "no step running check_dependabot_node.py found"
+    assert dependabot_node_index > drift_issue_index, (
+        'check_dependabot_node.py must run after "Open or update the drift issue"'
+    )
+
+
+def test_check_dependabot_node_step_has_no_continue_on_error():
+    """SPEC.md 5.1.1: the check must "fail the job red on its own" -
+
+    `continue-on-error` at either the step or the job level would let a
+    Dependabot updater below the floor pass a scheduled run silently, the
+    same "advisory" failure mode `test_ci_pinned_facts_check_is_not_made_advisory`
+    guards against for the pinned-facts step.
+    """
+    with open(WORKFLOWS_DIR / "upstream-drift.yml", encoding="utf-8") as handle:
+        workflow = yaml.safe_load(handle)
+
+    job_keys = {i["job_key"] for i in DRIFT_PINNED_FACTS_INVOCATIONS}
+    job = workflow["jobs"][job_keys.pop()]
+    steps = job["steps"]
+
+    dependabot_node_step = next(
+        (step for step in steps if "check_dependabot_node.py" in (step.get("run") or "")),
+        None,
+    )
+    assert dependabot_node_step is not None, "no step running check_dependabot_node.py found"
+    assert not dependabot_node_step.get("continue-on-error")
+    assert not job.get("continue-on-error")

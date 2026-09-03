@@ -56,6 +56,12 @@ _KNOWN_LABELS = {
     "npm registry credential",
     "private key in a URL",
     "credential assignment",
+    # Issue #7 landed after #211 and added two content patterns of its own.
+    # They are part of the baseline this module subtracts, not the entry it
+    # is looking for: the canary below finds #211's pattern by being the one
+    # label left over, and with these unlisted it would find three.
+    "pwnagotchi whitelist entry",
+    "GPS coordinate pair",
 }
 
 

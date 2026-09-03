@@ -99,6 +99,7 @@ function host(overrides: Partial<Host> = {}): Host {
     wsPort: 8082,
     httpPort: 8443,
     token: null,
+    lastActiveAt: null,
     ...overrides,
   }
 }

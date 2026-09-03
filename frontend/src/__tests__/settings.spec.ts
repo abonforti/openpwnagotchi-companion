@@ -123,7 +123,9 @@ function hostnameOf(value: string): () => string {
   return () => value
 }
 
-function newHost(overrides: Partial<Omit<Host, 'id'>> = {}): Omit<Host, 'id'> {
+function newHost(
+  overrides: Partial<Omit<Host, 'id' | 'lastActiveAt'>> = {},
+): Omit<Host, 'id' | 'lastActiveAt'> {
   return {
     label: 'Test unit',
     address: '172.20.10.2',
@@ -158,6 +160,11 @@ function assertWellFormedSettings(result: Settings): void {
     expect(host.httpPort).toBeGreaterThanOrEqual(1)
     expect(host.httpPort).toBeLessThanOrEqual(65535)
     expect(host.token === null || typeof host.token === 'string').toBe(true)
+    expect(
+      host.lastActiveAt === null ||
+        (typeof host.lastActiveAt === 'number' &&
+          Number.isFinite(host.lastActiveAt)),
+    ).toBe(true)
   }
   if (result.activeHostId !== null) {
     expect(result.hosts.some((h) => h.id === result.activeHostId)).toBe(true)
@@ -759,6 +766,7 @@ describe('persistence key (4.7)', () => {
           wsPort: 8082,
           httpPort: 8443,
           token: null,
+          lastActiveAt: null,
         },
       ],
       activeHostId: 'prior-host',
@@ -799,6 +807,7 @@ describe('the stores hold the defaults until loadSettings() runs (4.7)', () => {
           wsPort: 8082,
           httpPort: 8443,
           token: null,
+          lastActiveAt: null,
         },
       ],
       activeHostId: null,
@@ -1666,6 +1675,7 @@ describe('wsUrlFor (4.7)', () => {
       wsPort: 8082,
       httpPort: 8443,
       token: null,
+      lastActiveAt: null,
     }
     const url = wsUrlFor(host)
     expect(url.startsWith('wss://')).toBe(true)
@@ -1682,6 +1692,7 @@ describe('wsUrlFor (4.7)', () => {
       wsPort: 9999,
       httpPort: 1234,
       token: null,
+      lastActiveAt: null,
     }
     const url = wsUrlFor(host)
     expect(url).toContain('9999')
@@ -1697,6 +1708,7 @@ describe('wsUrlFor (4.7)', () => {
       wsPort: 8082,
       httpPort: 8443,
       token: 'super-secret-token-value',
+      lastActiveAt: null,
     }
     const url = wsUrlFor(host)
     expect(url).not.toContain('super-secret-token-value')
@@ -1802,5 +1814,300 @@ describe('activeHost store (4.7)', () => {
     const host = addHost(newHost({ label: 'Unit A' }))
     activateHost(host.id)
     expect(get(activeHost)?.id).toBe(host.id)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4.7 + 4.5.2.1, issue #177: "The list is ordered by last use ... Hosts
+// with a lastActiveAt come first, most recent at the top ... hosts never
+// activated follow in the order they were saved." activateHost writes
+// lastActiveAt on the host it activates, in the same update as the active
+// id. orderedHosts is the pure function that derives the order from the
+// stored field at render time - "the order is derived at render from the
+// stored field, never stored itself" - so it is tested directly here
+// rather than only through a rendered list.
+//
+// Every test in this file starts from the module's two prefilled defaults
+// (bluetooth, usb), because defaultSettings() seeds them and loadModule()
+// never calls loadSettings(). Whether the default-active bluetooth entry
+// itself carries a lastActiveAt is not pinned anywhere this suite was
+// handed, so the ordering tests below filter to the fixture hosts they
+// create rather than asserting on the array's absolute position; issue #177
+// names this as left open.
+// ---------------------------------------------------------------------------
+
+describe('orderedHosts orders by lastActiveAt, most recent first (4.7, 4.5.2.1, issue #177)', () => {
+  it('two activations at different times put the later one first, then the earlier, then the never-activated in stored order', async () => {
+    const { addHost, activateHost, orderedHosts, settings } = await loadModule()
+    const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.11' }))
+    const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.12' }))
+    const hostC = addHost(newHost({ label: 'Unit C', address: '172.20.10.13' }))
+    const fixtureIds = new Set([hostA.id, hostB.id, hostC.id])
+
+    activateHost(hostA.id, () => 1000)
+    activateHost(hostB.id, () => 2000)
+
+    const ordered = orderedHosts(get(settings).hosts).filter((h) =>
+      fixtureIds.has(h.id),
+    )
+    expect(ordered.map((h) => h.id)).toEqual([hostB.id, hostA.id, hostC.id])
+  })
+
+  it('re-activating a host moves it back to the front of the ordering', async () => {
+    const { addHost, activateHost, orderedHosts, settings } = await loadModule()
+    const hostA = addHost(newHost({ label: 'Unit A', address: '172.20.10.14' }))
+    const hostB = addHost(newHost({ label: 'Unit B', address: '172.20.10.15' }))
+    const fixtureIds = new Set([hostA.id, hostB.id])
+
+    activateHost(hostA.id, () => 1000)
+    activateHost(hostB.id, () => 2000)
+    activateHost(hostA.id, () => 3000)
+
+    const ordered = orderedHosts(get(settings).hosts).filter((h) =>
+      fixtureIds.has(h.id),
+    )
+    expect(ordered.map((h) => h.id)).toEqual([hostA.id, hostB.id])
+  })
+
+  it('is pure: it does not mutate its input, and keeps stored order among hosts that are equally never-activated', async () => {
+    const { orderedHosts } = await loadModule()
+    const input: Host[] = [
+      {
+        id: 'never-x',
+        label: 'X',
+        address: '192.0.2.16',
+        wsPort: 8082,
+        httpPort: 8443,
+        token: null,
+        lastActiveAt: null,
+      },
+      {
+        id: 'never-y',
+        label: 'Y',
+        address: '192.0.2.17',
+        wsPort: 8082,
+        httpPort: 8443,
+        token: null,
+        lastActiveAt: null,
+      },
+    ]
+    const snapshot = JSON.stringify(input)
+    const ordered = orderedHosts(input)
+    expect(JSON.stringify(input)).toBe(snapshot)
+    expect(ordered.map((h) => h.id)).toEqual(['never-x', 'never-y'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4.7, issue #177: "The parser repairs anything that is not a finite
+// number to null, the way it repairs a port." Each shape is its own test
+// for the same reason the hostile-blob suite above gives: they fail
+// differently. A JSON string cannot itself carry a NaN literal (JSON has
+// no such token), so that one case is reached by intercepting the parsed
+// value JSON.parse hands back rather than by writing JSON text - the only
+// way to exercise the repair rule against an actual JS NaN rather than
+// against the string "NaN", which is already covered by the wrong-type
+// case below.
+// ---------------------------------------------------------------------------
+
+describe('a persisted lastActiveAt that is not a finite number repairs to null (4.7, issue #177)', () => {
+  it('a string value ("yesterday") repairs to null', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          {
+            id: 'ts-string',
+            label: 'Unit',
+            address: '192.0.2.31',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+            lastActiveAt: 'yesterday',
+          },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    assertWellFormedSettings(result)
+    expect(
+      result.hosts.find((h) => h.id === 'ts-string')?.lastActiveAt,
+    ).toBeNull()
+  })
+
+  it('a missing field repairs to null', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          {
+            id: 'ts-missing',
+            label: 'Unit',
+            address: '192.0.2.32',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+          },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    assertWellFormedSettings(result)
+    expect(
+      result.hosts.find((h) => h.id === 'ts-missing')?.lastActiveAt,
+    ).toBeNull()
+  })
+
+  it('an Infinity value, reached through a JSON number literal that overflows on parse, repairs to null', async () => {
+    // No mocking: JSON.parse('1e400') genuinely returns Infinity, since a
+    // JSON number's exponent is unbounded in the grammar but overflows the
+    // IEEE double it is parsed into. Confirmed against the platform's own
+    // JSON.parse below, so this is real parser behaviour and not an
+    // assumption about it.
+    const raw =
+      '{"hosts":[{"id":"ts-inf","label":"Unit","address":"192.0.2.33","wsPort":8082,"httpPort":8443,"token":null,"lastActiveAt":1e400}],"activeHostId":null}'
+    expect(
+      (JSON.parse(raw) as { hosts: Array<{ lastActiveAt: number }> }).hosts[0]
+        ?.lastActiveAt,
+    ).toBe(Infinity)
+    fakeStorage.setItem(SETTINGS_KEY, raw)
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    assertWellFormedSettings(result)
+    expect(result.hosts.find((h) => h.id === 'ts-inf')?.lastActiveAt).toBeNull()
+  })
+
+  it('a negative value repairs to null, since an epoch millisecond is never below zero', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          {
+            id: 'ts-neg',
+            label: 'Unit',
+            address: '192.0.2.36',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+            lastActiveAt: -1,
+          },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    assertWellFormedSettings(result)
+    expect(result.hosts.find((h) => h.id === 'ts-neg')?.lastActiveAt).toBeNull()
+  })
+
+  it('a NaN value, which no JSON text can itself carry, repairs to null once parsed', async () => {
+    fakeStorage.setItem(SETTINGS_KEY, '{}')
+    // The spy goes in after the import, so nothing in the module graph's own
+    // loading consumes the one queued return.
+    const { loadSettings } = await loadModule()
+    const parseSpy = vi.spyOn(JSON, 'parse').mockReturnValueOnce({
+      hosts: [
+        {
+          id: 'ts-nan',
+          label: 'Unit',
+          address: '192.0.2.34',
+          wsPort: 8082,
+          httpPort: 8443,
+          token: null,
+          lastActiveAt: NaN,
+        },
+      ],
+      activeHostId: null,
+    })
+    const result = loadSettings()
+    parseSpy.mockRestore()
+    assertWellFormedSettings(result)
+    expect(result.hosts.find((h) => h.id === 'ts-nan')?.lastActiveAt).toBeNull()
+  })
+
+  it('a valid number survives a load round trip', async () => {
+    fakeStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        hosts: [
+          {
+            id: 'ts-valid',
+            label: 'Unit',
+            address: '192.0.2.35',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+            lastActiveAt: 1717000000000,
+          },
+        ],
+        activeHostId: null,
+      }),
+    )
+    const { loadSettings } = await loadModule()
+    const result = loadSettings()
+    expect(result.hosts.find((h) => h.id === 'ts-valid')?.lastActiveAt).toBe(
+      1717000000000,
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4.7, issue #177: "activateHost writes lastActiveAt on the host it
+// activates, in the same update that writes the active id." updateHost's
+// patch type cannot carry lastActiveAt at all (Host CRUD contract handed
+// to this file); this pins the runtime consequence, that an unrelated
+// edit never disturbs a timestamp already on the record.
+// ---------------------------------------------------------------------------
+
+describe('updateHost never touches lastActiveAt (4.7, issue #177)', () => {
+  it('a patch that edits an unrelated field leaves an existing lastActiveAt untouched', async () => {
+    const { addHost, activateHost, updateHost, settings } = await loadModule()
+    const host = addHost(newHost({ label: 'Unit A' }))
+    activateHost(host.id, () => 4242)
+    updateHost(host.id, { label: 'Renamed unit' })
+    expect(
+      get(settings).hosts.find((h) => h.id === host.id)?.lastActiveAt,
+    ).toBe(4242)
+  })
+
+  it("the type system refuses lastActiveAt in updateHost's patch", async () => {
+    const { addHost, updateHost, settings } = await loadModule()
+    const host = addHost(newHost({ label: 'Unit A' }))
+    // @ts-expect-error lastActiveAt is not part of the patch updateHost accepts
+    updateHost(host.id, { lastActiveAt: 999 })
+    // And the runtime half: a value smuggled past the type is not written.
+    expect(
+      get(settings).hosts.find((h) => h.id === host.id)?.lastActiveAt,
+    ).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4.7, issue #177: "A deleted host is gone with its timestamp: the list
+// remembers which of the hosts the owner kept was used last, and nothing
+// about what the owner chose to remove." Asserted on the persisted blob,
+// not only the in-memory store, since a removeHost that updates the store
+// but leaves a stale copy in storage would still pass an in-memory-only
+// check.
+// ---------------------------------------------------------------------------
+
+describe('removeHost removes a host and its lastActiveAt together (4.7, issue #177)', () => {
+  it('the removed host and its timestamp are both gone from the persisted blob', async () => {
+    const { addHost, activateHost, removeHost } = await loadModule()
+    const host = addHost(newHost({ label: 'Unit A' }))
+    activateHost(host.id, () => 5000)
+
+    removeHost(host.id)
+
+    const persisted = JSON.parse(
+      fakeStorage.getItem(SETTINGS_KEY) as string,
+    ) as Settings
+    expect(persisted.hosts.some((h) => h.id === host.id)).toBe(false)
+    expect(persisted.hosts.every((h) => h.lastActiveAt !== 5000)).toBe(true)
   })
 })

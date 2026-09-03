@@ -4323,6 +4323,15 @@ a failure kept against an address the owner may have just corrected. The decisio
 header says whether the active host answers (§4.5.1.2), the row says which host is active, and
 a host that has never been tried says nothing, because it has nothing to say.
 
+**The list is ordered by last use (issue #177).** Hosts with a `lastActiveAt` come first, most
+recent at the top; hosts never activated follow in the order they were saved. On a fresh
+install that is every host, so the default active host leads by stored order and not by this
+rule, and nothing says the active host is first: a blob can name as active a host that was
+never activated here. The order is derived at render from the stored field, never stored
+itself, so two activations reorder the list without a write beyond the one activation already
+makes. Each row wears `data-host-last-active` carrying the millisecond value, and no such
+attribute when it is `null`, so a test can assert the order from the rows rather than infer it.
+
 **The host list comes first and the add-host form sits under it.** The common visit is an owner
 correcting the address of the unit in front of them, not adding a second unit, and a form above
 the list pushes the list off a phone screen for the case that almost never happens.
@@ -4358,9 +4367,9 @@ was showing before it. Independent per-field state would allow two secrets to si
 the same screen at once, which is the thing being prevented, and the screen holds every unit the
 owner has.
 
-**Quick-connect from history**, which §4.5.2 also names, is not built. What "history" means when
-a saved host is already one tap from active is a decision rather than an omission, and it is
-issue #177.
+**Quick-connect from history** is the order of the list, decided in §4.7 (issue #177): most
+recently used first, never used last, which is what a history would have shown minus the second
+copy of the list.
 
 **An address is validated in the form** (§4.7), with the message next to the field and
 `role="alert"` on it, and the mutator's throw is caught as the backstop it is meant to be.
@@ -4384,7 +4393,8 @@ walking the markup breaks when the markup is rearranged, and this screen will be
 
 - `data-view="settings"` on the view root, as §4.5 requires of every view.
 - `data-host-id` on each row of the list, carrying the host id, and `data-host-active="true"` on
-  the row of the active host.
+  the row of the active host; `data-host-last-active` with the millisecond value on a row whose
+  host has been activated, absent otherwise, rows in the order §4.5.2.1 defines.
 - `data-host-field` on the element carrying a host's value or the input editing it:
   `label`, `address`, `wsPort`, `httpPort`, `token`.
 - `data-action` on every button: `activate`, `remove`, `edit`, `save`, `cancel`, `add`.
@@ -6065,9 +6075,20 @@ The host list of §4.5.2, persisted, and the one place that decides which unit t
 to. It is the piece between §4.3 and the views: `lib/ws.ts` takes a URL and a token and asks no
 questions about where they came from.
 
-**A host is `{id, label, address, wsPort, httpPort, token}`**, with the ports defaulting to 8082
-and 8443 and `token` nullable and per host, `null` meaning the unit asks for none. One list, one active id, persisted under
-`companion.settings`, beside the token key §4.3.6 pins.
+**A host is `{id, label, address, wsPort, httpPort, token, lastActiveAt}`**, with the ports
+defaulting to 8082 and 8443, `token` nullable and per host, `null` meaning the unit asks for
+none, and `lastActiveAt` the epoch millisecond of the last activation or `null` for a host
+never activated. One list, one active id, persisted under `companion.settings`, beside the
+token key §4.3.6 pins.
+
+**Quick-connect from history is the order of this list, not a second record (issue #177).** A
+saved host is already one tap from active, so a separate history would be a second copy of the
+same list with a different sort. `activateHost` writes `lastActiveAt` on the host it activates,
+in the same update that writes the active id, which is the one moment §4.7 already treats as
+delicate and gains no new one. The parser repairs anything that is not a finite number at or
+above zero to `null`, the way it repairs a port. A deleted host is gone with its timestamp: the
+list remembers which of the hosts the owner kept was used last, and nothing about what the
+owner chose to remove.
 
 **The token stays under `companion.token`, and this module is its only writer.** A per-host token
 and a single key the client reads are not in conflict as long as one of them is the source: the

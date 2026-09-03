@@ -94,7 +94,9 @@ async function loadModules() {
   return { ...settings, ...stores, ...session }
 }
 
-function newHost(overrides: Partial<Omit<Host, 'id'>> = {}): Omit<Host, 'id'> {
+function newHost(
+  overrides: Partial<Omit<Host, 'id' | 'lastActiveAt'>> = {},
+): Omit<Host, 'id' | 'lastActiveAt'> {
   return {
     label: 'Test unit',
     address: '172.20.10.9',

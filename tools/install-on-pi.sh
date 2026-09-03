@@ -17,8 +17,10 @@
 #
 # Exit status: 0 success, 1 failure (missing tool or source file, no release,
 # download, checksum, an archive that refuses to stay inside its target, an
-# unresolved custom plugins directory), 2 usage error. Anything non-zero
-# leaves the installation as it was.
+# unresolved custom plugins directory), 2 usage error, including a value read
+# from a file on the unit that fails the checks in require_clean_dir_value
+# (SPEC.md 5.3.1, issue #166). Anything non-zero leaves the installation as it
+# was.
 
 set -eu
 
@@ -214,6 +216,48 @@ read_tag_name() {
     printf '%s' "$_tag"
 }
 
+# Validate a value on its way to becoming a write destination: absolute, no
+# whitespace, no ".." segment. One rule for every route the plugins directory
+# or the web root can arrive by - a flag, main.custom_plugins in config.toml,
+# the same key in defaults.toml, or --pwn-prefix on the way to that file -
+# rather than three checked routes and a fourth an oversight (SPEC.md 5.3.1,
+# issue #166). A directory with a space in its name is one no pwnagotchi image
+# ships and no owner chooses on purpose; a ".." segment is a path the unit
+# itself would honour and this script would write to, and nothing about it
+# says "mistake" until the plugin is not where the unit looks for it. None of
+# this is a privilege boundary, since whoever passes the flag or owns the file
+# is already root; it is the script saying what it will and will not write to.
+# The route name identifies where the value came from, so the message says
+# which route failed.
+#
+# Must be called at top level, never inside a command substitution: it exits
+# the script on failure rather than returning, and an exit inside $(...) only
+# ends the subshell, leaving the caller to go on with an empty or unvalidated
+# value.
+require_clean_dir_value() {
+    _route="$1"
+    _value="$2"
+    case "$_value" in
+        /*) ;;
+        *)
+            echo "install-on-pi.sh: $_route must be an absolute path: $_value" >&2
+            exit 2
+            ;;
+    esac
+    case "$_value" in
+        *[[:space:]]*)
+            echo "install-on-pi.sh: $_route must not contain whitespace: $_value" >&2
+            exit 2
+            ;;
+    esac
+    case "$_value" in
+        *"/../"* | *"/..")
+            echo "install-on-pi.sh: $_route must not contain a .. segment: $_value" >&2
+            exit 2
+            ;;
+    esac
+}
+
 web_root="/var/www/openpwn-companion"
 plugins_dir=""
 config_file="/etc/pwnagotchi/config.toml"
@@ -239,16 +283,10 @@ while [ $# -gt 0 ]; do
                 usage
                 exit 2
             fi
-            # Absolute only. An empty value makes the staging directory `.new`
-            # in whatever directory the script was started from, and that
+            # An empty or relative value makes the staging directory `.new` in
+            # whatever directory the script was started from, and that
             # directory is rm -rf'd on the way past.
-            case "$2" in
-                /*) ;;
-                *)
-                    echo "install-on-pi.sh: --web-root must be an absolute path: $2" >&2
-                    exit 2
-                    ;;
-            esac
+            require_clean_dir_value --web-root "$2"
             web_root="$2"
             shift 2
             ;;
@@ -258,6 +296,7 @@ while [ $# -gt 0 ]; do
                 usage
                 exit 2
             fi
+            require_clean_dir_value --plugins-dir "$2"
             plugins_dir="$2"
             shift 2
             ;;
@@ -276,31 +315,16 @@ while [ $# -gt 0 ]; do
                 usage
                 exit 2
             fi
-            # Absolute only, the same reasoning as --web-root above: it is
-            # interpolated into a glob, not a URL, so --tag's character check
-            # does not apply (SPEC.md 5.3.1) - a strange value simply fails to
-            # match and the script refuses, which is what it would do anyway.
-            case "$2" in
-                /*) ;;
-                *)
-                    echo "install-on-pi.sh: --pwn-prefix must be an absolute path: $2" >&2
-                    exit 2
-                    ;;
-            esac
-            # No whitespace either: the value below is expanded unquoted so the
-            # glob still matches, and $defaults_list accumulates matches
-            # space-separated so it can be counted with a plain `for`. Any
-            # whitespace in the prefix - space, tab or newline, the whole of
-            # the default IFS - would word-split both, so a match would go
-            # missed and the count would be wrong rather than merely
-            # inconvenient. Rejecting here is louder than a miscount
-            # discovered downstream.
-            case "$2" in
-                *[[:space:]]*)
-                    echo "install-on-pi.sh: --pwn-prefix must not contain whitespace: $2" >&2
-                    exit 2
-                    ;;
-            esac
+            # It is interpolated into a glob, not a URL, so --tag's character
+            # check does not apply (SPEC.md 5.3.1) - a strange value simply
+            # fails to match and the script refuses, which is what it would do
+            # anyway. Whitespace matters here beyond the general rule: the
+            # value is expanded unquoted so the glob still matches, and
+            # $defaults_list accumulates matches space-separated so it can be
+            # counted with a plain `for`; whitespace in the prefix would
+            # word-split both, so a match would go missed and the count would
+            # be wrong rather than merely inconvenient.
+            require_clean_dir_value --pwn-prefix "$2"
             pwn_prefix="$2"
             shift 2
             ;;
@@ -439,6 +463,7 @@ if [ $do_plugin -eq 1 ]; then
         if [ -f "$config_file" ]; then
             plugins_dir=$(read_custom_plugins "$config_file")
             if [ -n "$plugins_dir" ]; then
+                require_clean_dir_value "main.custom_plugins in $config_file" "$plugins_dir"
                 echo "Plugins dir:    $plugins_dir (main.custom_plugins in $config_file)"
             fi
         fi
@@ -465,6 +490,7 @@ if [ $do_plugin -eq 1 ]; then
                 defaults_file=$(trim "$defaults_list")
                 plugins_dir=$(read_custom_plugins "$defaults_file")
                 if [ -n "$plugins_dir" ]; then
+                    require_clean_dir_value "custom_plugins in $defaults_file" "$plugins_dir"
                     echo "Plugins dir:    $plugins_dir (custom_plugins in $defaults_file)"
                 fi
             elif [ "$defaults_count" -gt 1 ]; then

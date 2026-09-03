@@ -119,7 +119,10 @@ same key from the `defaults.toml` of the pwnagotchi installed on the unit. It ne
 path of its own: that default changed between pwnagotchi versions, and a copy of it would be
 right on one and quietly wrong on the other. If neither file answers, the installer stops and
 tells you to pass `--plugins-dir`, rather than installing somewhere the unit does not read. It
-prints which path it chose either way.
+prints which path it chose either way. It also refuses, with exit 2 and a message naming where
+the value came from, a plugins directory that is not an absolute path, contains whitespace, or
+contains a `..` segment, whether you typed it or your unit's own `config.toml` holds it: fix
+the value rather than the installer.
 
 To see what it would do without writing anything:
 

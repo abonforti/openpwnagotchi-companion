@@ -183,6 +183,7 @@ function logLinesEnvelope(
 function minimalStats(uptime: number): Stats {
   return {
     uptime,
+    name: null,
     mode: 'AUTO',
     channel: 6,
     battery: { percent: null, charging: null },

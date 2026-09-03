@@ -253,7 +253,11 @@ def agent(agent_factory) -> FakeAgent:
 
 
 class DepsHarness:
-    """A `Deps` with every seam faked, plus the recordings they produce.
+    """A `Deps` with every seam faked but `unit_name`, plus the recordings they produce.
+
+    `unit_name` stays at its default so that `stats.name` reaches the pwnagotchi
+    stub the way it reaches the module on a unit; tests/test_stats.py drives the
+    stub's answer directly.
 
     SPEC 10.7 makes this a design requirement rather than a convenience: without
     injectable seams the I2C, gpsd, subprocess and service-restart branches are

@@ -106,6 +106,12 @@ against real hardware.
 
 ### Changed
 
+- **`stats` carries the unit's own name, and the field is required.** `Stats.name` is
+  `pwnagotchi.name()`, the hostname, or `null` when the unit has none; the header names the
+  unit by it when the owner gave the host no label of their own (issues #30, #200). A change to
+  the shape of an existing message, so a MINOR bump under SPEC §12: an app newer than its
+  plugin drops every `stats` frame at the boundary rather than showing readings it cannot vouch
+  for, and the Settings diagnostics count the drops. Update the plugin and the app together.
 - **`handshakes_list.total` is nullable.** An empty list with a total of zero read as a unit with
   no captures, which is a claim, and the plugin had not looked anywhere to support it. `null` now
   means the directory is unknown - no agent and no `handshake_dir` - and `0` means it was found

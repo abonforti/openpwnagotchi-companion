@@ -1072,6 +1072,7 @@ rather than left for the next reader to rediscover.
 
 ```
 uptime          = pwnagotchi.uptime()               # int seconds        (F1)
+name            = pwnagotchi.name() or None         # str, /etc/hostname (F33)
 mode            = None if no agent yet, else                             (F11)
                   "MANUAL" if agent.mode == "manual" else pasv_or_auto()
 channel         = agent._current_channel            # attribute, NOT session()  (F6)
@@ -1089,6 +1090,18 @@ gps             = current_gps()                     # §2.12
 sessionAge      = seconds since the cached bettercap session was refreshed, or null
 capabilities    = {pasv, pisugar, gpsSource, pluginVersion}
 ```
+
+**`name` is the unit's own name, and it is the only field a person thinks in (issue #30).**
+`pwnagotchi.name()` reads `/etc/hostname` once and caches it for the life of the process (F33);
+the plugin calls it on every `stats` through a `Deps` callable so a test can make it answer or
+fail. The wire carries `null` in two cases that the app must not tell apart: the call raised,
+because the file was not there or not readable, or it returned an empty string, which is what a
+blank hostname file gives. An empty string is not a name and sending it would make the app
+render nothing where a name goes; `null` says there is none. No trimming beyond what the
+accessor itself does, and no default: a unit that has no name is shown as its address by the
+rule in §4.5.1.2, not as a name this plugin made up. Like every other remote string, what
+arrives is attacker-chosen only in the sense that the owner set the hostname; §4.5.3 applies to
+it all the same, because the app cannot know who set it.
 
 Neither count comes from `len(agent._handshakes)`, which only holds the current session.
 `handshakes` deliberately mirrors `utils.total_unique_handshakes` so the number in the app
@@ -3606,6 +3619,7 @@ before this section existed.
 | `gps` | `gps_update`, and the `gps` field of `stats` | whichever arrived later. Both are the same resolved shape (§2.12), so there is nothing to reconcile |
 | `face` | `face_status`, and the status half of `status_change` | §2.13. `status_change` also carries a `mood`, which is deliberately dropped: `FaceStatus` has no field for it and no view in §4.5 renders one |
 | `screen` | the `screen_image` reply | on demand only, never pushed (§2.10). Held like everything else rather than read off the request's promise, so §4.5.1.1's rule that a view subscribes to stores has no exception carved for the one message that happens to be heavy. Cleared by `resetStores()` with the rest: one unit's display left on another's Mirror is the same defect as one unit's log lines on another's Log, and the harder one to notice, because a picture of a face carries no address to give it away |
+| `unitName` | derived from `activeHost` and `stats` | not a store with a writer of its own: the string the header names the unit by, resolved by the precedence in §4.5.1.2. Derived so that it follows a host switch by construction, since `stats` is wiped on one (§4.4.2) and `activeHost` changes under it |
 | `channel` | `channel_hop`, and the `channel` field of `stats` | the later of the two sources, see below. Exported because the hop is worth showing before the next broadcast, which on this link is up to 20 s away |
 
 **`stats` is never patched, and that is the decision this table exists for.** `channel_hop`
@@ -4185,6 +4199,68 @@ to its two largest units, deciding that `null` is a dash: that is logic, and §1
 exclusion and this is how it stays right - a view that formats is a view that computes, and the
 part that computes belongs where the gate can see it. `Dashboard.svelte` subscribes to stores
 and lays out what those functions return.
+
+#### 4.5.1.2 What the header holds (issues #30, #200)
+
+The header is the one element on screen in every view, and until this section it was a literal
+with a comment promising the stores. It holds exactly two things, in both orientations: **which
+unit the app is talking to, and whether it is**. The landscape paragraph of §4.5.1 says the
+rail range keeps both; this section is what makes that rule checkable, by saying what there is
+to keep.
+
+**Which unit, by precedence.** Three strings can name a unit and they disagree exactly when it
+matters. The header uses the first of these that is non-empty:
+
+1. the active host's `label`, when the owner typed one. The owner's word for the unit beats
+   the unit's own, because two units both named `pwnagotchi` is a plausible state and the
+   label is where the owner resolves it. A label is never stored empty: `sanitizeLabel` fills
+   a blank one with the address at every entry point of the host list, so "the owner typed
+   one" is read as *the label differs from the address*. Without that reading rule 2 is
+   unreachable in the shipped app and every unit is shown as its address forever, which is
+   the state issue #30 exists to end. An owner who types the address as the label gets the
+   unit's name instead, which is the one case the reading cannot tell apart and the one where
+   it does no harm;
+2. `stats.name`, the unit's own name from the wire (§2.6, F33), once a `stats` frame has
+   arrived and its `name` is not `null`;
+3. the active host's `address`. Never blank while a host is active: an address is the one
+   string that is always there, and a header that goes empty on a unit that has not yet
+   answered looks broken rather than waiting.
+
+Before any host is active, the header shows the app's own name, `companion`, and nothing
+else: there is no unit to name and no connection to describe, and inventing either would be a
+lie in the one place every view shares. Before the first frame arrives, with a host active,
+rule 1 or 3 applies: the unit's own name is never guessed.
+
+**Whether it is.** Beside the name, the connection state, as `formatConnectionState` already
+renders it for the Settings diagnostics (§4.3.10). The same function, so the header and the
+diagnostics cannot disagree, and so a state the machine can be in but the function cannot
+describe fails the exhaustiveness check once rather than twice. Staleness is not the header's
+business: the Dashboard shows it against the data it qualifies (§4.5.1.1), and a header that
+said "stale" over a Log that is not would be wrong for the view underneath it.
+
+**It follows a host switch by construction, not by an event.** `unitName` is derived from
+`activeHost` and `stats` (§4.4.1); a switch wipes `stats` (§4.4.2) and changes `activeHost`,
+so the derived value moves in the same tick and there is no window in which the previous unit's
+name sits over the new unit's data. That window is the one defect a header can have that no
+view can, and deriving the value is what makes it unreachable rather than merely untested.
+
+**`stats.name` is a remote string** and §4.5.3 applies: rendered as text, never as markup,
+inside `<bdi>` like the other names the app did not choose. §4.5.3 states no length rule and
+this section adds none to the value: the store passes the string through, and the header
+truncates it with a CSS ellipsis so a long one cannot wrap the header to two lines. That is
+presentation, not a clamp on what the store holds. The owner set the hostname on their own
+unit, but the app has no way to know that and treats it as it treats an SSID.
+
+**Nickname: no second field (issue #30).** The question was whether the app should let an owner
+give a unit a local nickname that overrides what the unit calls itself. It already can: `label`
+on a host entry is exactly that, has been since the host list existed, and is rule 1 above. A
+second field with the same meaning is a place for the two to disagree.
+
+**DOM hooks.** Inside `data-region="header"`: `data-field="unitName"` on the element holding
+the name, `data-field="connectionState"` on the one holding the state, and no other text. With
+no host active the state element is absent, not empty: there is no state to describe and an
+empty element is a place for a stale one to hide. A test that finds anything else in the
+header has found a regression of this section.
 
 ### 4.5.2 Views
 
@@ -7638,6 +7714,15 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   neither sniffs its way out of a missing declaration under this harness. The fourth criterion of issue #39, the pwnagotchi face
   rendering identically in both engines, is not here: no view renders one yet, and the file says
   so rather than letting the gap pass for covered.
+- `header.spec.ts` (§4.5.1.2, issues #30, #200): the `unitName` derivation through the real
+  settings module, label over name over address, with the label-equals-address case that is
+  what a host the owner never named looks like once stored; rules 2 and 3 past an empty label,
+  reachable only by mocking `activeHost` because the sanitizer never stores one; null with no
+  host; a host switch moving the value with no new frame. Then the rendered header: exactly the
+  two `data-field` elements, `companion` and no state element with no host, the name and
+  `formatConnectionState` of the live state with one. The landscape rule of §4.5.1 is asserted
+  in `geometry.spec.ts` against a seeded host: header without vertical overflow, both fields
+  visible in the rail range.
 - `service-worker.spec.ts` (§2.15.1, issue #91): the three headers of that section are present
   on a document served **by the worker**, not only by the server. A first navigation, served by
   the preview server, carries them, which is the positive control: a header the origin never
@@ -8009,6 +8094,7 @@ below says which of two questions a given run is asking.
 | F32 | **A plugin's `options` are the configuration table itself, and pwnagotchi puts nothing of its own in them.** `load()` assigns `plugin.options = config['main']['plugins'][name]` wholesale - the same object, not a copy, and not a dict it composed. So every key a plugin sees is a key somebody wrote in `config.toml`, which is what lets this plugin treat anything outside its own `DEFAULTS` as a misspelling and say so (§2.2.1, issue #137). **One exception, and it is the reason `enabled` is accepted**: `toggle_plugin` writes `config['main']['plugins'][name]['enabled'] = enable` and persists it with `save_config`, so `enabled` arrives in the table without the owner typing it. `load()` also reads `'enabled' in options` to decide what to load at all. **Machine-checked entries**: F32a-c pin the two assignments above and, in F32c, **the absence** of a per-key write or a bulk update into a plugin's options. That third entry is not decoration: the claim this fact rests on is an absence, and two pinned presences would let a write added elsewhere in that file pass straight through (the reason F30b exists, one fact up). The rule of §2.2.1 depends on the first: the day that line composes a dict rather than assigning one, a correct configuration could start warning | `pwnagotchi/plugins/__init__.py`, `load` (the wholesale assignment) and `toggle_plugin` (the `enabled` write), verified on `v2.9.5.6` and `v2.9.5.8`. `enabled` has a third writer, `pwnagotchi/plugins/cmd.py:134,145` (`pwnagotchi plugins enable` / `disable`), which writes the same key into the same table; named so the evidence column is not read as a complete enumeration when it is not |
 | F30 | **A plugin is executed but never registered in `sys.modules`.** `load_from_file` is `spec_from_file_location`, `module_from_spec`, `exec_module`, and no assignment to `sys.modules[plugin_name]`. So during import `sys.modules.get(__name__)` is `None`, and **any module-scope construct that resolves its own module through `sys.modules` fails at import**: with `from __future__ import annotations` in force, that includes `@dataclasses.dataclass`, which looks the module up to resolve string annotations while searching for `KW_ONLY` (CPython `dataclasses.py`, `_is_type`). It equally includes `typing.get_type_hints`, and anything else that resolves annotations by name. The plugin was unloadable on every unit for this reason (issue #136), while 925 tests passed, because pytest imports it the ordinary way and an ordinary import registers it. `tests/test_plugin_loads.py` pins the contract. **Machine-checked entries**: F30a, F30b pin that the three calls `load_from_file` is made of are still in that file, and that the file never names `sys.modules` at all. The second is the fact itself rather than a proxy for it; the first only reports that the three calls are present, since it is not scoped to one function and cannot see a fourth call added beside them. | `pwnagotchi/plugins/__init__.py`, `load_from_file`, observed on 2.9.5.8 |
 | F25 | The shipped shell profile aliases `custom` to `/etc/pwnagotchi/custom-plugins/`. Nothing else watches that file, so the pin stays and fires if the profile moves. It once recorded a **disagreement** with `defaults.toml` and the rule was drawn from it; at the verified tag the two agree (issue #157), and the rule now rests on F23 | `stage3/06-patches/files/profile` |
+| F33 | Module-level `pwnagotchi.name()` returns the unit's name: it reads `/etc/hostname` once, strips it, and caches the result in a module global for the life of the process. Nothing refreshes it, so a hostname changed on a running unit is seen at the next restart. `stats.name` comes from here (§2.6). **Machine-checked entry**: F33 pins that the function is still defined. | `pwnagotchi/__init__.py:46-51` |
 | F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked entries**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
 | F29 | `pisugarx_ext.py` defines **two** classes. `plugins.loaded['pisugarx_ext']` is the `PiSugar(plugins.Plugin)` at line 544, which holds its hardware client as `self.ps = PiSugarServer()`. The battery state lives on that client, not on the plugin: `PiSugarServer.__init__` sets `battery_level` and `power_plugged`, and the accessors are `get_battery_level()` and `get_battery_power_plugged()`. **The attributes are kept current, and the accessors touch no hardware**: `start_timer()` runs `update_value()` on a `daemon=True` thread, and that loop rewrites the attributes on a `time.sleep(3)` cycle; each accessor is a one-line `return` of the corresponding attribute. **`ready` says whether any of it is real**: it is `False` from the constructor and is set `True` only at the end of `_connect_device`, after a device has been found and its 256 registers have been read, and nothing anywhere in the file sets it back to `False`. `start_timer()` is likewise called only after a device is found, so a loaded plugin with no PiSugar attached loops on `time.sleep(5)` forever with `ready` `False`, no refresh running, and `battery_level` and `power_plugged` still at their constructor values `0` and `False`. The plugin mirrors the flag as `self.ready = self.ps.ready`. **`battery_charging` is dead**: it is assigned `0` in that same constructor and nowhere else in the file, and `get_battery_charging()` has a body of `pass`, so it returns `None`. Upstream `jayofelony` `pisugarx.py` has the identical shape, so the same traversal reaches both tiers; that file is on branch **`noai`** and does **not** exist on `master`, which 404s | [`abonforti/pwnagotchi-plugins` @ `abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/blob/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be/pisugarx_ext.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61 (`battery_level`, `battery_charging`), 63 (`power_plugged`), 75-96 (`_connect_device`, `time.sleep(5)` when no device is found), 99 (`self.start_timer()`, reached only after one is), 102 (`self.ready = True`), 105-109 (`start_timer`, `timer_thread.daemon = True` at 108), 111 (`def update_value`), 203 and 206 (`time.sleep(3)`), 330-336 (`get_battery_level`), 528-534 (`get_battery_charging`, body `pass`), 520-526 (`get_battery_power_plugged`), 544 (`class PiSugar(plugins.Plugin)`), 655 (`self.ps = None`), 658 (`self.ps = PiSugarServer()`), 664 (`self.ready = False`), 731 and 947 (`self.ready = self.ps.ready`), and commit [`abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/commit/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be) (whose message is about display behaviour when the PiSugar does not answer on I2C; the bit-7 belief is in the file it touches, as a comment at line 985, see 2.11.1). Upstream: [`jayofelony/pwnagotchi` branch `noai` @ `9fc1b6f0`, `pwnagotchi/plugins/default/pisugarx.py`](https://github.com/jayofelony/pwnagotchi/blob/9fc1b6f0cc4b7002ecbf5f3ab1e7623109fe5bf9/pwnagotchi/plugins/default/pisugarx.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61, 63, 102 (`self.ready = True`), 105-109 (`start_timer`, `daemon = True` at 108), 111 (`def update_value`), 202 and 205 (`time.sleep(3)`), 329-335 (`get_battery_level`), 519-525 (`get_battery_power_plugged`), 543 (`class PiSugar(plugins.Plugin)`), 566 (`self.ps = None`), 569 (`self.ps = PiSugarServer()`), 575 (`self.ready = False`), 619 and 811 (`self.ready = self.ps.ready`) |
 

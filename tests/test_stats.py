@@ -74,6 +74,35 @@ def test_stats_reports_uptime_and_temperature_from_the_module(router, stub_pwnag
     assert data["temperature"] == 51
 
 
+def test_stats_name_reads_pwnagotchi_name(router, stub_pwnagotchi):
+    """SPEC 2.6, F33: `name` is `pwnagotchi.name()`, read through a `Deps`
+    callable so this test can make it answer without touching `/etc/hostname`."""
+    stub_pwnagotchi._NAME = "pwnagotchi-042"
+
+    assert router.stats()["name"] == "pwnagotchi-042"
+
+
+def test_stats_name_is_null_for_an_empty_hostname(router, stub_pwnagotchi):
+    """SPEC 2.6: an empty string is not a name - a blank hostname file - and
+    the wire must carry `null`, the same as the accessor raising, rather than
+    the empty string itself: an empty string would make the app render
+    nothing where a name goes, which is a different, worse failure than a
+    header that correctly falls back to the address."""
+    stub_pwnagotchi._NAME = ""
+
+    assert router.stats()["name"] is None
+
+
+def test_stats_name_is_null_when_pwnagotchi_name_raises(router, stub_pwnagotchi):
+    """SPEC 2.6: the accessor raising - `/etc/hostname` not there or not
+    readable - is the other of the two cases the wire tells apart from a real
+    name only by both landing on `null`. Also pins that `stats()` itself does
+    not propagate the exception."""
+    stub_pwnagotchi._NAME = None
+
+    assert router.stats()["name"] is None
+
+
 def test_stats_reads_the_channel_attribute_not_the_session(router_factory, agent_factory):
     agent = agent_factory(current_channel=11)
 
@@ -433,7 +462,7 @@ def test_stats_has_exactly_the_schema_fields_with_no_agent(router_factory):
     """The same shape check as the agent-present case: no field goes missing
     and none is added just because the agent is not there to ask."""
     expected = {
-        "uptime", "mode", "channel", "battery", "temperature", "handshakes",
+        "uptime", "name", "mode", "channel", "battery", "temperature", "handshakes",
         "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer",
         "gps", "sessionAge", "capabilities",
     }
@@ -493,9 +522,56 @@ def test_stats_embeds_capabilities_and_battery_and_gps(router):
 
 def test_stats_has_exactly_the_schema_fields(router):
     expected = {
-        "uptime", "mode", "channel", "battery", "temperature", "handshakes",
+        "uptime", "name", "mode", "channel", "battery", "temperature", "handshakes",
         "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer",
         "gps", "sessionAge", "capabilities",
     }
 
     assert set(router.stats()) == expected
+
+
+# ---------------------------------------------------------------------------
+# `name` still validates against docs/schemas/outgoing/stats.json (D15):
+# `common.json#/$defs/Stats.name` is `string | null`, and each of the three
+# cases above must still produce a message the schema accepts, not merely a
+# dict this file's own field check happens to like the shape of.
+# ---------------------------------------------------------------------------
+
+
+def _stats_validator(schemas_dir):
+    import json
+
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+    from referencing.jsonschema import DRAFT202012
+
+    def load(path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    common = Resource.from_contents(
+        load(schemas_dir / "common.json"), default_specification=DRAFT202012
+    )
+    registry = Registry().with_resources(
+        [
+            ("common.json", common),
+            ("outgoing/common.json", common),
+        ]
+    )
+    schema = load(schemas_dir / "outgoing" / "stats.json")
+    schema.pop("$id", None)
+    return Draft202012Validator(schema, registry=registry)
+
+
+@pytest.mark.parametrize(
+    "raw_name",
+    ["pwnagotchi-042", "", None],
+    ids=["a-name", "empty-string", "raises"],
+)
+def test_stats_still_validates_with_every_name_case(router, stub_pwnagotchi, schemas_dir, raw_name):
+    stub_pwnagotchi._NAME = raw_name
+
+    replies = router.handle({"type": "get_stats"}, authenticated=True)
+    message = replies[0]
+
+    assert message["type"] == "stats"
+    _stats_validator(schemas_dir).validate(message)

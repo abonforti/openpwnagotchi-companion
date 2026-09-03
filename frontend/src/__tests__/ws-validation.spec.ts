@@ -168,6 +168,7 @@ function validStatsData(
 ): Record<string, unknown> {
   return {
     uptime: 120,
+    name: null,
     mode: 'AUTO',
     channel: 6,
     battery: validBattery(),

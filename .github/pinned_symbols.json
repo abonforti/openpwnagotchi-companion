@@ -440,6 +440,13 @@
         "options.update("
       ],
       "why": "F32's load-bearing claim is an absence - pwnagotchi puts no key of its own into a plugin's options - and F32a/F32b pin two presences, which a new write added elsewhere in the file would pass straight through. These are the two shapes such a write would take: a per-key assignment into the options mapping, or a bulk update of it. Pinned as an absence for the same reason as F30b: the absence is the fact, and an assumption nobody asserts is how SPEC 2.2.1 starts warning on a correct configuration"
+    },
+    {
+      "id": "F33",
+      "file": "pwnagotchi/__init__.py",
+      "kind": "function",
+      "name": "name",
+      "why": "stats.name comes from here: the unit's own hostname, read once and cached"
     }
   ]
 }

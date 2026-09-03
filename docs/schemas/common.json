@@ -197,6 +197,10 @@
       "type": "object",
       "properties": {
         "uptime": { "type": "integer", "description": "pwnagotchi.uptime(), seconds." },
+        "name": {
+          "type": ["string", "null"],
+          "description": "pwnagotchi.name(), the unit's own hostname (F33). Null when the accessor raised or returned an empty string; never an empty string."
+        },
         "mode": {
           "oneOf": [
             { "$ref": "#/$defs/Mode" },
@@ -236,7 +240,7 @@
         },
         "capabilities": { "$ref": "#/$defs/Capabilities" }
       },
-      "required": ["uptime", "mode", "channel", "battery", "temperature", "handshakes", "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer", "gps", "sessionAge", "capabilities"],
+      "required": ["uptime", "name", "mode", "channel", "battery", "temperature", "handshakes", "handshakesTotal", "peers", "accessPoints", "lastHandshake", "lastPeer", "gps", "sessionAge", "capabilities"],
       "additionalProperties": false
     },
 

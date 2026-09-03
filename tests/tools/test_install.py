@@ -887,6 +887,225 @@ def test_a_pwn_prefix_containing_whitespace_is_rejected_outright(pi, tmp_path, w
     assert pi.state() == before
 
 
+# ---------------------------------------------------------------------------
+# Every route into a write destination gets the same checks (issue #166).
+#
+# SPEC 5.3.1: the plugins directory can arrive four ways - `--plugins-dir`,
+# `main.custom_plugins` read from the unit's `config.toml`, the same key read
+# from its `defaults.toml`, and `--pwn-prefix` on the way to that file - and
+# `--web-root` gets the identical rule. A value on any of the five is refused
+# with exit 2 when it is not absolute, contains whitespace, or contains a
+# `..` segment, and the message names the route: the flag, or the file the
+# value came from. `--web-root`'s "not absolute" leg and `--pwn-prefix`'s
+# "not absolute" and whitespace legs already have coverage above; what
+# follows fills in the rest without disturbing those.
+# ---------------------------------------------------------------------------
+
+
+def dotdot_value(tmp_path: Path, name: str = "escape") -> str:
+    """An absolute path containing a literal `..` path segment.
+
+    Built by string concatenation rather than `Path` joining, since `Path`
+    does not collapse `..` on construction but nothing here should depend on
+    that - the point is that the two-character segment reaches the script
+    exactly as written, the way a hand-edited config or a typo would produce
+    it.
+    """
+    return f"{tmp_path}/sub/../{name}"
+
+
+def whitespace_value(tmp_path: Path) -> str:
+    return str(tmp_path / "weird plugins" / "dir")
+
+
+ROUTE_DEFECTS = {
+    "relative": lambda tmp_path: "relative/custom-plugins",
+    "whitespace": whitespace_value,
+    "dotdot": dotdot_value,
+}
+
+# The exact wording `require_clean_dir_value` uses for each defect - "the
+# usage banner names every flag on any exit-2 path" (SPEC 5.3.1's own
+# `usage()` prints `--web-root`, `--plugins-dir` and `--pwn-prefix`
+# unconditionally), so asserting the flag name alone would pass just as well
+# for a usage error raised for an unrelated reason. The reason word is what
+# only the real check prints, the same way the pre-existing whitespace test
+# for `--pwn-prefix` asserts "whitespace" rather than the flag.
+REASON_WORDS = {
+    "relative": "absolute",
+    "whitespace": "whitespace",
+    "dotdot": ".. segment",
+}
+
+
+def resolved_against_cwd(pi: "Pi", value: str) -> Path:
+    """Where `value` lands if a regressed guard let it through.
+
+    `pi.install`/`pi.run` spawn the script with `cwd=pi.root` (see `Pi.run`),
+    so a relative defect value - the only non-absolute one `ROUTE_DEFECTS`
+    produces - resolves against `pi.root`, not against this test process's
+    own working directory.
+    """
+    candidate = Path(value)
+    return candidate if candidate.is_absolute() else pi.root / candidate
+
+
+def assert_refused_value_untouched(pi: "Pi", value: str) -> None:
+    """The state-snapshot equality above only covers the web root's parent
+    and the resolved plugins directory; the refused value here points
+    somewhere else entirely, so a regressed guard that let the script write
+    straight to it would pass that snapshot check by accident. This closes
+    that gap directly, at the path the value actually names.
+    """
+    target = resolved_against_cwd(pi, value)
+    assert not target.exists(), f"a refused value must not be written to: {target}"
+    assert not (target / "companion.py").exists()
+
+
+@pytest.mark.parametrize("defect", sorted(ROUTE_DEFECTS), ids=sorted(ROUTE_DEFECTS))
+def test_a_plugins_dir_defect_is_a_usage_error(pi, tmp_path, defect):
+    """`--plugins-dir` had none of the three checks before issue #166."""
+    value = ROUTE_DEFECTS[defect](tmp_path)
+    before = pi.state()
+
+    result = pi.install("--plugins-dir", value, archive=pi.archive())
+
+    assert result.returncode == 2
+    assert "--plugins-dir" in result.stderr
+    assert REASON_WORDS[defect] in result.stderr
+    assert pi.state() == before
+    assert_refused_value_untouched(pi, value)
+
+
+@pytest.mark.parametrize("defect", sorted(ROUTE_DEFECTS), ids=sorted(ROUTE_DEFECTS))
+def test_a_web_root_defect_is_a_usage_error(pi, tmp_path, defect):
+    """The whitespace and `..` legs of the rule for `--web-root`; the "not
+    absolute" leg already has coverage in
+    `test_a_web_root_that_is_not_absolute_is_a_usage_error`."""
+    value = ROUTE_DEFECTS[defect](tmp_path)
+    archive = pi.archive()
+    before = pi.state()
+
+    result = pi.run(
+        "--web-root", value, "--config", str(pi.config), "--archive", str(archive)
+    )
+
+    assert result.returncode == 2
+    assert "--web-root" in result.stderr
+    assert REASON_WORDS[defect] in result.stderr
+    assert pi.state() == before
+    assert_refused_value_untouched(pi, value)
+
+
+@pytest.mark.parametrize("defect", sorted(ROUTE_DEFECTS), ids=sorted(ROUTE_DEFECTS))
+def test_a_pwn_prefix_defect_names_the_flag_in_the_message(pi, tmp_path, defect):
+    """The `..` leg is new for `--pwn-prefix` under issue #166; "not
+    absolute" and whitespace already refuse (see the tests above), but this
+    also pins that the message names the flag and the reason, which those
+    did not check."""
+    value = ROUTE_DEFECTS[defect](tmp_path)
+    before = pi.state()
+
+    result = pi.install("--pwn-prefix", value, archive=pi.archive())
+
+    assert result.returncode == 2
+    assert "--pwn-prefix" in result.stderr
+    assert REASON_WORDS[defect] in result.stderr
+    assert pi.state() == before
+    assert_refused_value_untouched(pi, value)
+
+
+@pytest.mark.parametrize("defect", sorted(ROUTE_DEFECTS), ids=sorted(ROUTE_DEFECTS))
+def test_a_config_custom_plugins_defect_is_a_usage_error(pi, tmp_path, defect):
+    """The plugins directory read from `config.toml`'s `main.custom_plugins`
+    gets the same three checks. The owner did not type this value, the
+    unit's own configuration file did, so the message names that file."""
+    value = ROUTE_DEFECTS[defect](tmp_path)
+    pi.config.write_text(config_with(value))
+    before = pi.state()
+
+    result = pi.install(archive=pi.archive())
+
+    assert result.returncode == 2
+    assert str(pi.config) in result.stderr
+    assert REASON_WORDS[defect] in result.stderr
+    assert pi.state() == before
+    assert_refused_value_untouched(pi, value)
+
+
+@pytest.mark.parametrize("defect", sorted(ROUTE_DEFECTS), ids=sorted(ROUTE_DEFECTS))
+def test_a_defaults_toml_custom_plugins_defect_is_a_usage_error(pi, tmp_path, defect):
+    """Same rule for the fallback source: `defaults.toml` under
+    `--pwn-prefix`, reached when the config is silent. The message names the
+    `defaults.toml` path, not the flag - the owner passed `--pwn-prefix`, but
+    the offending value came from the file underneath it."""
+    value = ROUTE_DEFECTS[defect](tmp_path)
+    prefix = make_pwn_prefix(
+        tmp_path, {"3.99": DEFAULTS_TOML_NEIGHBOURHOOD.format(path=value)}
+    )
+    pi.config.write_text('main.name = "testunit"\n')
+    before = pi.state()
+
+    result = pi.install("--pwn-prefix", str(prefix), archive=pi.archive())
+
+    assert result.returncode == 2
+    assert str(defaults_toml_path(prefix, "3.99")) in result.stderr
+    assert REASON_WORDS[defect] in result.stderr
+    assert pi.state() == before
+    assert_refused_value_untouched(pi, value)
+
+
+# -- positive controls: the rule matches segments, not substrings, and a
+#    clean value on each route still works -----------------------------
+
+
+def test_a_dotdot_looking_plugins_dir_component_is_not_a_dotdot_segment(pi, tmp_path):
+    """`custom..plugins` is a directory *name*, not a `..` segment - the
+    check matches whole path components, not the two-character substring, or
+    a real plugin directory with two dots anywhere in its name would be
+    refused by accident."""
+    target = tmp_path / "custom..plugins"
+
+    result = pi.install("--plugins-dir", str(target), archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert (target / "companion.py").is_file()
+
+
+def test_a_dotdot_looking_custom_plugins_value_is_not_a_dotdot_segment(pi, tmp_path):
+    """Same positive control, through `config.toml`'s `main.custom_plugins`
+    rather than `--plugins-dir`."""
+    target = tmp_path / "custom..plugins"
+    pi.config.write_text(config_with(target))
+
+    result = pi.install(archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert (target / "companion.py").is_file()
+
+
+def test_a_clean_plugins_dir_is_accepted_and_reported_by_the_dry_run(pi, tmp_path):
+    target = tmp_path / "clean-plugins-dir"
+
+    result = pi.install("--dry-run", "--plugins-dir", str(target), archive=pi.archive())
+
+    assert result.returncode == 0, result.stderr
+    assert str(target) in result.stdout
+
+
+def test_a_clean_web_root_is_accepted_and_reported_by_the_dry_run(pi, tmp_path):
+    target = tmp_path / "clean-web-root"
+    archive = pi.archive()
+
+    result = pi.run(
+        "--dry-run", "--web-root", str(target), "--config", str(pi.config),
+        "--archive", str(archive),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert str(target) in result.stdout
+
+
 def test_the_default_config_path_is_the_f24_user_config(pi, not_a_real_unit):
     """With no `--config`, SPEC 5.3 pins `/etc/pwnagotchi/config.toml` (F24).
 

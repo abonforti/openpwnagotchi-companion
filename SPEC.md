@@ -7100,8 +7100,8 @@ It does **not** edit `config.toml`. Enabling the plugin and setting its options 
 step, documented in `docs/SETUP.md`, because a script that rewrites the main configuration of a
 running pwnagotchi can break far more than it installs.
 
-Exit status: `0` success, `1` failure, `2` usage error. Anything non-zero leaves the installation
-exactly as it was.
+Exit status: `0` success, `1` failure, `2` a refused value, typed or read from a file on the
+unit (§5.3.1, issue #166). Anything non-zero leaves the installation exactly as it was.
 
 #### 5.3.1 The details that decide whether two people build the same thing
 
@@ -7148,6 +7148,28 @@ archive and so verifies perfectly. Validating only one of the two leaves the sam
 another name. `--web-root` must be absolute:
 the staging directory is `<web-root>.new` and is removed before use, so a relative or empty value
 deletes something in whatever directory the script was started from. Both are exit `2`.
+
+**Every route into a write destination gets the same checks (issue #166).** Five values decide
+where the installer writes: `--plugins-dir`; `main.custom_plugins` read from the unit's
+`config.toml`; the same key read from its `defaults.toml`; `--pwn-prefix`, which is where that
+file is looked for; and `--web-root`. Only two of them were checked, and a script that is
+careful in two places and not in the other three reads as an oversight rather than a decision.
+So the rule is one rule and it applies to all five: the value must be absolute, must contain no
+whitespace, and must contain no `..` segment, and a value that fails is exit `2` with a message
+that names the route it came from, whether the owner typed it or a file on the unit held it.
+The whitespace rule is not only `--pwn-prefix`'s unquoted expansion: a directory with a space
+in its name is a directory no pwnagotchi image ships and no owner chooses on purpose, and
+refusing it costs nothing. The `..` rule is new for all five and is the one that matters for a
+value read from a file: a `custom_plugins` of `/etc/pwnagotchi/../../tmp` is a path the unit
+itself would honour and the installer would write to, and nothing about it says "mistake" until
+the plugin is not where the unit looks for it. None of this is a privilege boundary, since
+whoever passes the flag or owns the file is already root; it is the script saying what it will
+and will not write to, in one place, once. Exit `2` therefore no longer means only "the caller
+typed something wrong": it also means "a file on the unit holds a value this script will not
+write to", and the message says which. One limit stays, and is named: `read_custom_plugins`
+reads an unquoted TOML value up to its first space, so a bare `custom_plugins = /etc/my dir` is
+not valid TOML in the first place and reaches the check as `/etc/my`; the whitespace rule holds
+for every value that is a TOML string.
 
 **Checksum entries match the recorded name as written**, not on its basename, and a second entry
 for the same name is an error rather than a last-one-wins. A line for `other/dist.tgz` describes

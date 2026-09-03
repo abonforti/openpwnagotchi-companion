@@ -209,5 +209,6 @@ acceptance criteria someone else could check.
 
 ## Licence
 
-GPL-3.0, inherited from the project this forks. By contributing you agree your work is licensed
-the same way.
+GPL-3.0. The project this forks declares GPL3 in its plugin file and MIT in its LICENSE, and
+this project is GPL-3.0 under either reading (`docs/LICENSING.md`). By contributing you agree
+your work is licensed the same way.

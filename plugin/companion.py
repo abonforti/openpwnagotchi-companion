@@ -5,9 +5,12 @@ docs/schemas/ over WSS, bound only to the tether addresses. See SPEC.md for the
 full brief and, in particular, section 11 for the allowlist of pwnagotchi
 symbols this file may use.
 
-Derived from pwnios.py in https://github.com/BraedenP232/PwnIOS (GPL-3.0), used
-and redistributed under the GPL with attribution preserved. That project
-published the backend of a paid iOS app; this is a hardened fork of it.
+Derived from pwnios.py in https://github.com/BraedenP232/PwnIOS, redistributed
+under GPL-3.0 with attribution preserved. Upstream states two licences about
+itself: the plugin file declares GPL3 and the repository's LICENSE is MIT. This
+project is GPL-3.0 under either reading and retains the MIT notice verbatim in
+NOTICE (docs/LICENSING.md, SPEC.md F34). That project published the backend of
+a paid iOS app; this is a hardened fork of it.
 
 Structure, and why it is shaped this way:
 

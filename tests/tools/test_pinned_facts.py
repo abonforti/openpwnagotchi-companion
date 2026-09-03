@@ -295,12 +295,12 @@ def test_the_manifest_covers_every_fact_section_11_pins():
     subset. Someone editing section 11 has no reason to know a second copy
     exists, so the link is asserted here rather than hoped for.
 
-    F12 and F29 live in another repository and F22 describes the project this
-    forks, none of which can be checked against upstream; the manifest's own
-    note says so, and this test pins that list rather than letting it grow
-    quietly.
+    F12 and F29 live in another repository, and F22 and F34 describe the
+    project this forks, none of which can be checked against upstream; the
+    manifest's own note says so, and this test pins that list rather than
+    letting it grow quietly.
     """
-    not_checkable = {"F12", "F22", "F29"}
+    not_checkable = {"F12", "F22", "F29", "F34"}
     spec = (REPO_ROOT / "SPEC.md").read_text(encoding="utf-8")
     pinned = set(re.findall(r"^\| (F\d+) \|", spec, re.M))
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

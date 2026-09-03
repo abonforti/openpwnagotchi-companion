@@ -6,8 +6,10 @@ Guidance for Claude Code working in this repository.
 
 `openpwnagotchi-companion`: a free, self-hostable **PWA** companion for pwnagotchi (jayofelony
 fork), replacing the paid iOS app "Pwnagotchi Companion" (`BraedenP232/PwnIOS`). Backend is a
-hardened GPL fork of that project's plugin `pwnios.py`; frontend is an installable PWA the user
-builds and serves from their own Pi over HTTPS with a private CA.
+hardened fork of that project's plugin `pwnios.py`, redistributed here under GPL-3.0 (upstream
+declares GPL3 in the file and MIT in its LICENSE; `NOTICE` and `docs/LICENSING.md` carry both);
+frontend is an installable PWA the user builds and serves from their own Pi over HTTPS with a
+private CA.
 
 Full build brief and locked decisions: [`SPEC.md`](SPEC.md). Read it before writing code. The
 Decisions Ledger (§0) is not to be re-litigated.

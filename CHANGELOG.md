@@ -14,6 +14,10 @@ against real hardware.
 
 ### Added
 
+- **`NOTICE` and `docs/LICENSING.md`.** The project this forks declares GPL3 in its plugin
+  file and MIT in its LICENSE. This project is GPL-3.0 under either reading, and now retains
+  the MIT notice verbatim in case that is the one that applies, says so everywhere it
+  describes upstream, and records both declarations as a dated observation (issue #25).
 - **The PWA is an app.** It began as a navigation shell around seven routes, six of which were
   nine-line placeholders. All seven views now exist, and each arrived with the rule it needed
   decided before it was drawn.

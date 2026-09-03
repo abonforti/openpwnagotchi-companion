@@ -22,6 +22,7 @@
     DEFAULT_HTTP_PORT,
     DEFAULT_WS_PORT,
     isUsableAddress,
+    orderedHosts,
     removeHost,
     settings,
     updateHost,
@@ -29,7 +30,9 @@
   } from '../lib/settings'
   import { capabilities, connection } from '../lib/stores'
 
-  const hostsList = $derived($settings.hosts)
+  // SPEC 4.5.2.1 (issue #177): rendered in quick-connect order, not stored
+  // order -- lib/settings.ts's orderedHosts derives it from lastActiveAt.
+  const hostsList = $derived(orderedHosts($settings.hosts))
   const activeId = $derived($settings.activeHostId)
   const conn = $derived($connection)
   const caps = $derived($capabilities)
@@ -296,6 +299,7 @@
           class="host"
           data-host-id={host.id}
           data-host-active={host.id === activeId ? 'true' : undefined}
+          data-host-last-active={host.lastActiveAt ?? undefined}
         >
           {#if editingId === host.id}
             <form

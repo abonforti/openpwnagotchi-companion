@@ -627,6 +627,122 @@ describe('the host list: add, edit, remove, activate (SPEC 4.5.2)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// SPEC 4.5.2.1, 4.7, issue #177: "The list is ordered by last use ...
+// Hosts with a lastActiveAt come first, most recent at the top ... hosts
+// never activated follow in the order they were saved ... Each row wears
+// data-host-last-active carrying the millisecond value, and no such
+// attribute when it is null."
+//
+// The two prefilled defaults (bluetooth, usb) are present in every test
+// here too; whether the default-active bluetooth entry itself carries a
+// lastActiveAt is not pinned by anything handed to this file (issue #177
+// names it), so assertions below check the fixture hosts' relative order
+// rather than their absolute position in the full row list.
+// ---------------------------------------------------------------------------
+
+function hostRows(): HTMLElement[] {
+  return Array.from(root().querySelectorAll('[data-host-id]'))
+}
+
+function rowOrder(ids: string[]): string[] {
+  const positions = hostRows().map((row) => row.getAttribute('data-host-id'))
+  const located = ids.map((id) => ({ id, index: positions.indexOf(id) }))
+  // A missing row would sort first as -1 and pass an order it is not in.
+  for (const entry of located) {
+    expect(entry.index, `row ${entry.id} is rendered`).toBeGreaterThanOrEqual(0)
+  }
+  return located.sort((a, b) => a.index - b.index).map((entry) => entry.id)
+}
+
+describe('the host list is ordered by last use (SPEC 4.5.2.1, 4.7, issue #177)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('rows come out most-recently-activated first, with data-host-last-active on activated rows and absent on never-activated ones', async () => {
+    const { settings: api } = await mountSettings()
+    api.loadSettings(() => 'not-an-ip-address')
+    await settle()
+
+    const hostA = api.addHost({
+      label: 'Unit A',
+      address: '192.0.2.51',
+      wsPort: 8082,
+      httpPort: 8443,
+      token: null,
+    })
+    const hostB = api.addHost({
+      label: 'Unit B',
+      address: '192.0.2.52',
+      wsPort: 8082,
+      httpPort: 8443,
+      token: null,
+    })
+    await settle()
+
+    api.activateHost(hostA.id, () => 1000)
+    api.activateHost(hostB.id, () => 2000)
+    await settle()
+
+    expect(
+      rowOrder([hostB.id, hostA.id]),
+      'the two activated fixture hosts, most recent first',
+    ).toEqual([hostB.id, hostA.id])
+
+    expect(
+      Number(hostRow(hostB.id).getAttribute('data-host-last-active')),
+    ).toBe(2000)
+    expect(
+      Number(hostRow(hostA.id).getAttribute('data-host-last-active')),
+    ).toBe(1000)
+    expect(hostRow('usb').getAttribute('data-host-last-active')).toBeNull()
+  })
+
+  it('clicking [data-action="activate"] on a lower row moves it to the front and gives it data-host-last-active', async () => {
+    const { settings: api } = await mountSettings()
+    api.loadSettings(() => 'not-an-ip-address')
+    await settle()
+
+    const hostA = api.addHost({
+      label: 'Unit A',
+      address: '192.0.2.53',
+      wsPort: 8082,
+      httpPort: 8443,
+      token: null,
+    })
+    const hostB = api.addHost({
+      label: 'Unit B',
+      address: '192.0.2.54',
+      wsPort: 8082,
+      httpPort: 8443,
+      token: null,
+    })
+    await settle()
+
+    api.activateHost(hostA.id, () => 1000)
+    await settle()
+
+    expect(rowOrder([hostA.id, hostB.id])).toEqual([hostA.id, hostB.id])
+    expect(hostRow(hostB.id).getAttribute('data-host-last-active')).toBeNull()
+
+    // Driving time through Date.now(): the row's own activate button calls
+    // activateHost(id) with no clock argument, so the DOM has no seam to
+    // inject one directly. Faking only Date is deliberate, to leave
+    // whatever timers Svelte's own scheduling relies on alone.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(5000)
+    click(hostAction(hostB.id, 'activate'))
+    await settle()
+    vi.useRealTimers()
+
+    expect(rowOrder([hostB.id, hostA.id])).toEqual([hostB.id, hostA.id])
+    expect(
+      Number(hostRow(hostB.id).getAttribute('data-host-last-active')),
+    ).toBe(5000)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // SPEC 4.5.2.1: "Any constant the library owns is imported, never restated
 // ... a change to the library's defaults would have left the screen
 // quietly creating hosts on the old ports." Driven from lib/settings.ts's

@@ -14,6 +14,7 @@ export interface Host {
   wsPort: number
   httpPort: number
   token: string | null
+  lastActiveAt: number | null
 }
 
 export interface Settings {
@@ -58,6 +59,7 @@ export function defaultHosts(): Host[] {
       wsPort: DEFAULT_WS_PORT,
       httpPort: DEFAULT_HTTP_PORT,
       token: null,
+      lastActiveAt: null,
     },
     {
       id: 'usb',
@@ -66,6 +68,7 @@ export function defaultHosts(): Host[] {
       wsPort: DEFAULT_WS_PORT,
       httpPort: DEFAULT_HTTP_PORT,
       token: null,
+      lastActiveAt: null,
     },
   ]
 }
@@ -111,6 +114,7 @@ function firstRunSettings(hostname: string): Settings {
       wsPort: DEFAULT_WS_PORT,
       httpPort: DEFAULT_HTTP_PORT,
       token: null,
+      lastActiveAt: null,
     }
     return { hosts: [origin, ...defaultHosts()], activeHostId: 'origin' }
   }
@@ -201,6 +205,16 @@ function sanitizeToken(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null
 }
 
+// SPEC 4.7 (issue #177): "the parser repairs anything that is not a finite
+// number to null, the way it repairs a port" -- NaN and +/-Infinity are
+// `typeof ... === 'number'` but not usable as a timestamp, so they are
+// repaired here rather than let through.
+function sanitizeLastActiveAt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : null
+}
+
 /**
  * Validates one persisted host. SPEC 4.7: "a bad port falls back to its
  * default rather than rejecting the host", so every field that has a
@@ -220,7 +234,8 @@ function parseHost(value: unknown): Host | null {
   const wsPort = sanitizePort(ownField(value, 'wsPort'), DEFAULT_WS_PORT)
   const httpPort = sanitizePort(ownField(value, 'httpPort'), DEFAULT_HTTP_PORT)
   const token = sanitizeToken(ownField(value, 'token'))
-  return { id, label, address, wsPort, httpPort, token }
+  const lastActiveAt = sanitizeLastActiveAt(ownField(value, 'lastActiveAt'))
+  return { id, label, address, wsPort, httpPort, token, lastActiveAt }
 }
 
 /**
@@ -391,7 +406,7 @@ function generateId(): string {
  * persisted for the next load to repair; every other field is sanitized
  * the same way parseHost repairs it.
  */
-export function addHost(host: Omit<Host, 'id'>): Host {
+export function addHost(host: Omit<Host, 'id' | 'lastActiveAt'>): Host {
   if (typeof host.address !== 'string' || !isUsableAddress(host.address)) {
     throw new Error('settings: address must be an IPv4 literal (SPEC 4.7)')
   }
@@ -402,6 +417,7 @@ export function addHost(host: Omit<Host, 'id'>): Host {
     wsPort: sanitizePort(host.wsPort, DEFAULT_WS_PORT),
     httpPort: sanitizePort(host.httpPort, DEFAULT_HTTP_PORT),
     token: sanitizeToken(host.token),
+    lastActiveAt: null,
   }
   settingsWritable.update((current) => {
     const next: Settings = { ...current, hosts: [...current.hosts, created] }
@@ -431,7 +447,10 @@ export function addHost(host: Omit<Host, 'id'>): Host {
  * address, also rewrites companion.token, the key SPEC 4.3.6 pins; the
  * key is written after persisting, in line with removeHost.
  */
-export function updateHost(id: string, patch: Partial<Omit<Host, 'id'>>): void {
+export function updateHost(
+  id: string,
+  patch: Partial<Omit<Host, 'id' | 'lastActiveAt'>>,
+): void {
   settingsWritable.update((current) => {
     const existing = current.hosts.find((host) => host.id === id)
     if (existing === undefined) return current
@@ -462,7 +481,15 @@ export function updateHost(id: string, patch: Partial<Omit<Host, 'id'>>): void {
         ? null
         : existing.token
 
-    const updatedHost: Host = { id, address, label, wsPort, httpPort, token }
+    const updatedHost: Host = {
+      id,
+      address,
+      label,
+      wsPort,
+      httpPort,
+      token,
+      lastActiveAt: existing.lastActiveAt,
+    }
     const hosts = current.hosts.map((host) =>
       host.id === id ? updatedHost : host,
     )
@@ -510,15 +537,46 @@ export function removeHost(id: string): void {
  * companion.token point at a host id that persist never got to save, and
  * nothing would know to fix that up. Unknown ids are a no-op: there is
  * nothing to activate.
+ *
+ * SPEC 4.7 (issue #177): also writes `lastActiveAt` on the host being
+ * activated, in this same update, which is what lets `orderedHosts` derive
+ * quick-connect order without a second record. `now` defaults to `Date.now`
+ * and exists as a seam the way `loadSettings`'s `getHostname` does, because
+ * a test has no way to control the real clock.
  */
-export function activateHost(id: string): void {
+export function activateHost(id: string, now: () => number = Date.now): void {
   settingsWritable.update((current) => {
     const host = current.hosts.find((candidate) => candidate.id === id)
     if (host === undefined) return current
-    const next: Settings = { ...current, activeHostId: id }
+    const activatedHost: Host = { ...host, lastActiveAt: now() }
+    const hosts = current.hosts.map((candidate) =>
+      candidate.id === id ? activatedHost : candidate,
+    )
+    const next: Settings = { ...current, hosts, activeHostId: id }
     persist(next)
-    storeToken(host.token)
+    storeToken(activatedHost.token)
     return next
+  })
+}
+
+/**
+ * SPEC 4.5.2.1/4.7 (issue #177): the order the host list renders in --
+ * hosts with a `lastActiveAt` first, most recent at the top, and hosts
+ * never activated after, in the order they are stored. Pure and derived at
+ * render, never stored itself, so that two activations reorder the list
+ * without a write beyond the one `activateHost` already makes.
+ *
+ * `Array.prototype.toSorted` would do this in one line and is as stable as
+ * `.sort`; `.sort` on a copy is used instead because `toSorted` is ES2023
+ * and the build targets es2022. `hosts` is copied first so the input is
+ * never mutated.
+ */
+export function orderedHosts(hosts: Host[]): Host[] {
+  return [...hosts].sort((a, b) => {
+    if (a.lastActiveAt === null && b.lastActiveAt === null) return 0
+    if (a.lastActiveAt === null) return 1
+    if (b.lastActiveAt === null) return -1
+    return b.lastActiveAt - a.lastActiveAt
   })
 }
 

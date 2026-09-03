@@ -79,8 +79,22 @@ fail quietly.
 
 Every change ships with its tests, and a task is done when they pass.
 
+One command, from a fresh clone (issue #17):
+
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt
+uv run --python 3.13 --with-requirements tests/requirements.txt python -m pytest
+```
+
+[`uv`](https://docs.astral.sh/uv/) fetches that Python once and caches it, along with the
+wheels, so the second run needs no network. 3.13 is the version `ci.yml` pins as primary and
+the one a unit was last observed running (SPEC.md F26, a dated observation, not a claim about
+today); CI also runs the suite on 3.11, the fork's `requires-python` floor (F21), so a local
+pass on 3.13 stands for the unit and CI adds the floor. Run only the files your change touches
+while iterating, `python -m pytest tests/test_x.py --no-cov`, since the full run with branch
+coverage is CI's job. Without `uv`, the long way is the same thing by hand:
+
+```sh
+python3.13 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt
 .venv/bin/python -m pytest
 ```
 

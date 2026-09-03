@@ -13,9 +13,11 @@ without a restart. That is the rule this file spends the most effort on.
 from __future__ import annotations
 
 import http.client
+import re
 import socket
 import threading
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from urllib.parse import urlsplit
 
@@ -26,6 +28,8 @@ from plugin import companion
 INDEX = "<!doctype html><title>companion</title><div id=app></div>"
 
 WS_PORT = 8082
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def parse_csp(header: str) -> dict[str, list[str]]:
@@ -367,3 +371,41 @@ def test_headers_survive_an_unsupported_http_version(server):
     data, status, headers = raw_request(server, b"GET / HTTP/2.0\r\n\r\n")
 
     assert data, "no response arrived at all"
+
+
+# The frontend carries two copies of the policy that are not the plugin's: the header `vite
+# preview` sends so the service worker test has an origin worth replaying, and the value that
+# test expects back (SPEC 2.15.1, issue #91). Neither can import the function, so both are read
+# out of their files here and pinned to what it returns for the case the preview approximates:
+# no bound address and no WSS listener.
+
+
+def _quoted_strings_after(text: str, marker: str) -> str:
+    """Returns the concatenation of every quoted string in the expression that follows
+    `marker`: one literal, or a `"a" + "b"` chain whose every line but the last ends in `+`.
+    Reads the same way in both files, and stops before the next property."""
+    at = text.find(marker)
+    assert at >= 0, f"{marker!r} was not found in the file"
+    lines = text[at + len(marker) :].splitlines()
+    taken: list[str] = []
+    for line in lines:
+        taken.append(line)
+        if line.strip() and not line.rstrip().endswith("+"):
+            break
+    # Double-quoted only: the policy is full of single quotes, and prettier keeps a literal
+    # that contains one in double quotes.
+    return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', "\n".join(taken)))
+
+
+def test_the_preview_header_is_the_plugins_policy_for_no_address():
+    config = (REPO_ROOT / "frontend" / "vite.config.ts").read_text()
+    value = _quoted_strings_after(config, "'Content-Security-Policy':")
+    assert value.startswith("default-src"), "the preview header was not found where expected"
+    assert value == companion.content_security_policy([], None)
+
+
+def test_the_service_worker_spec_expects_the_plugins_policy_for_no_address():
+    spec = (REPO_ROOT / "frontend" / "tests" / "e2e" / "service-worker.spec.ts").read_text()
+    value = _quoted_strings_after(spec, "const EXPECTED_CSP =")
+    assert value.startswith("default-src"), "EXPECTED_CSP was not found where expected"
+    assert value == companion.content_security_policy([], None)

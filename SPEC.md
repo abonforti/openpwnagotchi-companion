@@ -2164,16 +2164,49 @@ page is served on 8443 while the socket listens on 8082. Two consequences, both 
 **The service worker must not be able to serve a page without this header.** After registration
 it answers navigations from the precache, and a `Response` it synthesises rather than replays
 carries no headers at all: that page would run unconstrained on the origin holding the token. The
-navigation fallback must be a precached network response, and a test must assert the header is
-present on a document served by the worker, not only on one served by the plugin. **That test
-does not exist yet** and cannot be written until there is a service worker to register: issue
-#91 carries it.
+navigation fallback must be a precached network response, and a test asserts the header is
+present on a document served by the worker, not only on one served by the plugin (issue #91).
+That test lives in the end-to-end suite (§10.5, `service-worker.spec.ts`), because it needs a
+real worker registered against a real origin, and it holds against one server only: `vite
+preview`, which by default sends no header at all. The preview server therefore sends the three
+headers of this section, with the `Content-Security-Policy` in the shape that
+`content_security_policy()` produces when `connect-src` names `'self'` alone. Two things
+follow.
+A worker that replayed a precached response would carry nothing through if the origin sent
+nothing, so the test would pass for the wrong reason without them. And the whole end-to-end
+suite now runs under the policy the plugin enforces, so a build that violated `script-src` or
+`style-src` fails in CI with a named directive rather than on a unit with no console. Not the
+plugin's own header: the plugin computes `connect-src` from its bound addresses on every
+response and the preview has none, and a second definition of the policy in the frontend is
+tolerable only because it is a fixture and not a source of truth: `tests/test_csp.py` reads the
+string out of the preview configuration and out of the test that expects it, and asserts both
+equal what the plugin's function returns for that case, so a change to the policy that forgets
+the fixture fails in the plugin's own suite rather than leaving the end-to-end run green
+against a stale shape. Whether WebKit could run the test was not stated by Playwright and was
+measured rather than assumed: run in every project once, in Chromium both orientations passed,
+and in WebKit the worker registered and took control and the offline navigation then failed
+inside the engine with `page.goto: WebKit encountered an internal error`, on both attempts,
+before any response existed to ask. Playwright's WebKit context applies offline to the page and
+not to the worker, so the step that makes the assertion load-bearing is the step that engine
+cannot take. The test skips in WebKit with that measurement as its stated reason; the positive
+control runs there.
 
 **`script-src 'self'` holds against today's build output, which is a property of the
 configuration and not of the tools.** `vite-plugin-pwa` with `injectRegister: 'auto'` emits an
-external `registerSW.js` today and could emit an inline one tomorrow. The setting is pinned, and
-the build asserts that no HTML file it emits carries an inline `<script>`, because the alternative
-is a policy that breaks the first time somebody changes a build option.
+external `registerSW.js` today and could emit an inline one tomorrow. The setting is pinned to
+`'script'`, the external form `'auto'` resolves to today, and the build asserts that no HTML
+file it emits carries an inline `<script>`, because the alternative is a policy that breaks the
+first time somebody changes a build option. This section said the setting was pinned for some
+time before it was (issue #91): the sentence was written with the assertion in mind and the
+assertion would have caught the regression, but a claim about configuration is checked by
+reading the configuration. Pinning it was not the one-word change it looked like. `'auto'` did
+a second thing that `index.html` does not show: with `registerType: 'autoUpdate'` the plugin
+also set `skipWaiting` and `clientsClaim` on the worker, and only while the raw value was
+`'auto'`. A build with `'script'` alone emitted an identical `index.html` and a worker that
+would have sat in `waiting` until every tab of the origin closed, which on a home-screen app is
+the stale shell `autoUpdate` exists to prevent. Both flags are now set by name in the workbox
+configuration, and the proof of the pin is that `sw.js`, not only `index.html`, is identical
+before and after.
 
 **The assertion now exists** (issue #141), and what it would have cost to keep deferring it is
 worth recording, because the answer is not "an outage". Two CSP violations in a browser console
@@ -7605,6 +7638,19 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   neither sniffs its way out of a missing declaration under this harness. The fourth criterion of issue #39, the pwnagotchi face
   rendering identically in both engines, is not here: no view renders one yet, and the file says
   so rather than letting the gap pass for covered.
+- `service-worker.spec.ts` (§2.15.1, issue #91): the three headers of that section are present
+  on a document served **by the worker**, not only by the server. A first navigation, served by
+  the preview server, carries them, which is the positive control: a header the origin never
+  sent cannot be missing from a replay. After `navigator.serviceWorker.ready` and one reload,
+  with `navigator.serviceWorker.controller` asserted non-null and the context set offline, a
+  deep link that resolves to no file is served by the worker's navigation fallback, and that
+  response is asserted to have come from the worker and to carry all three headers unchanged.
+  Offline is what makes the replay the only possible source: a fallback that fetched on a miss
+  would also come from the worker and also carry the headers. A fallback rewritten as a
+  synthesised `Response` fails the header assertion; a worker that never took control fails
+  the one before it. The positive control runs in every project; the worker test runs in
+  Chromium and skips in WebKit, citing the measurement §2.15.1 records: the offline navigation
+  fails inside that engine before the worker can answer it.
 - **Screenshot baselines are not committed.** They are platform-specific, CI runs amd64 and the
   review host is arm64, so a shared baseline fails on font rendering alone and a gate nobody
   trusts is worse than no gate. Screenshots are uploaded as workflow artifacts for human review

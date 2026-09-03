@@ -15,7 +15,14 @@ export default defineConfig({
 
       // index.html already carries the manifest link and the apple-* meta tags,
       // because iOS reads those tags and not only the manifest (SPEC 4.2).
-      injectRegister: 'auto',
+      // Pinned to the external form 'auto' resolves to today: the CSP has no
+      // 'unsafe-inline' in script-src, so an upstream default change to an
+      // inline registration script would break silently otherwise (SPEC
+      // 2.15.1, issue #91). 'auto' did a second thing as well, invisible in
+      // index.html: with registerType 'autoUpdate' it also turned on
+      // skipWaiting and clientsClaim in the worker. Those are set explicitly
+      // in the workbox block below, so this file states both effects.
+      injectRegister: 'script',
       manifest: false,
       includeAssets: ['icons/*.png', 'manifest.webmanifest'],
 
@@ -27,6 +34,13 @@ export default defineConfig({
         // A deep link that resolves to no file must serve index.html, the same
         // rule the plugin's static server follows (SPEC 2.15).
         navigateFallback: '/index.html',
+
+        // What 'autoUpdate' means at the worker: a new worker activates
+        // without waiting for every tab of the origin to close, and takes
+        // the open ones. vite-plugin-pwa sets both only while injectRegister
+        // is 'auto', so they are named here rather than inherited.
+        skipWaiting: true,
+        clientsClaim: true,
       },
 
       devOptions: {
@@ -51,5 +65,24 @@ export default defineConfig({
     // reaches the tether. Use `npm run dev:lan` when the phone genuinely needs
     // to reach it, so exposing it is a decision rather than a default.
     host: 'localhost',
+  },
+
+  preview: {
+    // `vite preview` sends none of the plugin's headers by default, and the
+    // service worker test needs an origin that does: the whole point of
+    // service-worker.spec.ts is to show the header survives a response the
+    // worker replays from the precache, not one it synthesises (SPEC
+    // 2.15.1, issue #91). As a side effect the whole end-to-end suite now
+    // runs under the policy the plugin enforces. This is a fixture, not a
+    // second source of truth: the value below is copied from
+    // content_security_policy([], None) in plugin/companion.py, which is
+    // what the preview server actually approximates (no bound addresses,
+    // no WSS listener), and tests/test_csp.py pins the copy to the function.
+    headers: {
+      'Content-Security-Policy':
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+    },
   },
 })

@@ -14,10 +14,16 @@ import { expect, test } from '@playwright/test'
  * exact check available here, not a paraphrase of it.
  *
  * Playwright documents `fromServiceWorker()` only as "fulfilled by a Service
- * Worker's Fetch Handler", with no word on which engines answer it. Whether
- * WebKit does is measured here rather than assumed: the test runs in every
- * project, and a WebKit run that fails on that line alone is the evidence a
- * skip would need (SPEC 10.5).
+ * Worker's Fetch Handler", with no word on which engines answer it, so the
+ * second test was first run in every project. Measured in CI (Playwright
+ * 1.62.1, both WebKit projects, both attempts): the worker registers and
+ * takes control, and the offline navigation then fails inside the engine
+ * with "page.goto: WebKit encountered an internal error" before any
+ * response exists to ask. Playwright's WebKit context applies offline to
+ * the page and not to the worker, so the step that makes the assertion
+ * load-bearing is also the step that engine cannot take. The second test
+ * therefore skips in WebKit with that measurement as its reason, and the
+ * positive control still runs there (SPEC 10.5).
  *
  * Every test below gets Playwright's default fresh browser context, which
  * matters here specifically: the worker's precache is per origin and per
@@ -62,7 +68,15 @@ test('positive control: the first navigation, served by the preview server, carr
 
 test('a deep link with no matching file is served by the worker and still carries all three headers', async ({
   page,
-}) => {
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name.startsWith('webkit'),
+    'Measured in CI: WebKit fails the offline navigation with "page.goto: ' +
+      'WebKit encountered an internal error" before the worker can answer ' +
+      'it, because Playwright applies offline to the page there and not to ' +
+      'the worker. See the file comment.',
+  )
+
   await page.goto('/')
 
   // A first-load page is not controlled by a worker that only just
@@ -81,10 +95,8 @@ test('a deep link with no matching file is served by the worker and still carrie
   // Offline, so the only way the worker can answer is from its precache: a
   // fallback that reached for the network on a miss would also report
   // fromServiceWorker() and also carry the headers, and would pass here for
-  // the wrong reason with the network up. Load-bearing in Chromium only:
-  // Playwright's Chromium context applies offline to the worker as well as
-  // to the pages, its WebKit context to the pages alone, so there the
-  // worker's own fetches stay online and this line closes nothing.
+  // the wrong reason with the network up. Chromium only, by measurement:
+  // see the file comment for what WebKit does with this navigation.
   await page.context().setOffline(true)
 
   const response = await page.goto('/nowhere/deep/link')

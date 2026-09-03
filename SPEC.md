@@ -2182,9 +2182,14 @@ tolerable only because it is a fixture and not a source of truth: `tests/test_cs
 string out of the preview configuration and out of the test that expects it, and asserts both
 equal what the plugin's function returns for that case, so a change to the policy that forgets
 the fixture fails in the plugin's own suite rather than leaving the end-to-end run green
-against a stale shape. Whether WebKit answers the question the test asks, that a response was
-fulfilled by a worker, is not stated by Playwright and is measured by running the test in every
-project rather than assumed.
+against a stale shape. Whether WebKit could run the test was not stated by Playwright and was
+measured rather than assumed: run in every project once, in Chromium both orientations passed,
+and in WebKit the worker registered and took control and the offline navigation then failed
+inside the engine with `page.goto: WebKit encountered an internal error`, on both attempts,
+before any response existed to ask. Playwright's WebKit context applies offline to the page and
+not to the worker, so the step that makes the assertion load-bearing is the step that engine
+cannot take. The test skips in WebKit with that measurement as its stated reason; the positive
+control runs there.
 
 **`script-src 'self'` holds against today's build output, which is a property of the
 configuration and not of the tools.** `vite-plugin-pwa` with `injectRegister: 'auto'` emits an
@@ -7643,9 +7648,9 @@ fixing them. Those checks are worth more as a gate than as a discarded prototype
   Offline is what makes the replay the only possible source: a fallback that fetched on a miss
   would also come from the worker and also carry the headers. A fallback rewritten as a
   synthesised `Response` fails the header assertion; a worker that never took control fails
-  the one before it. It runs in every project: Playwright's documentation of
-  `fromServiceWorker()` names no engine, so whether WebKit answers it is measured by the run,
-  and a skip, if one is ever needed, will cite that measurement.
+  the one before it. The positive control runs in every project; the worker test runs in
+  Chromium and skips in WebKit, citing the measurement §2.15.1 records: the offline navigation
+  fails inside that engine before the worker can answer it.
 - **Screenshot baselines are not committed.** They are platform-specific, CI runs amd64 and the
   review host is arm64, so a shared baseline fails on font rendering alone and a gate nobody
   trusts is worse than no gate. Screenshots are uploaded as workflow artifacts for human review

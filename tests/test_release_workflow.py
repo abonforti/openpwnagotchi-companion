@@ -242,6 +242,32 @@ def _is_download_artifact_step(step):
     return "download-artifact" in _uses_of(step).lower()
 
 
+def _is_upload_artifact_step_named(step, name):
+    """`upload-artifact`, narrowed to one `with.name` - needed once
+    `release.yml` gained a second upload/download pair (`release-notes`,
+    alongside `release-dist`): a bare `_find_step_index(steps,
+    _is_upload_artifact_step)` then returns whichever pair happens to come
+    first in the YAML, silently, rather than the one a test actually means.
+    """
+    return _is_upload_artifact_step(step) and (step.get("with") or {}).get("name") == name
+
+
+def _is_download_artifact_step_named(step, name):
+    return _is_download_artifact_step(step) and (step.get("with") or {}).get("name") == name
+
+
+def _flag_value(script, flag):
+    """The token following `flag` in a shell `run:` script, e.g.
+    `_flag_value("... --output notes.md", "--output")` -> `"notes.md"`.
+    `None` when `flag` does not appear at all. Stops at a closing `)` as well
+    as whitespace, since the publish step's `--notes-file` sits inside a
+    bash array literal (`args=(--title "$tag" --notes-file notes.md)`) with
+    no space before the array's own closing paren.
+    """
+    match = re.search(re.escape(flag) + r"\s+([^\s)]+)", script)
+    return match.group(1) if match else None
+
+
 def _is_publish_step(step):
     uses = _uses_of(step).lower()
     script = _script_of(step)
@@ -529,17 +555,28 @@ def test_publish_job_needs_the_build_job():
 
 
 def test_upload_and_download_artifact_names_match():
+    """Named explicitly as `release-dist`: `release.yml` carries a second
+    upload/download pair for `release-notes` (SPEC 5.2, issue #179), so a
+    bare "find the first upload-artifact step" would silently pick whichever
+    pair the YAML happens to list first rather than proving this specific
+    pair agrees. The `release-notes` pair has its own dedicated test,
+    `test_release_notes_output_filename_reaches_the_publish_step`.
+    """
     workflow = _require_release_workflow()
     steps = _linearize_steps(workflow)
-    upload_index = _find_step_index(steps, _is_upload_artifact_step)
-    download_index = _find_step_index(steps, _is_download_artifact_step)
-    assert upload_index is not None, "no actions/upload-artifact step found"
-    assert download_index is not None, "no actions/download-artifact step found"
+    upload_index = _find_step_index(
+        steps, lambda s: _is_upload_artifact_step_named(s, "release-dist")
+    )
+    download_index = _find_step_index(
+        steps, lambda s: _is_download_artifact_step_named(s, "release-dist")
+    )
+    assert upload_index is not None, "no actions/upload-artifact step named 'release-dist' found"
+    assert download_index is not None, (
+        "no actions/download-artifact step named 'release-dist' found"
+    )
     upload_name = (steps[upload_index].get("with") or {}).get("name")
     download_name = (steps[download_index].get("with") or {}).get("name")
-    assert upload_name, "the upload-artifact step has no with.name"
-    assert download_name, "the download-artifact step has no with.name"
-    assert upload_name == download_name, (
+    assert upload_name == download_name == "release-dist", (
         f"upload-artifact's name ({upload_name!r}) does not match "
         f"download-artifact's name ({download_name!r}); the publish job "
         f"would download nothing, on a real tag, from a runner nothing here "
@@ -560,8 +597,10 @@ def test_upload_artifact_path_contains_both_release_assets():
     """
     workflow = _require_release_workflow()
     steps = _linearize_steps(workflow)
-    upload_index = _find_step_index(steps, _is_upload_artifact_step)
-    assert upload_index is not None, "no actions/upload-artifact step found"
+    upload_index = _find_step_index(
+        steps, lambda s: _is_upload_artifact_step_named(s, "release-dist")
+    )
+    assert upload_index is not None, "no actions/upload-artifact step named 'release-dist' found"
     path_value = (steps[upload_index].get("with") or {}).get("path") or ""
     uploaded_names = {line.strip() for line in path_value.splitlines() if line.strip()}
     assert "dist.tgz" in uploaded_names, (
@@ -591,9 +630,11 @@ def test_upload_artifact_path_matches_what_the_publish_step_actually_creates_the
     """
     workflow = _require_release_workflow()
     steps = _linearize_steps(workflow)
-    upload_index = _find_step_index(steps, _is_upload_artifact_step)
+    upload_index = _find_step_index(
+        steps, lambda s: _is_upload_artifact_step_named(s, "release-dist")
+    )
     publish_index = _find_step_index(steps, _is_publish_step)
-    assert upload_index is not None, "no actions/upload-artifact step found"
+    assert upload_index is not None, "no actions/upload-artifact step named 'release-dist' found"
     assert publish_index is not None, "no release-publish step found"
     path_value = (steps[upload_index].get("with") or {}).get("path") or ""
     uploaded_names = {line.strip() for line in path_value.splitlines() if line.strip()}
@@ -617,10 +658,16 @@ def test_upload_artifact_path_matches_what_the_publish_step_actually_creates_the
 def test_upload_artifact_step_precedes_download_artifact_step():
     workflow = _require_release_workflow()
     steps = _linearize_steps(workflow)
-    upload_index = _find_step_index(steps, _is_upload_artifact_step)
-    download_index = _find_step_index(steps, _is_download_artifact_step)
-    assert upload_index is not None, "no actions/upload-artifact step found"
-    assert download_index is not None, "no actions/download-artifact step found"
+    upload_index = _find_step_index(
+        steps, lambda s: _is_upload_artifact_step_named(s, "release-dist")
+    )
+    download_index = _find_step_index(
+        steps, lambda s: _is_download_artifact_step_named(s, "release-dist")
+    )
+    assert upload_index is not None, "no actions/upload-artifact step named 'release-dist' found"
+    assert download_index is not None, (
+        "no actions/download-artifact step named 'release-dist' found"
+    )
     assert upload_index < download_index, (
         f"upload-artifact (index {upload_index}) must run before "
         f"download-artifact (index {download_index})"
@@ -2386,3 +2433,170 @@ def test_archive_extracts_index_html_directly_into_the_target_directory(tmp_path
         f"expected index.html directly under {web_root}, got: {installed_names}"
     )
     assert (web_root / "assets" / "app.js").is_file()
+
+
+# ---------------------------------------------------------------------------
+# The Release body is CHANGELOG.md's own entry for the tag (SPEC 5.2, issue
+# #179), not --generate-notes's list of merged pull request titles. Two
+# things pinned here: `release_notes.py` actually runs, with the tag, and
+# its output actually reaches the publish step as --notes-file rather than
+# --generate-notes ever appearing on the real `gh release create` argv.
+# `release_notes.py`'s own extraction rules (the missing/empty-section and
+# Unreleased-with-entries refusals) are `tests/tools/test_release_notes.py`'s,
+# not this module's - this module only checks that the workflow wires the
+# script in and consumes its output the way SPEC 5.2 says.
+# ---------------------------------------------------------------------------
+
+
+def _is_release_notes_step(step):
+    return "release_notes.py" in _script_of(step)
+
+
+def test_release_notes_step_exists_and_names_the_tag():
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    index = _find_step_index(steps, _is_release_notes_step)
+    assert index is not None, "no step running release_notes.py found"
+    script = _script_of(steps[index])
+    assert "GITHUB_REF_NAME" in script, (
+        f"expected the release_notes.py step to pass the pushed tag "
+        f"($GITHUB_REF_NAME), got script={script!r}"
+    )
+
+
+def test_release_notes_step_runs_in_the_checks_job():
+    """SPEC 5.2 (rewritten, issue #179): 'The extraction is
+    .github/release_notes.py, run in the checks job before anything is
+    built, so a tag with nothing to say costs no build minutes and never
+    touches the job that runs third-party lifecycle scripts.' Pinned
+    against the job that holds the ancestor check (`_is_ancestor_check`),
+    the same way the rest of this module already identifies the checks job,
+    rather than by the job's YAML key, which is not part of the contract.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    notes_index = _find_step_index(steps, _is_release_notes_step)
+    checks_index = _find_step_index(steps, _is_ancestor_check)
+    assert notes_index is not None, "no step running release_notes.py found"
+    assert checks_index is not None, "no ancestor-check step found to identify the checks job"
+    notes_job_key = _job_key_of(steps, notes_index)
+    checks_job_key = _job_key_of(steps, checks_index)
+    assert notes_job_key == checks_job_key, (
+        f"expected release_notes.py to run in the checks job (SPEC 5.2: "
+        f"'before anything is built ... never touches the job that runs "
+        f"third-party lifecycle scripts'); got job {notes_job_key!r}, checks "
+        f"job is {checks_job_key!r}"
+    )
+
+
+def test_release_notes_output_filename_reaches_the_publish_step():
+    """Stronger than name-intersection: the two upload-artifact/
+    download-artifact pairs in this workflow (`release-dist`,
+    `release-notes`) both satisfy 'some upload name matches some download
+    name' even if the `release-notes` pair were deleted outright, since
+    `release-dist` alone already supplies a shared name. Pinned instead as a
+    single chain of equal filenames: the literal path release_notes.py's
+    own `--output` flag names, the `release-notes` upload-artifact step's
+    `path:`, and the publish step's own `--notes-file` argument must all be
+    the same string - deleting the `release-notes` upload step, or any other
+    break in that chain, fails this test directly rather than passing on the
+    strength of the unrelated `release-dist` pair.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    notes_index = _find_step_index(steps, _is_release_notes_step)
+    publish_index = _find_step_index(steps, _is_publish_step)
+    assert notes_index is not None, "no step running release_notes.py found"
+    assert publish_index is not None, "no release-publish step found"
+
+    notes_script = _script_of(steps[notes_index])
+    output_filename = _flag_value(notes_script, "--output")
+    assert output_filename, (
+        f"expected the release_notes.py step to pass --output <FILENAME>, got "
+        f"script={notes_script!r}"
+    )
+
+    upload_index = _find_step_index(
+        steps, lambda s: _is_upload_artifact_step_named(s, "release-notes")
+    )
+    assert upload_index is not None, (
+        "no actions/upload-artifact step named 'release-notes' found; the "
+        "extracted notes never leave the job that produced them"
+    )
+    upload_path = (steps[upload_index].get("with") or {}).get("path") or ""
+    uploaded_names = {line.strip() for line in upload_path.splitlines() if line.strip()}
+    assert output_filename in uploaded_names, (
+        f"the release_notes.py step writes {output_filename!r}, but the "
+        f"'release-notes' upload-artifact step's path: names {uploaded_names!r}; "
+        f"the file actually written is not the one carried across the job "
+        f"boundary"
+    )
+
+    publish_job_key = _job_key_of(steps, publish_index)
+    download_index = _find_step_index(
+        steps,
+        lambda s: _is_download_artifact_step_named(s, "release-notes")
+        and s["_job_key"] == publish_job_key,
+    )
+    assert download_index is not None, (
+        "no actions/download-artifact step named 'release-notes' in the "
+        "publish job; the publish step has nothing to read --notes-file from"
+    )
+
+    publish_script = _script_of(steps[publish_index])
+    notes_file_value = _flag_value(publish_script, "--notes-file")
+    assert notes_file_value == output_filename, (
+        f"the publish step reads --notes-file {notes_file_value!r}, but "
+        f"release_notes.py wrote {output_filename!r}; gh release create would "
+        f"either fail to find the file or publish a stale one"
+    )
+
+
+def test_publish_step_script_uses_notes_file_not_generate_notes():
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    publish_index = _find_step_index(steps, _is_publish_step)
+    assert publish_index is not None, "no release-publish step found"
+    script = _script_of(steps[publish_index])
+    assert "--notes-file" in script, (
+        f"expected gh release create to be called with --notes-file, got "
+        f"script={script!r}"
+    )
+    assert "--generate-notes" not in script, (
+        f"expected gh release create not to use --generate-notes: SPEC 5.2/"
+        f"issue #179 requires the Release body to be CHANGELOG.md's own entry, "
+        f"not gh's own list of merged pull request titles; got script={script!r}"
+    )
+
+
+def test_publish_step_real_invocation_of_gh_uses_notes_file_not_generate_notes(tmp_path):
+    """The behavioural half of the test above: the real extracted publish
+    step, run with a stub `gh` recording its own argv - the same mechanism
+    `test_publish_step_includes_prerelease_flag_only_when_prerelease_is_true`
+    already uses - so this is about what `gh release create` actually gets
+    called with, not about a regex over the step's script text.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    publish_index = _find_step_index(steps, _is_publish_step)
+    assert publish_index is not None, "no release-publish step found"
+    step = steps[publish_index]
+
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    marker = tmp_path / "gh-argv"
+    _write_gh_argv_recording_stub(stub_dir, marker)
+
+    argv = _run_publish_step_and_capture_argv(step, tmp_path, stub_dir, marker, prerelease="false")
+
+    assert "--generate-notes" not in argv, (
+        f"expected no --generate-notes in the real gh release create invocation, "
+        f"got {argv!r}"
+    )
+    assert "--notes-file" in argv, (
+        f"expected --notes-file in the real gh release create invocation, got {argv!r}"
+    )
+    index = argv.index("--notes-file")
+    assert index + 1 < len(argv) and argv[index + 1] == "notes.md", (
+        f"expected --notes-file to be followed by notes.md, got {argv!r}"
+    )

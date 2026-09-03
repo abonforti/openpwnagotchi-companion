@@ -87,6 +87,7 @@ openpwnagotchi-companion/
 │   ├── check_schemas.py              # JSON Schema validity and framing invariants (§5.1)
 │   ├── check_secrets.py              # generic credential scan (§5.1)
 │   ├── check_shipped_files.py        # what ships, and nothing else (§13.2)
+│   ├── release_notes.py              # the tag's CHANGELOG section as the Release body (§5.2)
 │   ├── CODEOWNERS
 │   ├── coverage-baseline.json        # the recorded figures the ratchet compares against
 │   ├── dependabot.yml
@@ -185,7 +186,8 @@ openpwnagotchi-companion/
 │   │   ├── test_check_release_version.py
 │   │   ├── test_gen_protocol_types.py
 │   │   ├── test_install.py
-│   │   └── test_pinned_facts.py
+│   │   ├── test_pinned_facts.py
+│   │   └── test_release_notes.py
 │   └── ...
 ├── tools/
 │   ├── gen-ca.sh                     # create a private CA (idempotent)
@@ -6958,7 +6960,31 @@ reports a version other than its own tag is a support question nobody can answer
 one number, the Release page says another, and `capabilities.pluginVersion` puts the first one on
 the wire.
 
-**What the coverage gate does not see.** `.github/check_release_version.py` sits outside
+**The Release body is the changelog's own entry for that version (issue #179).**
+`--generate-notes` builds a body from pull request titles, which is a list of what was merged
+and not what an owner deciding whether to update needs to read. `CHANGELOG.md` is maintained
+for exactly that reader (§12), so cutting a release means turning `## [Unreleased]` into `##
+[X.Y.Z] - YYYY-MM-DD` in the commit the tag points at, and the workflow extracts that section,
+headings and all, into the Release body with `--notes-file`. The heading carries the tag's
+version verbatim: a pre-release tag `v0.3.0-rc1` wants `## [0.3.0-rc1] - YYYY-MM-DD`, and the
+rc sections stay in the file as history when `0.3.0` follows, which is what Keep a Changelog's
+own version strings allow. A `[YANKED]` mark after the date is accepted, since the format
+sanctions it; a heading with no date is refused by a message that says the date is missing, not
+that the section is. The extraction is `.github/release_notes.py`, run in the `checks` job
+before anything is built, so a tag with nothing to say costs no build minutes and never touches
+the job that runs third-party lifecycle scripts; its output travels to the publish job as an
+artifact of its own. The script is tested against fixture changelogs rather than the real one,
+so the test does not change every release, and its section walk is exercised in-process as well
+as through the exit status. A tag whose section is missing, or present with no entry under it,
+fails the release there: a tag with nothing recorded against it is either a mistake or a
+release nobody can describe, and either way it is not one to publish. `Unreleased` itself is
+never the body: a section by that name at tag time with entries under it means the rename did
+not happen, and the same refusal names it. A tag outside the grammar exits the way
+`check_release_version.py` exits for one, since the two run against the same tag in the same
+job.
+
+**What the coverage gate does not see.** `.github/check_release_version.py` and
+`.github/release_notes.py` sit outside
 `--cov=plugin`, as `check_pinned_facts.py` and `check_coverage.py` do, so the 85% floor says
 nothing about it. The argument for extracting it was that the part which computes goes where a test
 can reach it, and that is what happened - the gate that watches it is `tests/tools/test_check_release_version.py`,

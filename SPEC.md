@@ -6911,13 +6911,18 @@ a commit.
 branch that never opened a pull request, and the ruleset that guards `master` says nothing about
 tags. The job fails, loudly, naming the commit.
 
-**What that check is, and what it is not.** It catches mistagging - a tag on the wrong commit, a
-tag on a branch that was never merged - which is the case that actually happens. It is **not** a
-guarantee that everything published passed review, and the sentence that said so was wrong: GitHub
-loads the workflow from the tagged ref, so a tag pushed to a commit whose `release.yml` has no
-ancestry step runs no ancestry step. A workflow cannot bind a tag that carries its own copy of it.
-The guarantee needs a tag protection ruleset, which lives in repository settings where nothing here
-can assert it, and that is issue #181.
+**What that check is, and what it is not.** It catches mistagging - a tag on the wrong commit,
+a tag on a branch that was never merged - which is the case that actually happens. It is
+**not** a guarantee that everything published passed review, and the sentence that said so was
+wrong: GitHub loads the workflow from the tagged ref, so a tag pushed to a commit whose
+`release.yml` has no ancestry step runs no ancestry step. A workflow cannot bind a tag that
+carries its own copy of it. The guarantee comes from outside the repository (issue #181): a
+**tag ruleset on `refs/tags/v*`** beside the `master` ruleset, active, with creation, update
+and deletion restricted so that only the repository owner can push, move or remove a release
+tag, and signed commits required on the tagged commit. Nothing in the tree can assert a
+ruleset, which is why the issue carries the read-back of the API as its evidence, the way
+#164's did. `tests/test_release_workflow.py` keeps asserting the half that lives here, the
+ancestry step and its permissions, and says in place that the other half is the ruleset.
 
 **The check fails closed, and says which failure it was.** `git merge-base --is-ancestor` exits 1
 for "not an ancestor" and 128 for a question it could not answer - an unresolvable `origin/master`,

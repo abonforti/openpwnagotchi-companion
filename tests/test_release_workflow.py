@@ -191,6 +191,11 @@ def _find_step_index(steps, predicate):
 
 
 def _is_ancestor_check(step):
+    # The step this finds is the half of the release guarantee that lives in
+    # the tree. The other half, that only the owner can push a v* tag at all,
+    # is a tag ruleset in repository settings (SPEC 5.2, issue #181), which no
+    # test here can see: a tag carrying its own release.yml runs whatever that
+    # copy says, so the workflow cannot be the thing that binds the tag.
     script = _script_of(step)
     return "merge-base" in script and "is-ancestor" in script
 

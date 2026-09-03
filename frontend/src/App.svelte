@@ -13,8 +13,10 @@
 <script lang="ts">
   import { onMount, type Component } from 'svelte'
 
+  import { formatConnectionState } from './lib/format'
   import { currentRoute, routes, startRouter, type ViewId } from './lib/router'
   import { startSession } from './lib/session'
+  import { connection, unitName } from './lib/stores'
   import MoreSheet, { inertWhen } from './shell/MoreSheet.svelte'
   import Nav, { type NavLayout } from './shell/Nav.svelte'
   import Dashboard from './views/Dashboard.svelte'
@@ -97,14 +99,27 @@
      dialog. The sheet's own Tab trap stays as the keyboard half of this. -->
 <div class="shell" data-layout={layout}>
   <!-- One line in both layouts; in the rail range it only moves inboard of the
-       rail, which is all the collapse SPEC 4.5 asks of it. Unit name and
-       connection state land here once the stores exist. -->
+       rail, which is all the collapse SPEC 4.5 asks of it. Holds exactly two
+       things, in both orientations: which unit the app is talking to, and
+       whether it is (SPEC 4.5.1.2). -->
   <!-- data-region="header", the counterpart of data-region="views" below: with
        both declared, a test can check that the header, the views area and the
        navigation account for the whole shell, instead of inferring the header
        from where the views area happens to start. -->
   <header class="app-header" data-region="header" use:inertWhen={sheetOpen}>
-    <span class="app-title">companion</span>
+    <!-- SPEC 4.5.3: stats.name is a remote string, isolated in a <bdi> like
+         any other so a bidi override in it cannot reorder the connection
+         state beside it. $unitName itself is never a composed string --
+         it is either wholly local (a label, an address) or wholly remote
+         (stats.name) -- so wrapping the whole span is safe either way. -->
+    <span class="app-title" data-field="unitName"
+      ><bdi>{$unitName ?? 'companion'}</bdi></span
+    >
+    {#if $unitName !== null}
+      <span class="connection-state" data-field="connectionState"
+        >{formatConnectionState($connection.state)}</span
+      >
+    {/if}
   </header>
 
   <!-- data-region="views" is a declared DOM hook, like data-view, data-nav,
@@ -171,7 +186,8 @@
     inset: 0 0 auto 0;
     z-index: 10;
     display: flex;
-    align-items: center;
+    align-items: baseline;
+    gap: 0.5rem;
     height: calc(var(--header-height) + var(--safe-top));
     padding-top: var(--safe-top);
     padding-inline: max(1rem, var(--safe-left)) max(1rem, var(--safe-right));
@@ -179,10 +195,25 @@
     border-bottom: 1px solid var(--border);
   }
 
+  /* min-width: 0 lets a flex child shrink below its content size, which is
+     what makes the ellipsis below take effect instead of pushing the
+     connection state out of the header -- a long unit name is the one
+     input that could otherwise wrap this line to two, which SPEC 4.5.1.2
+     never allows. */
   .app-title {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: 0.9375rem;
     font-weight: 600;
     letter-spacing: -0.01em;
+  }
+
+  .connection-state {
+    flex-shrink: 0;
+    font-size: 0.8125rem;
+    color: var(--text-dim);
   }
 
   /* The scroll container. The shell itself cannot scroll: the header and the

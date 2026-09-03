@@ -658,9 +658,11 @@ def test_an_unbindable_address_is_retried_and_never_substituted(
     bind_recorder.assert_no_wildcard()
 
 
-# The nine seams of SPEC 10.7, in the order conftest injects them. A `Deps` is
+# The nine seams of SPEC 10.7 that conftest injects, in its order. A `Deps` is
 # built by constructor injection - SPEC 10.7 forbids monkeypatching module
-# internals - so replacing one seam means naming the other eight.
+# internals - so replacing one seam means naming the other eight. `Deps` has a
+# tenth, `unit_name`, left at its default on purpose: the pwnagotchi stub
+# answers it, and tests/test_stats.py drives it through that stub.
 DEPS_SEAMS = (
     "now",
     "restart_pwnagotchi",

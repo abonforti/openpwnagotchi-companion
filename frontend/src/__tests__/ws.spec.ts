@@ -72,6 +72,7 @@ function defaultCapabilities(): Capabilities {
 function defaultStats(): Stats {
   return {
     uptime: 120,
+    name: null,
     mode: 'AUTO',
     channel: 6,
     battery: defaultBattery(),

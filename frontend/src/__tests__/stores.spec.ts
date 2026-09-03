@@ -103,6 +103,7 @@ function gpsReading(overrides: Partial<Gps> = {}): Gps {
 function statsData(overrides: Partial<Stats> = {}): Stats {
   return {
     uptime: 120,
+    name: null,
     mode: 'AUTO',
     channel: 6,
     battery: battery(),

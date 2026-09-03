@@ -5,6 +5,7 @@ Pinned by SPEC.md section 11:
     F1  pwnagotchi.uptime()                  -> int seconds
     F2  pwnagotchi.temperature(celsius=True)  -> int celsius
     F9  pwnagotchi.shutdown(), pwnagotchi.reboot(mode=None), pwnagotchi.restart(mode)
+    F33 pwnagotchi.name()                    -> str, /etc/hostname
 
 Nothing else exists here, deliberately. The underscore-prefixed names are test scaffolding.
 """
@@ -22,13 +23,19 @@ _CALLS: list[tuple[str, tuple, dict]] = []
 _UPTIME = 3600
 _TEMPERATURE = 42
 
+#: What name() returns. `None` means "raise", standing in for /etc/hostname
+#: being unreadable; an empty string is a distinct, non-raising case (a
+#: blank hostname file).
+_NAME: str | None = "pwnagotchi"
+
 
 def _reset() -> None:
     """Clears the recorded calls and restores the default readings."""
-    global _UPTIME, _TEMPERATURE
+    global _UPTIME, _TEMPERATURE, _NAME
     _CALLS.clear()
     _UPTIME = 3600
     _TEMPERATURE = 42
+    _NAME = "pwnagotchi"
 
 
 def _record(name: str, *args: Any, **kwargs: Any) -> None:
@@ -52,6 +59,19 @@ def temperature(celsius: bool = True) -> int:
     """F2: SoC temperature in degrees celsius."""
     _record("temperature", celsius)
     return _TEMPERATURE
+
+
+def name() -> str:
+    """F33: /etc/hostname, read once and cached for the life of the process.
+
+    Raises when `_NAME` is `None`, standing in for the file not being there
+    or not readable - the two "no name" cases the plugin must not tell apart
+    (SPEC 2.6).
+    """
+    _record("name")
+    if _NAME is None:
+        raise OSError("could not read /etc/hostname")
+    return _NAME
 
 
 def restart(mode: str) -> None:

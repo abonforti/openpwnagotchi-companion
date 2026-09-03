@@ -7,9 +7,11 @@ import {
   currentView,
   expectedLayout,
   gotoView,
+  header,
   nav,
   orientationOf,
   rectOf,
+  seedActiveHost,
   shell,
   viewportOf,
   viewsContentBox,
@@ -311,6 +313,52 @@ test.describe('the navigation takes the form its orientation requires', () => {
       'a desktop engine is expected to report a zero leading inset',
     ).toBe(0)
     expect(navRect.width - insets.left).toBeCloseTo(72, 0)
+  })
+})
+
+test.describe('the header collapses to one line in the rail range (SPEC 4.5.1.2)', () => {
+  test('both header fields stay visible and the header does not wrap', async ({
+    page,
+  }, testInfo) => {
+    const orientation = orientationOf(testInfo)
+    test.skip(
+      orientation !== 'landscape',
+      'the rail range, and the header rule tied to it, apply only in landscape',
+    )
+
+    // A host is seeded so the header has a unit to name: SPEC 4.5.1.2 says
+    // the header shows "companion" and no connection state with none
+    // active, which is a single short word and would pass this test
+    // vacuously. Seeding a host is what makes both fields - the name and
+    // the connection state - actually present to measure, the same
+    // "which unit, and whether it is" pair the rail is required to keep.
+    await seedActiveHost(page)
+    await gotoView(page, 'dashboard')
+
+    const headerRect = await rectOf(header(page))
+    const overflow = await header(page).evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    }))
+
+    // "One line tall": the header's own scroll box never exceeds what is
+    // visible, i.e. its content never wraps into a second line the header
+    // then clips. SPEC 4.5.1 ties the rail's whole existence to this
+    // collapse ("landscape... keeps both" - see the paragraph above); no
+    // pixel height is pinned anywhere, so this is the layout-agnostic form
+    // of that statement rather than a guess at a specific line-height.
+    expect(
+      overflow.scrollHeight,
+      `the header wraps: scrollHeight ${overflow.scrollHeight} exceeds its own clientHeight ${overflow.clientHeight}`,
+    ).toBeLessThanOrEqual(overflow.clientHeight + EPSILON)
+    expect(headerRect.height).toBeGreaterThan(0)
+
+    // SPEC 4.5.1.2's DOM hooks: both fields present and visible inside the
+    // header, in this orientation as in the other.
+    await expect(header(page).locator('[data-field="unitName"]')).toBeVisible()
+    await expect(
+      header(page).locator('[data-field="connectionState"]'),
+    ).toBeVisible()
   })
 })
 

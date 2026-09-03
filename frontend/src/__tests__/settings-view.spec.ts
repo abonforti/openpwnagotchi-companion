@@ -345,6 +345,7 @@ function statsEnvelope(capabilities: Capabilities): OutgoingStats {
     timestamp: 1_700_000_000,
     data: {
       uptime: 1,
+      name: null,
       mode: 'AUTO',
       channel: 6,
       battery: { percent: 90, charging: false },

@@ -829,6 +829,7 @@ class Deps:
         read_pisugar_i2c: Callable[[], tuple[float | None, bool | None]] = None,  # type: ignore[assignment]
         list_local_ipv4: Callable[[], list[str]] = None,  # type: ignore[assignment]
         spawn: Callable[[Callable[[], None]], None] = None,  # type: ignore[assignment]
+        unit_name: Callable[[], str] = None,  # type: ignore[assignment]
     ) -> None:
         """Fills unset seams with the real implementation.
 
@@ -845,6 +846,7 @@ class Deps:
         self.read_pisugar_i2c = read_pisugar_i2c
         self.list_local_ipv4 = list_local_ipv4
         self.spawn = spawn
+        self.unit_name = unit_name
         if self.restart_pwnagotchi is None:
             self.restart_pwnagotchi = default_restart
         if self.reboot_device is None:
@@ -861,6 +863,8 @@ class Deps:
             self.list_local_ipv4 = default_list_local_ipv4
         if self.spawn is None:
             self.spawn = default_spawn
+        if self.unit_name is None:
+            self.unit_name = lambda: pwnagotchi.name()
 
 
 def default_restart(mode: str) -> None:
@@ -1915,6 +1919,7 @@ class Router:
 
         return {
             "uptime": int(pwnagotchi.uptime()),
+            "name": self._unit_name(),
             "mode": self._mode(),
             # The attribute, not agent.session(): that is a blocking HTTP call
             # with a 30 second timeout and must never sit on the request path.
@@ -1932,6 +1937,19 @@ class Router:
             "sessionAge": self._session.age,
             "capabilities": self.capabilities(),
         }
+
+    def _unit_name(self) -> str | None:
+        """Reads the unit's own hostname (F33), or None if unavailable.
+
+        Guarded like every other accessor here (SPEC 2.14): nothing from this
+        seam is allowed to escape into the event loop, and the failure is
+        silent rather than logged, the same as `_temperature` above.
+        """
+        try:
+            name = self._deps.unit_name()
+        except Exception:
+            return None
+        return name if isinstance(name, str) and name else None
 
     @staticmethod
     def _int_or_none(value: Any) -> int | None:

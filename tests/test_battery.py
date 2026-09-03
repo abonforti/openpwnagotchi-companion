@@ -19,9 +19,11 @@ from plugin import companion
 NO_BATTERY = {"percent": None, "charging": None}
 
 
-# The nine seams of SPEC 10.7, in the order conftest injects them. A `Deps` is
+# The nine seams of SPEC 10.7 that conftest injects, in its order. A `Deps` is
 # built by constructor injection - SPEC 10.7 forbids monkeypatching module
-# internals - so replacing one seam means naming the other eight. Mirrors
+# internals - so replacing one seam means naming the other eight. `Deps` has a
+# tenth, `unit_name`, left at its default on purpose: the pwnagotchi stub
+# answers it, and tests/test_stats.py drives it through that stub. Mirrors
 # tests/test_binding.py's DEPS_SEAMS/deps_with_enumeration, which is where this
 # pattern is proven; every use here only ever overrides read_pisugar_i2c.
 DEPS_SEAMS = (

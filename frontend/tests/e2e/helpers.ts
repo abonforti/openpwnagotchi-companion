@@ -103,6 +103,39 @@ export function shell(page: Page): Locator {
   return page.locator('[data-layout]').first()
 }
 
+/** The header, SPEC 4.5.1.2's `[data-region="header"]`. */
+export function header(page: Page): Locator {
+  return page.locator('[data-region="header"]')
+}
+
+/**
+ * Seeds `companion.settings` (SPEC 4.7) with one active host before the page's
+ * own scripts run, so the header (SPEC 4.5.1.2) has a unit to name rather
+ * than falling back to "companion" with no connection to describe. Registered
+ * with `page.addInitScript`, which runs on every document the page loads
+ * after this call, exactly like `gotoView`'s own navigation.
+ */
+export async function seedActiveHost(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'companion.settings',
+      JSON.stringify({
+        hosts: [
+          {
+            id: 'e2e-host',
+            label: 'E2E Test Unit',
+            address: '172.20.10.11',
+            wsPort: 8082,
+            httpPort: 8443,
+            token: null,
+          },
+        ],
+        activeHostId: 'e2e-host',
+      }),
+    )
+  })
+}
+
 /** The navigation, bar or rail: the `data-layout` carrier that is a `nav`. */
 export function nav(page: Page): Locator {
   return page.locator('nav[data-layout]')

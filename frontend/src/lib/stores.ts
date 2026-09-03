@@ -5,6 +5,7 @@
 
 import { derived, type Readable, writable } from 'svelte/store'
 
+import { activeHost } from './settings'
 import {
   RemoteError,
   type ConnectionState,
@@ -151,12 +152,48 @@ export const channel: Readable<number | null> = {
 
 // SPEC 4.4.1: capabilities has no writer of its own, it arrives inside
 // stats and having two sources for one fact is how they disagree, so it is
-// read off the stats store rather than written from a message handler. This
-// is the only svelte/store derived() in this file: channel looks similar
-// from the outside and is a plain writable with two writers.
+// read off the stats store rather than written from a message handler.
+// channel looks similar from the outside and is a plain writable with two
+// writers.
 export const capabilities: Readable<Capabilities | null> = derived(
   stats,
   ($stats) => $stats?.capabilities ?? null,
+)
+
+/**
+ * SPEC 4.5.1.2: the header names the unit by this precedence, and by
+ * nothing else -- there is no third store or event that could put a stale
+ * name over a switched host, because this is derived from `activeHost` and
+ * `stats` rather than written from a handler: a host switch resets both in
+ * the same tick (SPEC 4.4.2), and the derived value moves with them.
+ *
+ * 1. `activeHost.label`, the owner's word for the unit. `settings.ts`
+ *    already guarantees a stored `Host.label` is never empty (it falls
+ *    back to the address at write time), so the emptiness check here is
+ *    defensive rather than load-bearing, the same discipline the rest of
+ *    this file gives a value it did not itself validate.
+ * 2. `stats.name`, the unit's own hostname (F33), once a `stats` frame has
+ *    set it to something other than `null`.
+ * 3. `activeHost.address`, which is never blank while a host is active.
+ *
+ * `null` before any host is active: there is no unit to name yet, and
+ * `App.svelte` shows the app's own name, `companion`, in that case.
+ */
+export const unitName: Readable<string | null> = derived(
+  [activeHost, stats],
+  ([$activeHost, $stats]) => {
+    if ($activeHost === null) return null
+    // A label equal to the address is sanitizeLabel's fallback for a label
+    // the owner never typed, not the owner's word for the unit (SPEC
+    // 4.5.1.2), so it does not outrank the unit's own name.
+    if ($activeHost.label !== '' && $activeHost.label !== $activeHost.address) {
+      return $activeHost.label
+    }
+    if ($stats !== null && $stats.name !== null && $stats.name !== '') {
+      return $stats.name
+    }
+    return $activeHost.address
+  },
 )
 
 function upsertPeer(peer: Peer): void {

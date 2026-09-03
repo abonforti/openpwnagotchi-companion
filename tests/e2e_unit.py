@@ -34,13 +34,27 @@ into a temporary directory with `tools/gen-ca.sh` and `tools/gen-cert.sh`
 2.3.3 D5 boundary - this process is not a pwnagotchi and must not act like
 one reaches for `subprocess`, I2C or gpsd).
 
-Nothing here plays `Companion._background`'s part: there is no periodic
-`session.refresh()` or `gps.refresh_gpsd()` pass, so `stats.sessionAge` and
-`stats.gps` stay at their unrefreshed defaults for the life of the process.
-Dashboard, WiFi and Peers get real data straight from the fixtures
-(`agent._access_points`, `agent._peers`, the handshake directory); Map and
-any assertion on the staleness path do not, because both depend on a refresh
-this script never runs.
+A background loop mirrors the refresh half of `Companion._background`
+(plugin/companion.py, `_background`, lines 4208-4235): `session.refresh()`
+and `gps.refresh_gpsd()` run on the same cadence `stats_ticker` broadcasts
+on, primed once synchronously before `Listeners.reconcile()` ever lets a
+client connect, so the very first `stats` frame - whether it arrives through
+`initial_burst` or the ticker - already carries a real `sessionAge` rather
+than `null` (SPEC 4.3.1, 4.3.2; issue #185's first CI run measured the
+"Connected (data is stale)" header this fixes). There is no reconcile pass in
+this loop, unlike the real `_background`: this fake unit's one bound address
+never needs a rebind. Dashboard, WiFi and Peers get real data straight from
+the fixtures (`agent._access_points`, `agent._peers`, the handshake
+directory), and `sessionAge` is real too, now that the cache behind it is
+actually refreshed. `gps` is real as well, but not through `gpsd`:
+`GpsResolver.current()`'s own priority is bettercap, then gpsd, then the
+browser, and the fixture `bettercap_session.json` this script loads into
+`agent.session()` carries a `gps` block, so a refreshed session already
+satisfies the `bettercap` source before `gpsd` is ever consulted.
+`DepsHarness.read_gpsd` is still the harness's fake underneath - it answers
+with `gpsd_reply`, which defaults to `None` and nothing here ever sets it -
+so a spec that wants to see the `gpsd` source specifically, rather than
+`bettercap`, finds nothing through this fixture set.
 
 Prints exactly one line, `e2e-unit: wss://127.0.0.1:<port>`, once `Listeners`
 itself reports the WSS socket bound on the configured address - not once a
@@ -174,6 +188,45 @@ def broadcast(
             asyncio.run_coroutine_threadsafe(client.send(payload), loop)
         except Exception:
             clients.discard(client)
+
+
+def refresh_caches(session: "companion.SessionCache", gps: "companion.GpsResolver") -> None:
+    """One pass of what `Companion._background` repeats (plugin/companion.py,
+    `_background`, lines 4208-4235): refresh the bettercap session cache and
+    poll gpsd. Two separate try blocks, the same shape `stats_ticker` uses
+    below, so a session failure does not also skip the gpsd poll - and,
+    unlike the real `_background`'s single wrapping `try`, a caller here can
+    tell which of the two failed. Logged by exception type only, for the
+    same reason `stats_ticker` is (SPEC 2.4).
+    """
+    try:
+        session.refresh()
+    except Exception as err:
+        log.warning("e2e-unit: session refresh failed: %s", type(err).__name__)
+    try:
+        gps.refresh_gpsd()
+    except Exception as err:
+        log.warning("e2e-unit: gpsd refresh failed: %s", type(err).__name__)
+
+
+def background_loop(
+    session: "companion.SessionCache",
+    gps: "companion.GpsResolver",
+    interval: float,
+    stop: threading.Event,
+) -> None:
+    """Mirrors the refresh half of `Companion._background` on its own thread.
+
+    No reconcile pass here, unlike the real `_background`: this fake unit is
+    bound to one address for its whole life and never needs a rebind, so the
+    only thing worth repeating on a timer is the pair `refresh_caches` calls.
+    Started through `Deps.spawn` before `stats_ticker`'s own thread (SPEC
+    10.5, issue #185's first CI run: without this, `sessionAge` stayed
+    `null` and the client never left "Connected (data is stale)").
+    """
+    while not stop.is_set():
+        refresh_caches(session, gps)
+        stop.wait(interval)
 
 
 def stats_ticker(
@@ -310,6 +363,14 @@ def main() -> int:
         signal.signal(signal.SIGTERM, _handle_signal)
         signal.signal(signal.SIGINT, _handle_signal)
 
+        # Primed synchronously, before `reconcile()` below lets anything
+        # connect: the first client's `initial_burst` must not see a `null`
+        # `sessionAge` (SPEC 4.3.1, 4.3.2). `background_loop`, started
+        # further down, repeats this on a timer; this call is what makes the
+        # very first stats frame, from whichever client connects first, an
+        # exception to "the loop hasn't ticked yet".
+        refresh_caches(session, gps)
+
         # `reconcile()` is synchronous - it does not return until the sockets
         # it opens are actually bound and serving (SPEC: its own docstring
         # calls the cost "a real bound, not a best case") - so its return
@@ -332,6 +393,14 @@ def main() -> int:
             return 1
 
         stop = threading.Event()
+
+        # Started through the harness's own `Deps.spawn` seam, before the
+        # ticker: the same seam `Router` itself uses to schedule a restart
+        # effect (SPEC 2.4), and `DepsHarness._spawn` launches a real daemon
+        # thread rather than only recording its target, for the same reason
+        # given where that seam is defined.
+        deps.spawn(lambda: background_loop(session, gps, STATS_INTERVAL_S, stop))
+
         ticker = threading.Thread(
             target=stats_ticker,
             args=(router, clients, listeners, deps, STATS_INTERVAL_S, stop),

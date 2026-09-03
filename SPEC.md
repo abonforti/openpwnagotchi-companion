@@ -172,6 +172,7 @@ openpwnagotchi-companion/
 │   │   │   ├── handshakes/
 │   │   │   │   └── ...
 │   │   │   └── ...
+│   │   ├── harness.py                # stub injection, FakeAgent, DepsHarness for e2e_unit.py (§10.5)
 │   │   ├── i2c_stub/                 # importable stand-in, PiSugar over smbus2
 │   │   ├── netifaces_stub/           # importable stand-in for netifaces
 │   │   ├── pwnagotchi_stub/          # importable stand-in for the real package
@@ -2195,7 +2196,8 @@ That test lives in the end-to-end suite (§10.5, `service-worker.spec.ts`), beca
 real worker registered against a real origin, and it holds against one server only: `vite
 preview`, which by default sends no header at all. The preview server therefore sends the three
 headers of this section, with the `Content-Security-Policy` in the shape that
-`content_security_policy()` produces when `connect-src` names `'self'` alone. Two things
+`content_security_policy()` produces for a unit bound to `127.0.0.1` with the WSS listener on
+8082, which is what the e2e's fake unit is (§10.5, issue #185). Two things
 follow.
 A worker that replayed a precached response would carry nothing through if the origin sent
 nothing, so the test would pass for the wrong reason without them. And the whole end-to-end
@@ -7793,6 +7795,27 @@ evidence: a set of behaviour and geometry checks written against an interactive 
 defects that three rounds of human review had missed, and caught two regressions introduced while
 fixing them. Those checks are worth more as a gate than as a discarded prototype.
 
+- **The e2e can face a unit (issue #185).** Every e2e assertion used to be about an empty
+  shell: with no unit attached the connection never left `connecting`, no view held data, and
+  no request control was ever enabled, so the armed confirm pair of §4.5.1 had never been
+  measured. The unit the suite faces is the plugin itself: `tests/e2e_unit.py` runs the real
+  `Router` and `Listeners` from `plugin/companion.py` against the pwnagotchi stub and a `Deps`
+  whose seams answer with fixtures, bound to `127.0.0.1` with a certificate `gen-ca.sh` and
+  `gen-cert.sh` issue into a temporary directory for the run. Playwright starts it as a second
+  `webServer` beside the preview, the preview's CSP names `wss://127.0.0.1:8082` the way the
+  plugin's own header would for that binding, the browser context ignores the self-signed
+  chain, and a test that wants a unit seeds a host at that address through `localStorage`
+  before the first navigation. It is the contract in `docs/schemas/` spoken by the code that
+  ships, not a fake of it, and it is test-only by construction: `dist/` gains nothing, since
+  the app connects to whatever host is configured and always did. A test that does not seed the
+  host sees what it always saw. `touch-targets.spec.ts` closes the armed-pair gap directly:
+  seeded against the fake unit, Reboot and Shut down are each armed in turn and Confirm and
+  Cancel are held to the same floor and gap as every other control, then Cancel is tapped
+  rather than Confirm, so nothing reaches the fake unit's `Deps`. `fake-unit.spec.ts` is the
+  positive control for the seam itself: seeded with no label, so that `stats.name` and not a
+  stored label names the unit in the header by §4.5.1.2's own precedence, and with the
+  Dashboard's handshake count leaving its dash once `stats` arrives, which is what every other
+  test against the fake unit takes on faith.
 - `frontend/tests/e2e/`, run against the built `dist/` in **Chromium and WebKit**, both
   orientations at 402x874 and 874x402. WebKit is not Safari, but it is the same engine family,
   and the class of defect that hurt here (viewport units, nested contexts, safe areas) is that

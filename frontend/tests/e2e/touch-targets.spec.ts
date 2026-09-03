@@ -8,6 +8,8 @@ import {
   openSheet,
   orientationOf,
   rectOf,
+  seedActiveHost,
+  waitForConnected,
 } from './helpers'
 import type { Rect } from './helpers'
 
@@ -253,7 +255,8 @@ test.describe('every navigation target is at least 44px', () => {
  * rendered control is disabled by `canSendCommand('connecting')` being
  * false. Neither stops a geometry measurement -- a disabled control is
  * still laid out -- but the second is why the armed pair (Confirm next to
- * Cancel) is not measured below; see the note at the end of this file.
+ * Cancel) is measured separately, below, against a seeded fake unit
+ * (issue #185) rather than here.
  */
 test.describe('the state controls of SPEC 4.5.2.2 respect the floor and the gap', () => {
   // Mode, reboot and shutdown are rendered before the first stats frame
@@ -306,13 +309,84 @@ test.describe('the state controls of SPEC 4.5.2.2 respect the floor and the gap'
   })
 })
 
-// The armed pair -- Confirm next to Cancel -- is the pair SPEC 4.5.1's
-// paragraph is actually about, and it is deliberately not measured above.
-// Reaching it means clicking a control's own [data-action="request"], and
-// every one of them is disabled for the reason given on the describe block
-// above: this suite has no unit to attach, the connection never leaves
-// `connecting`, and a disabled button refuses a Playwright click rather
-// than accepting one. Forcing the click past actionability would measure a
-// state no real tap on this build can ever produce, which is worse than not
-// measuring it. Reaching the armed state honestly needs a fake-unit seam
-// this e2e layer does not have.
+/**
+ * The armed pair -- Confirm next to Cancel -- is the pair SPEC 4.5.1's
+ * paragraph is actually about (issue #185): "two large targets flush
+ * against each other are easy to hit *wrongly*, which matters most where
+ * the neighbour does something serious." Reboot and Shut down are both
+ * destructive, and each arms into exactly this pair (SPEC 4.5.2.2).
+ *
+ * Reaching the armed state needs a control that is enabled, which needs
+ * `canSendCommand` to be true, which needs a connection that has left
+ * `connecting` (SPEC 4.3.3, 4.5.2.2) -- unreachable against the built app
+ * alone (see the describe block above). This block seeds a host at the
+ * fake unit `tests/e2e_unit.py` runs (issue #185) instead, so the tap that
+ * arms the pair is a real one on a real, if disposable, unit.
+ *
+ * Cancel is pressed at the end of every test, never Confirm: the two-step
+ * confirm is client-side only (SPEC 4.5.2.2, "arming does not expire" and
+ * the table above it -- nothing is sent before Confirm is tapped), so
+ * Cancel measures the armed geometry without ever putting `reboot` or
+ * `shutdown` on the wire. The fake unit's `Deps` records such a command and
+ * acts on nothing (see `tests/fakes/harness.py`), which is exactly why a
+ * test here asserts nothing about what it received.
+ */
+test.describe('the armed pair (Confirm, Cancel) respects the floor and the gap', () => {
+  const ARMABLE_CONTROLS = ['reboot', 'shutdown'] as const
+
+  for (const control of ARMABLE_CONTROLS) {
+    test(`${control}: Confirm and Cancel each clear 44px and are held apart`, async ({
+      page,
+    }) => {
+      await seedActiveHost(page)
+      await gotoView(page, 'dashboard')
+      await waitForConnected(page)
+
+      const root = page.locator(`[data-control="${control}"]`)
+      await root.locator('[data-action="request"]').click()
+      await expect(
+        root,
+        `${control} did not arm after its request button was tapped`,
+      ).toHaveAttribute('data-control-state', 'armed')
+
+      const confirm = root.locator('[data-action="confirm"]')
+      const cancel = root.locator('[data-action="cancel"]')
+      await expect(
+        confirm,
+        `${control}'s armed state has no Confirm`,
+      ).toHaveCount(1)
+      await expect(
+        cancel,
+        `${control}'s armed state has no Cancel`,
+      ).toHaveCount(1)
+
+      const items: LabeledRect[] = [
+        { label: `${control} confirm`, rect: await rectOf(confirm) },
+        { label: `${control} cancel`, rect: await rectOf(cancel) },
+      ]
+
+      for (const item of items) {
+        expect(
+          item.rect.width,
+          `${item.label} is ${item.rect.width.toFixed(1)}px wide, under the ${FLOOR}px floor`,
+        ).toBeGreaterThanOrEqual(FLOOR)
+        expect(
+          item.rect.height,
+          `${item.label} is ${item.rect.height.toFixed(1)}px tall, under the ${FLOOR}px floor`,
+        ).toBeGreaterThanOrEqual(FLOOR)
+      }
+
+      const axis = dominantAxis(items.map((item) => item.rect))
+      assertHeldApart(items, axis, { plural: 'controls', singular: 'control' })
+
+      // Disarm rather than leave the fixture armed: SPEC 4.5.2.2's cancel is
+      // the client-side undo, and taking it here is what keeps this test
+      // from ever sending `reboot` or `shutdown` to the fake unit.
+      await cancel.click()
+      await expect(
+        root,
+        `${control} did not return to idle after Cancel`,
+      ).toHaveAttribute('data-control-state', 'idle')
+    })
+  }
+})

@@ -75,12 +75,14 @@ export default defineConfig({
     // 2.15.1, issue #91). As a side effect the whole end-to-end suite now
     // runs under the policy the plugin enforces. This is a fixture, not a
     // second source of truth: the value below is copied from
-    // content_security_policy([], None) in plugin/companion.py, which is
-    // what the preview server actually approximates (no bound addresses,
-    // no WSS listener), and tests/test_csp.py pins the copy to the function.
+    // content_security_policy(["127.0.0.1"], 8082) in plugin/companion.py,
+    // which is what the preview server now approximates now that the e2e
+    // suite faces a real fake unit bound to 127.0.0.1 with its WSS listener
+    // on 8082 (SPEC 10.5, issue #185), and tests/test_csp.py pins the copy
+    // to the function.
     headers: {
       'Content-Security-Policy':
-        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' wss://127.0.0.1:8082; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
     },

@@ -82,6 +82,12 @@ export default defineConfig({
     // On the first retry only: a trace of every passing run is a lot of
     // megabytes for information nobody reads.
     trace: 'on-first-retry',
+    // The fake unit's TLS chain (tools/gen-ca.sh, tools/gen-cert.sh) is
+    // generated fresh for this run and never installed as a trusted root, the
+    // same way a real unit's is until the owner installs the CA (SPEC 10.5,
+    // issue #185). A test that wants to prove the chain itself uses its own
+    // context instead; this is the default every other spec inherits.
+    ignoreHTTPSErrors: true,
   },
 
   // A geometry assertion that only fails sometimes is a defect report nobody
@@ -90,17 +96,59 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
 
-  webServer: {
-    // `vite preview` serves exactly the directory that becomes dist.tgz,
-    // including the SPA fallback the plugin's static server also performs.
-    command: `npm run build && npm run preview -- --port ${PORT} --strictPort`,
-    url: BASE_URL,
-    // The review host is an arm64 Pi and a cold Vite build there is not fast.
-    timeout: 180_000,
-    // Locally, reuse a preview server that is already up; in CI there is never
-    // one to reuse and silently attaching to a stale build would be worse.
-    reuseExistingServer: !process.env.CI,
-    stdout: 'ignore',
-    stderr: 'pipe',
-  },
+  // Two servers: the built frontend under `vite preview`, and the fake unit
+  // that gives the suite something real to connect to (SPEC 10.5, issue
+  // #185). `webServer` as an array requires `use.baseURL` to be set
+  // explicitly even with a single HTTP entry, which it already is above.
+  webServer: [
+    {
+      // `vite preview` serves exactly the directory that becomes dist.tgz,
+      // including the SPA fallback the plugin's static server also performs.
+      command: `npm run build && npm run preview -- --port ${PORT} --strictPort`,
+      url: BASE_URL,
+      // The review host is an arm64 Pi and a cold Vite build there is not fast.
+      timeout: 180_000,
+      // Locally, reuse a preview server that is already up; in CI there is never
+      // one to reuse and silently attaching to a stale build would be worse.
+      reuseExistingServer: !process.env.CI,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
+    {
+      // The real Router and Listeners from plugin/companion.py, run standalone
+      // against fixtures (SPEC 10.5, issue #185). `cwd: '..'` because this
+      // config lives in frontend/ and the module is addressed from the
+      // repository root, the same root `tests/e2e_unit.py`'s own docstring
+      // documents the command from. Plain `python3`, not `uv run`: nothing in
+      // .github/workflows/ci.yml's `e2e` job installs uv, only tests/requirements.txt
+      // into whatever `python3` resolves to there - a local run needs the same
+      // (an already-activated virtualenv with those requirements installed).
+      command: 'python3 -m tests.e2e_unit --ws-port 8082 --http-port 8443',
+      cwd: '..',
+      // A WSS server answers no HTTP `url` Playwright could poll; `port`
+      // only waits for a TCP accept. tests/e2e_unit.py's own readiness check
+      // is stricter than this - it asserts on what Listeners actually bound
+      // before it ever gets this far - so a process that reaches this port
+      // check is one that already passed its own.
+      port: 8082,
+      // The review host is an arm64 Pi; CA and certificate generation there is
+      // not instant, the same reason its neighbour gets this timeout.
+      timeout: 180_000,
+      // A stale fake unit still bound to 8082 is not a server worth reusing:
+      // its fixtures, certificate and process lifetime all belong to a run
+      // that already ended, unlike the preview build above.
+      reuseExistingServer: false,
+      // Without this, Playwright SIGKILLs the process group on teardown and
+      // tests/e2e_unit.py's own `finally: shutil.rmtree(...)` never runs,
+      // leaking its temporary CA and certificate on every run. SIGTERM first,
+      // giving the script's signal handler a chance to stop the listeners and
+      // clean up; SIGKILL only if it has not exited within the timeout.
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 },
+      // Piped, not ignored: tests/e2e_unit.py prints exactly one ready line
+      // and nothing else on stdout, so this is cheap and gives CI something
+      // to show if the process never gets there.
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  ],
 })

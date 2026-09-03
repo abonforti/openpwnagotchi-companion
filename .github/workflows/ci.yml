@@ -253,6 +253,26 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # The second webServer entry in playwright.config.ts is tests/e2e_unit.py
+      # (SPEC 10.5, issue #185): a real Router and Listeners from
+      # plugin/companion.py, facing the suite instead of an empty shell. It
+      # needs the same interpreter and test dependencies the plugin job uses,
+      # not a browser toolchain, so setup-python and tests/requirements.txt are
+      # pulled into this job rather than assumed. openssl, which gen-ca.sh and
+      # gen-cert.sh shell out to, ships with ubuntu-latest. The command
+      # playwright.config.ts runs is a plain `python3 -m tests.e2e_unit`, not
+      # `uv run`, because nothing here installs uv - this step's pip install is
+      # what the plain interpreter resolves its dependencies from.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: tests/requirements.txt
+
+      - name: Install fake unit dependencies
+        working-directory: .
+        run: pip install --disable-pip-version-check -r tests/requirements.txt
+
       - name: Install
         run: npm ci
 

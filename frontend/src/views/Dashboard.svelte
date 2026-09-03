@@ -66,11 +66,13 @@
   // the effect would find nothing to focus. A test written to catch that
   // in both directions passed against the shared-slot version, so the
   // suspicion did not reproduce. What that does and does not show is
-  // narrower than it looks: jsdom is the only place the armed state is
-  // reachable today -- the e2e suite cannot reach it at all (issue #185)
-  // -- so a real browser has never been asked, and "passed in jsdom" is
-  // not "the hazard does not exist there". The action is kept because it
-  // removes the question rather than because the question was answered.
+  // narrower than it looks: jsdom used to be the only place the armed
+  // state was reachable -- the e2e suite now reaches it too, through the
+  // fake unit `tests/e2e_unit.py` runs beside `vite preview` (SPEC 10.5,
+  // issue #185) -- so a real browser has since been asked, and a mismatch
+  // between what jsdom shows and what a real engine's flush order does
+  // would now surface there. The action is kept because it removes the
+  // question rather than because the question needed answering twice.
   function focusOnMount(node: HTMLButtonElement): void {
     node.focus()
   }

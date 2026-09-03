@@ -332,7 +332,14 @@ test.describe('the header collapses to one line in the rail range (SPEC 4.5.1.2)
     // vacuously. Seeding a host is what makes both fields - the name and
     // the connection state - actually present to measure, the same
     // "which unit, and whether it is" pair the rail is required to keep.
-    await seedActiveHost(page)
+    //
+    // The address is an explicitly dead one, not the fake unit's default:
+    // this test wants a *named host*, not a connection, and `seedActiveHost`
+    // now defaults to an address the fake unit actually answers on (issue
+    // #185). Measuring immediately after `gotoView` would otherwise land
+    // mid-flight in the Connecting-to-Connected transition, which is a race
+    // this geometry assertion has no business depending on.
+    await seedActiveHost(page, { address: '172.20.10.11' })
     await gotoView(page, 'dashboard')
 
     const headerRect = await rectOf(header(page))

@@ -1,11 +1,20 @@
-import type { Locator, Page, TestInfo } from '@playwright/test'
+import {
+  expect,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from '@playwright/test'
 
 /**
  * Shared measuring tools for the geometry suite of SPEC 10.5.
  *
- * Nothing here asserts. Every helper returns a number or a rectangle so that
- * the spec that calls it states the invariant in its own words, and a failure
- * message names the thing the specification promised rather than the helper.
+ * Nearly nothing here asserts. Every measuring helper returns a number or a
+ * rectangle so that the spec that calls it states the invariant in its own
+ * words, and a failure message names the thing the specification promised
+ * rather than the helper. `waitForConnected` is the one exception: it is a
+ * precondition a fake-unit test waits on before its own assertions begin,
+ * not a geometry invariant, and its failure message says so rather than
+ * pretending to be silent about it.
  */
 
 /** The seven routes of the navigation table in SPEC 4.5, in bar order. */
@@ -108,32 +117,69 @@ export function header(page: Page): Locator {
   return page.locator('[data-region="header"]')
 }
 
+export interface SeededHost {
+  address?: string
+  wsPort?: number
+  httpPort?: number
+  label?: string
+}
+
 /**
  * Seeds `companion.settings` (SPEC 4.7) with one active host before the page's
  * own scripts run, so the header (SPEC 4.5.1.2) has a unit to name rather
  * than falling back to "companion" with no connection to describe. Registered
  * with `page.addInitScript`, which runs on every document the page loads
  * after this call, exactly like `gotoView`'s own navigation.
+ *
+ * Defaults to the fake unit `tests/e2e_unit.py` binds (127.0.0.1, ws 8082,
+ * http 8443, issue #185), so a caller that only wants a named host with
+ * nothing listening -- the geometry suite's own use -- and a caller that
+ * wants a real connection share one call shape.
  */
-export async function seedActiveHost(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      'companion.settings',
-      JSON.stringify({
-        hosts: [
-          {
-            id: 'e2e-host',
-            label: 'E2E Test Unit',
-            address: '172.20.10.11',
-            wsPort: 8082,
-            httpPort: 8443,
-            token: null,
-          },
-        ],
-        activeHostId: 'e2e-host',
-      }),
-    )
-  })
+export async function seedActiveHost(
+  page: Page,
+  {
+    address = '127.0.0.1',
+    wsPort = 8082,
+    httpPort = 8443,
+    label = 'E2E Unit',
+  }: SeededHost = {},
+): Promise<void> {
+  await page.addInitScript(
+    (host) => {
+      window.localStorage.setItem(
+        'companion.settings',
+        JSON.stringify({
+          hosts: [
+            {
+              id: 'e2e-host',
+              label: host.label,
+              address: host.address,
+              wsPort: host.wsPort,
+              httpPort: host.httpPort,
+              token: null,
+            },
+          ],
+          activeHostId: 'e2e-host',
+        }),
+      )
+    },
+    { address, wsPort, httpPort, label },
+  )
+}
+
+/**
+ * Waits for the header's connection state (SPEC 4.5.1.2,
+ * `[data-field="connectionState"]`) to read what `formatConnectionState`
+ * (`lib/format.ts`) renders for `'connected'`. The string is inlined rather
+ * than imported: this suite runs against the built `dist/` output (SPEC
+ * 10.5), never against `src/`, so importing the source module would assert
+ * something the running app was not actually built from.
+ */
+export async function waitForConnected(page: Page): Promise<void> {
+  await expect(
+    header(page).locator('[data-field="connectionState"]'),
+  ).toHaveText('Connected')
 }
 
 /** The navigation, bar or rail: the `data-layout` carrier that is a `nav`. */

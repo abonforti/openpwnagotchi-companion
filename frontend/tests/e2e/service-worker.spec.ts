@@ -8,10 +8,11 @@ import { expect, test } from '@playwright/test'
  * policy below is pinned to the plugin's by tests/test_csp.py.
  *
  * The exact `Content-Security-Policy` string asserted below is the one
- * `content_security_policy()` (plugin/companion.py) produces for an empty
- * bound-address list and `ws_port = None` - the shape the preview server is
- * pinned to reproduce per SPEC 2.15.1, so equality is the stronger and more
- * exact check available here, not a paraphrase of it.
+ * `content_security_policy()` (plugin/companion.py) produces for the fake
+ * unit `tests/e2e_unit.py` runs for the frontend e2e suite (SPEC 10.5,
+ * issue #185) - bound address `["127.0.0.1"]`, `ws_port = 8082` - the shape
+ * the preview server is pinned to reproduce per SPEC 2.15.1, so equality is
+ * the stronger and more exact check available here, not a paraphrase of it.
  *
  * Playwright documents `fromServiceWorker()` only as "fulfilled by a Service
  * Worker's Fetch Handler", with no word on which engines answer it, so the
@@ -36,7 +37,7 @@ const EXPECTED_CSP =
   "script-src 'self'; " +
   "style-src 'self'; " +
   "img-src 'self' data: https://*.tile.openstreetmap.org; " +
-  "connect-src 'self'; " +
+  "connect-src 'self' wss://127.0.0.1:8082; " +
   "font-src 'self'; " +
   "object-src 'none'; " +
   "base-uri 'none'; " +

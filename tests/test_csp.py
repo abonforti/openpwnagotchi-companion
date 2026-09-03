@@ -377,7 +377,8 @@ def test_headers_survive_an_unsupported_http_version(server):
 # preview` sends so the service worker test has an origin worth replaying, and the value that
 # test expects back (SPEC 2.15.1, issue #91). Neither can import the function, so both are read
 # out of their files here and pinned to what it returns for the case the preview approximates:
-# no bound address and no WSS listener.
+# the fake unit `tests/e2e_unit.py` runs for the frontend e2e suite (SPEC 10.5, issue #185),
+# bound to 127.0.0.1 with its WSS listener on 8082.
 
 
 def _quoted_strings_after(text: str, marker: str) -> str:
@@ -397,15 +398,15 @@ def _quoted_strings_after(text: str, marker: str) -> str:
     return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', "\n".join(taken)))
 
 
-def test_the_preview_header_is_the_plugins_policy_for_no_address():
+def test_the_preview_header_is_the_plugins_policy_for_the_e2e_unit():
     config = (REPO_ROOT / "frontend" / "vite.config.ts").read_text()
     value = _quoted_strings_after(config, "'Content-Security-Policy':")
     assert value.startswith("default-src"), "the preview header was not found where expected"
-    assert value == companion.content_security_policy([], None)
+    assert value == companion.content_security_policy(["127.0.0.1"], 8082)
 
 
-def test_the_service_worker_spec_expects_the_plugins_policy_for_no_address():
+def test_the_service_worker_spec_expects_the_plugins_policy_for_the_e2e_unit():
     spec = (REPO_ROOT / "frontend" / "tests" / "e2e" / "service-worker.spec.ts").read_text()
     value = _quoted_strings_after(spec, "const EXPECTED_CSP =")
     assert value.startswith("default-src"), "EXPECTED_CSP was not found where expected"
-    assert value == companion.content_security_policy([], None)
+    assert value == companion.content_security_policy(["127.0.0.1"], 8082)

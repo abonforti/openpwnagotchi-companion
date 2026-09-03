@@ -132,6 +132,17 @@ so a scratch directory inside the repository is one careless command away from b
 A gate now fails when a shipped directory holds a file nobody declared, but the gate covers the
 directories that ship, not every place scratch could land. Outside the repository is the rule.
 
+## This repository is not yours to reconfigure
+
+Never run `git config` against this checkout, never write under `.git/`, never change the
+hooks path, the signing settings or `companion.denylist`, and never stage, commit, checkout,
+stash or push unless the brief says so. A task that needs a differently configured repository,
+a test of the hook included, gets a throwaway repository under your scratch directory; the
+denylist file such a test points at lives outside every temporary root, since the hook refuses
+one under `/tmp` and a scratch directory is under `/tmp`. On
+2026-08-30 an implementer repointed the denylist at its own scratch file and only the hook
+failing closed made it visible (SPEC.md section 13, rule 7, issue #216).
+
 ## A denied permission is a stop
 
 If the permission system refuses a command, abandon that command and say so in your report. Stop

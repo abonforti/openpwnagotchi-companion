@@ -8585,6 +8585,39 @@ Enforcement, in layers, because a single gate gets forgotten:
      printed a clean verdict. Issue #199, fixed in §5.1.2. A survey answers the question it
      asked.
 
+7. **An agent never reconfigures this repository (issue #216).** Not `git config` of this
+   checkout, not anything under `.git/`, not the hooks path, not the signing settings, and
+   not `companion.denylist`. On 2026-08-30 an implementer scoped to three files repointed the
+   denylist at a throwaway file in its own scratch directory; the file was gone by the time
+   the hook read it, so the hook refused every commit with "denylist unreadable", which is the
+   only reason anyone noticed. A gate whose configuration lives in repository-local state that
+   nothing reviews can be silently disarmed by a write the reviewer never sees. Anything that
+   needs a differently configured repository, a test of the hook included, gets a worktree or a
+   throwaway repository of its own. The rule is in `CLAUDE.md` and in every agent brief
+   under `.claude/agents/`, beside the rule that a denied permission is a stop.
+
+   The hook tells three states apart, because they call for three different actions and the
+   first version reported two of them the same way:
+   - **not configured**: no `companion.denylist` at all. The one-time setup line, and refuse.
+   - **configured but unreadable**: a path is set and cannot be opened. The hook says so, names
+     the path it was given, and says that a repointed or wiped list is the likely cause. This
+     is the state #216 found, and it is not a fresh clone.
+   - **present but implausible**: readable and yet no use as a gate. A list with no pattern,
+     one that is not UTF-8 text, one named by a relative path (it would resolve inside the
+     repository, since git runs the hook from the worktree), or one that lives under a
+     temporary directory (`/tmp`, `/var/tmp`, `/dev/shm`, `$TMPDIR` or `$XDG_RUNTIME_DIR`),
+     is refused outright: a leak gate whose list is periodically wiped is a gate that will
+     one day be missing, and the owner's own home directory is where the list is documented
+     to live. An owner whose `$TMPDIR` points into their home moves the list or the variable;
+     the hook does not guess which. Decided, rather than left as a warning, because a warning
+     on a pre-commit hook is read once.
+
+   The hook also prints, on every run it lets through, the number of patterns it compiled and
+   the first eight hex digits of the SHA-256 of the list's contents. Neither the path nor a
+   pattern appears; the fingerprint is enough for the owner to notice that the list changed
+   between two commits, which is the whole requirement, and it is recorded nowhere by the
+   hook itself, so a wrong list cannot be laundered into a remembered one.
+
 If an agent needs to know how the device is reached in order to do a task, the answer is to ask
 the owner, in the conversation, and not write it down.
 

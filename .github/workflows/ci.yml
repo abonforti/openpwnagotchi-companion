@@ -169,7 +169,9 @@ jobs:
       # undefined name on an untaken error path lives. Configuration and the
       # argument for that selection are in ruff.toml.
       - name: Lint the plugin, the tooling, the tests and the gate scripts
-        run: python -m ruff check plugin/ tools/ tests/ .github/*.py
+        # The pre-commit hook is Python without the extension, so it has to be
+        # named: a directory would not pick it up (issue #216).
+        run: python -m ruff check plugin/ tools/ tests/ .github/*.py .githooks/pre-commit
 
   frontend:
     name: Frontend

@@ -57,6 +57,8 @@ the day a shipped file is added or renamed.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import importlib.util
 import os
 import re
@@ -64,7 +66,10 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Stubbing and running the hook
@@ -206,11 +211,15 @@ def _write_git_stub(
     return script
 
 
-def _run_pre_commit_hook(tmp_path: Path, **git_stub_kwargs) -> subprocess.CompletedProcess:
+def _run_pre_commit_hook(
+    tmp_path: Path, *, extra_env: dict[str, str] | None = None, **git_stub_kwargs
+) -> subprocess.CompletedProcess:
     stub_dir = Path(tempfile.mkdtemp(prefix="hook-git-stubbin-", dir=tmp_path))
     _write_git_stub(stub_dir, **git_stub_kwargs)
     env = dict(os.environ)
     env["PATH"] = f"{stub_dir}:{env.get('PATH', '')}"
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         ["python3", str(PRE_COMMIT_HOOK)],
         cwd=str(tmp_path),
@@ -229,7 +238,7 @@ def _write_denylist(tmp_path: Path, *patterns: str) -> Path:
     return path
 
 
-def test_a_failed_staged_file_list_read_refuses_to_commit(tmp_path):
+def test_a_failed_staged_file_list_read_refuses_to_commit(tmp_path, non_temp_dir):
     """The regression itself: the hook's own `git diff --cached --name-only
     --diff-filter=...` staged-name listing failing must not be read as
     "nothing is staged". It must fail the hook and say the scan did not
@@ -245,7 +254,7 @@ def test_a_failed_staged_file_list_read_refuses_to_commit(tmp_path):
     assumed, by running this exact scenario and reading which gate's
     wording came back before writing the assertion below.
     """
-    denylist = _write_denylist(tmp_path, "NeverMatchesAnythingSynthetic9000")
+    denylist = _write_denylist(non_temp_dir, "NeverMatchesAnythingSynthetic9000")
 
     result = _run_pre_commit_hook(
         tmp_path,
@@ -262,11 +271,11 @@ def test_a_failed_staged_file_list_read_refuses_to_commit(tmp_path):
     assert "has not run" in result.stderr
 
 
-def test_a_failed_unified_diff_read_refuses_to_commit(tmp_path):
+def test_a_failed_unified_diff_read_refuses_to_commit(tmp_path, non_temp_dir):
     """The second `git diff --cached` call - over the unified diff of the
     files the first call already listed - is the other half of the same
     regression. Fixing only the first call would leave this one silent."""
-    denylist = _write_denylist(tmp_path, "NeverMatchesAnythingSynthetic9000")
+    denylist = _write_denylist(non_temp_dir, "NeverMatchesAnythingSynthetic9000")
 
     result = _run_pre_commit_hook(
         tmp_path,
@@ -336,8 +345,8 @@ def test_a_git_config_failure_other_than_unset_is_treated_as_a_failure(tmp_path)
     assert "companion.denylist is not configured" not in result.stderr
 
 
-def test_a_clean_staged_diff_exits_zero(tmp_path):
-    denylist = _write_denylist(tmp_path, r"MyRealSecretHost\d+")
+def test_a_clean_staged_diff_exits_zero(tmp_path, non_temp_dir):
+    denylist = _write_denylist(non_temp_dir, r"MyRealSecretHost\d+")
 
     result = _run_pre_commit_hook(
         tmp_path,
@@ -601,10 +610,12 @@ def test_hook_relays_the_scanners_own_exit_2_and_does_not_claim_a_credential(tmp
     )
 
 
-def test_a_staged_diff_matching_the_denylist_refuses_and_never_prints_the_match(tmp_path):
+def test_a_staged_diff_matching_the_denylist_refuses_and_never_prints_the_match(
+    tmp_path, non_temp_dir
+):
     denied_pattern = "TotallyFakeInternalHostname"
     matching_line = f"+  our internal box is {denied_pattern}42, do not publish this"
-    denylist = _write_denylist(tmp_path, denied_pattern)
+    denylist = _write_denylist(non_temp_dir, denied_pattern)
 
     result = _run_pre_commit_hook(
         tmp_path,
@@ -624,3 +635,362 @@ def test_a_staged_diff_matching_the_denylist_refuses_and_never_prints_the_match(
     )
     assert matching_line not in combined
     assert "denylist pattern(s) matched" in combined
+    # SPEC 13 point 7: the fingerprint line belongs to runs the hook lets
+    # through. A refusal that printed it would be reporting a gate as run
+    # on a commit it stopped.
+    assert "fingerprint" not in combined
+
+
+# ---------------------------------------------------------------------------
+# SPEC.md 13, point 7 (issue #216): an agent never reconfigures this
+# repository, so anything that needs a differently configured repository -
+# a test of the hook included - gets a throwaway repository of its own. No
+# test below runs `git config` on this worktree or on the checkout the
+# harness invokes the hook against; every `companion.denylist` value the
+# hook sees here comes from the stubbed `git config --get`, never from a
+# real config write.
+#
+# The hook now tells three states of `companion.denylist` apart: not
+# configured (already covered above), configured but unreadable, and
+# present but implausible (empty, or living under a temporary directory).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def non_temp_dir():
+    """Where a denylist fixture must live to exercise the hook's ordinary,
+    accepted path - not just its refusal of one.
+
+    SPEC 13 point 7 has the hook refuse a `companion.denylist` that
+    resolves under a temporary root (`/tmp`, `/var/tmp`, `/dev/shm`,
+    `$TMPDIR` or `$XDG_RUNTIME_DIR`), and pytest's own `tmp_path` is one of them on this host:
+    `tempfile.gettempdir()` returns `/tmp` here, so every `tmp_path` the
+    test suite is handed already resolves under it. No amount of nesting
+    under `tmp_path` can stand in for "outside /tmp" - it already is
+    inside /tmp - so any test that expects a denylist under `tmp_path` to
+    be *accepted* is exercising the refusal by accident once that rule is
+    enforced. The assigned scratch location for this task is itself under
+    `/tmp` for the same reason and cannot serve either.
+
+    Placed under the user's own home directory - outside this repository,
+    and outside every one of the four roots the hook refuses - and removed
+    after every test that uses it; nothing here is committed or staged.
+    """
+    path = Path.home() / ".cache" / f"companion-test216-{uuid.uuid4().hex}"
+    path.mkdir(parents=True)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def _real_denylist_under(directory: Path, *patterns: str):
+    """A throwaway denylist written under a real system directory - never
+    under `tmp_path`, since the point of these tests is that the directory
+    itself is one of the canonical temp roots - removed afterwards."""
+    path = directory / f"companion-test216-denylist-{uuid.uuid4().hex}.txt"
+    path.write_text("\n".join(patterns) + "\n", encoding="utf-8")
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# configured but unreadable
+# ---------------------------------------------------------------------------
+
+
+def test_configured_denylist_that_cannot_be_opened_names_the_path_and_the_cause(
+    tmp_path, non_temp_dir
+):
+    """The regression #216 found: a `companion.denylist` that is set but
+    points at nothing readable must not be reported the way "not set at
+    all" is. SPEC 13 point 7 requires the message to name the configured
+    path and to say a repointed or wiped list is the likely cause; the two
+    messages must differ on the sentence that carries the reason, not just
+    incidentally on formatting.
+
+    The stub answers `git config --get companion.denylist` with a path that
+    is never written to disk - the hook's own open of that path is what
+    fails, not anything the stub mediates. The path is under `non_temp_dir`
+    rather than `tmp_path`, deliberately: `tmp_path` resolves under the
+    real /tmp on this host, and a missing file placed there would trip the
+    temporary-directory refusal (point 7's other, separately tested branch)
+    before the hook ever attempted to open it, exercising the wrong branch
+    under this test's name.
+    """
+    missing = non_temp_dir / "gone-missing-denylist.txt"
+    assert not missing.exists()
+
+    unreadable = _run_pre_commit_hook(tmp_path, config_stdout=str(missing), config_status=0)
+    not_configured = _run_pre_commit_hook(tmp_path, config_stdout="", config_status=1)
+
+    assert unreadable.returncode != 0, (
+        f"an unreadable configured path must refuse the commit: "
+        f"stdout={unreadable.stdout!r} stderr={unreadable.stderr!r}"
+    )
+    assert not_configured.returncode != 0
+
+    assert str(missing) in unreadable.stderr, (
+        f"the configured path must be named in the message: {unreadable.stderr!r}"
+    )
+    lowered = unreadable.stderr.lower()
+    assert "repoint" in lowered and "wipe" in lowered, (
+        "the message must say a repointed or wiped list is the likely cause "
+        f"(SPEC 13 point 7); got {unreadable.stderr!r}"
+    )
+
+    assert "companion.denylist is not configured" not in unreadable.stderr, (
+        "the unreadable-path message must not read as the not-configured one"
+    )
+    assert str(missing) not in not_configured.stderr, (
+        "a path never handed to the not-configured run must not leak into its message"
+    )
+    assert unreadable.stderr != not_configured.stderr, (
+        "the two states must not share their load-bearing sentence"
+    )
+
+
+# ---------------------------------------------------------------------------
+# present but implausible: a temporary directory, in each of its four forms
+# ---------------------------------------------------------------------------
+
+
+def test_denylist_under_tmp_is_refused_even_when_valid(tmp_path):
+    """`tmp_path` resolves under the real `/tmp` on this host, so it stands
+    in for a plain /tmp path honestly, without reaching outside the
+    `tmp_path` fixture for it."""
+    denylist = _write_denylist(tmp_path, "SomeValidPatternThatWouldMatch")
+
+    result = _run_pre_commit_hook(tmp_path, config_stdout=str(denylist), config_status=0)
+
+    assert result.returncode != 0, (
+        f"a readable, valid denylist under /tmp must still be refused: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "companion.denylist is not configured" not in result.stderr
+    # The refusal names its own reason, so it cannot be mistaken for the
+    # unreadable-file refusal: the file here is readable and valid.
+    assert "resolves under a temporary directory" in result.stderr
+    assert "could not be read" not in result.stderr
+    assert "fingerprint" not in result.stdout + result.stderr
+
+
+def test_denylist_under_var_tmp_is_refused_even_when_valid(tmp_path):
+    with _real_denylist_under(Path("/var/tmp"), "SomeValidPatternThatWouldMatch") as denylist:
+        result = _run_pre_commit_hook(tmp_path, config_stdout=str(denylist), config_status=0)
+
+    assert result.returncode != 0, (
+        f"a readable, valid denylist under /var/tmp must still be refused: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "companion.denylist is not configured" not in result.stderr
+
+
+def test_denylist_under_dev_shm_is_refused_even_when_valid(tmp_path):
+    with _real_denylist_under(Path("/dev/shm"), "SomeValidPatternThatWouldMatch") as denylist:
+        result = _run_pre_commit_hook(tmp_path, config_stdout=str(denylist), config_status=0)
+
+    assert result.returncode != 0, (
+        f"a readable, valid denylist under /dev/shm must still be refused: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "companion.denylist is not configured" not in result.stderr
+
+
+def test_denylist_under_tmpdir_env_is_refused_even_when_valid(tmp_path, non_temp_dir):
+    """`$TMPDIR` is only a temp root because the environment says so - a
+    directory that is perfectly ordinary on its own (proven by
+    `test_a_passing_run_prints_the_pattern_count_and_an_8_hex_fingerprint`,
+    which uses the same kind of directory with no `TMPDIR` override and
+    passes) must still be refused once the subprocess is handed that
+    directory as its `TMPDIR`."""
+    tmpdir_target = non_temp_dir / "as-tmpdir"
+    tmpdir_target.mkdir()
+    denylist = tmpdir_target / "denylist.txt"
+    denylist.write_text("SomeValidPatternThatWouldMatch\n", encoding="utf-8")
+
+    result = _run_pre_commit_hook(
+        tmp_path,
+        config_stdout=str(denylist),
+        config_status=0,
+        extra_env={"TMPDIR": str(tmpdir_target)},
+    )
+
+    assert result.returncode != 0, (
+        f"a denylist under $TMPDIR must be refused even though the same "
+        f"directory without the TMPDIR override is accepted elsewhere: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "companion.denylist is not configured" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# a path that only looks temporary, or only looks permanent, as a string
+# ---------------------------------------------------------------------------
+#
+# A directory literally named "tmpfoo" nested under `tmp_path` is not an
+# honest negative control here: `tmp_path` is already under the real /tmp on
+# this host (`tempfile.gettempdir()` is "/tmp"), so anything nested under it
+# is genuinely temporary regardless of what a sibling happens to be named,
+# and a test built that way would pass or fail for a reason unrelated to the
+# rule. A symlink is what makes the literal path and the real location two
+# different things on purpose, and is what SPEC 13 point 7 is read against
+# here: the rule is about where the bytes actually come from, not about
+# what string the path starts with - otherwise every other test in this
+# file that configures a denylist under `tmp_path` (which is a real /tmp
+# path) would already be exercising this same refusal by accident.
+# ---------------------------------------------------------------------------
+
+
+def test_a_link_outside_tmp_that_resolves_into_it_is_refused(tmp_path, non_temp_dir):
+    real_target = _write_denylist(tmp_path, "SomeValidPatternThatWouldMatch")
+    link = non_temp_dir / "denylist-link.txt"
+    link.symlink_to(real_target)
+
+    result = _run_pre_commit_hook(tmp_path, config_stdout=str(link), config_status=0)
+
+    assert result.returncode != 0, (
+        "a link whose own path is outside every temp root, but whose "
+        "target resolves under /tmp, must still be refused - a string-"
+        f"prefix check would let it through: stdout={result.stdout!r} "
+        f"stderr={result.stderr!r}"
+    )
+
+
+def test_a_link_under_tmp_that_resolves_to_a_real_location_is_allowed(tmp_path, non_temp_dir):
+    real_target = non_temp_dir / "denylist.txt"
+    real_target.write_text("SomeValidPatternThatWouldMatch\n", encoding="utf-8")
+    link = tmp_path / "denylist-link.txt"
+    link.symlink_to(real_target)
+
+    result = _run_pre_commit_hook(
+        tmp_path,
+        config_stdout=str(link),
+        config_status=0,
+        staged_stdout="README.md\n",
+        diff_stdout="+nothing here matches anything\n",
+    )
+
+    assert result.returncode == 0, (
+        "a link whose own path sits under /tmp, but whose target is a real "
+        "location, must be allowed - refusing it would mean the guard "
+        f"reads the literal path rather than where it resolves: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# the fingerprint line printed on a run the hook lets through
+# ---------------------------------------------------------------------------
+
+
+def test_a_passing_run_prints_the_pattern_count_and_an_8_hex_fingerprint(tmp_path, non_temp_dir):
+    patterns = ("FirstSyntheticPattern", "SecondSyntheticPattern", "ThirdSyntheticPattern")
+    denylist = non_temp_dir / "denylist.txt"
+    content = "\n".join(patterns) + "\n"
+    denylist.write_text(content, encoding="utf-8")
+    expected_fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+    result = _run_pre_commit_hook(
+        tmp_path,
+        config_stdout=str(denylist),
+        config_status=0,
+        staged_stdout="README.md\n",
+        diff_stdout="+nothing here matches anything\n",
+    )
+
+    assert result.returncode == 0, (
+        f"a clean diff with a valid, non-temporary denylist must exit 0: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    combined = result.stdout + result.stderr
+    lines_with_both = [
+        line
+        for line in combined.splitlines()
+        if re.search(r"\b3\b", line) and re.search(r"\b[0-9a-fA-F]{8}\b", line)
+    ]
+    assert len(lines_with_both) == 1, (
+        f"expected exactly one line naming the pattern count (3) and an "
+        f"8-hex fingerprint together: {combined!r}"
+    )
+    found = re.search(r"\b([0-9a-fA-F]{8})\b", lines_with_both[0]).group(1)
+    assert found.lower() == expected_fingerprint, (
+        f"the fingerprint must be the first 8 hex digits of the sha256 of "
+        f"the file's bytes, got {found!r} expected {expected_fingerprint!r}"
+    )
+    assert str(denylist) not in combined, "the path must not appear in the output"
+    for pattern in patterns:
+        assert pattern not in combined, "no pattern text may appear in the output"
+
+
+def test_the_fingerprint_changes_when_the_denylist_changes(tmp_path, non_temp_dir):
+    denylist = non_temp_dir / "denylist.txt"
+    denylist.write_text("FirstSyntheticPattern\n", encoding="utf-8")
+    common_kwargs = dict(
+        staged_stdout="README.md\n",
+        diff_stdout="+nothing here matches anything\n",
+    )
+
+    first = _run_pre_commit_hook(
+        tmp_path, config_stdout=str(denylist), config_status=0, **common_kwargs
+    )
+    assert first.returncode == 0, (
+        f"the first run must pass: stdout={first.stdout!r} stderr={first.stderr!r}"
+    )
+
+    denylist.write_text("FirstSyntheticPattern\nSecondSyntheticPattern\n", encoding="utf-8")
+
+    second = _run_pre_commit_hook(
+        tmp_path, config_stdout=str(denylist), config_status=0, **common_kwargs
+    )
+    assert second.returncode == 0, (
+        f"the second run must pass: stdout={second.stdout!r} stderr={second.stderr!r}"
+    )
+
+    first_combined = first.stdout + first.stderr
+    second_combined = second.stdout + second.stderr
+    first_fingerprints = set(re.findall(r"\b([0-9a-fA-F]{8})\b", first_combined))
+    second_fingerprints = set(re.findall(r"\b([0-9a-fA-F]{8})\b", second_combined))
+    assert first_fingerprints, (
+        f"no candidate fingerprint in the first run's output: {first_combined!r}"
+    )
+    assert second_fingerprints, (
+        f"no candidate fingerprint in the second run's output: {second_combined!r}"
+    )
+    assert first_fingerprints.isdisjoint(second_fingerprints), (
+        "the fingerprint must change when the denylist's contents change: "
+        f"first={first_fingerprints!r} second={second_fingerprints!r}"
+    )
+
+
+def test_a_relative_denylist_path_is_refused_before_anything_is_read(tmp_path, non_temp_dir):
+    """A relative value resolves against the directory git runs the hook from,
+    which is the repository itself, so a list inside the checkout would pass
+    the temporary-root guard and be read without complaint (SPEC 13 point 7).
+    Refused on shape alone, before any file is opened."""
+    denylist = _write_denylist(non_temp_dir, "SomeValidPatternThatWouldMatch")
+    relative = os.path.relpath(denylist, tmp_path)
+
+    result = _run_pre_commit_hook(tmp_path, config_stdout=relative, config_status=0)
+
+    assert result.returncode != 0
+    assert "not an absolute path" in result.stderr
+    assert "fingerprint" not in result.stdout + result.stderr
+
+
+def test_a_denylist_that_is_not_utf8_is_refused_with_a_message(tmp_path, non_temp_dir):
+    """Present but implausible: a list that is not text gets the hook's own
+    sentence, not a traceback. Fails closed either way; this pins that it
+    also says why."""
+    denylist = non_temp_dir / "denylist.txt"
+    denylist.write_bytes(b"\xff\xfe not text\n")
+
+    result = _run_pre_commit_hook(tmp_path, config_stdout=str(denylist), config_status=0)
+
+    assert result.returncode != 0
+    assert "not UTF-8" in result.stderr
+    assert "Traceback" not in result.stderr
+

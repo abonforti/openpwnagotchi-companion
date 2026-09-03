@@ -133,11 +133,26 @@ sudo ./tools/install-on-pi.sh --dry-run
 The dry run performs every check the real run performs, including the checksum, and stops before
 the first write.
 
+After the checksum, the installer asks a second question when it can: does a signed attestation
+say this repository actually built the file, not just that it matches the sums it shipped with. A
+warning that starts `provenance: no attestation found` means the release predates attestation, or
+you passed `--archive` for a build you made yourself - neither is a problem, since nothing could
+have attested either one. A warning that starts `provenance: could not ask` means the question was
+never put to GitHub at all, most often because `gh` (the GitHub CLI) is not installed on the unit -
+install it from your package manager or https://cli.github.com if you want the check to run - or
+because it is installed but not logged in, in which case `gh auth login` on the unit is what the
+warning is asking for: verifying an attestation needs a token even against a public repository.
+Either warning is printed and the install continues; `--require-attestation` turns both into a
+hard failure for anyone who wants the stricter rule. A present attestation that fails verification
+is always a hard failure, with or without the flag.
+
 Useful flags: `--tag v0.2.0` for a specific release, `--archive ./dist.tgz` for a local build
 (a `SHA256SUMS` must sit beside it; there is no way to skip verification), `--web-root` and
 `--plugins-dir` to override the destinations, `--plugin-only` and `--web-only` to do one half,
-and `--pwn-prefix` to say where the pwnagotchi package tree lives if it is not under `/opt/.pwn`
-(that is where the installer looks for the `defaults.toml` it reads the plugins directory from).
+`--pwn-prefix` to say where the pwnagotchi package tree lives if it is not under `/opt/.pwn`
+(that is where the installer looks for the `defaults.toml` it reads the plugins directory from),
+and `--require-attestation` to fail the install rather than warn when build provenance cannot be
+checked or confirmed.
 
 After an update, the previous web root is kept as `/var/www/openpwn-companion.previous`.
 

@@ -374,16 +374,28 @@ def test_build_job_permissions_are_read_only():
     )
 
 
-def test_publish_job_permissions_are_contents_write_and_nothing_else():
+def test_publish_job_permissions_are_exactly_the_ones_publishing_and_attesting_need():
+    """SPEC 5.2 originally said 'contents: write and nothing else' for this
+    job; issue #182 added two more grants to the same job, deliberately -
+    `id-token: write` and `attestations: write`, "on the publish job and on
+    no other" - because the publish job is 'the job that runs nothing
+    third-party, so it fits.' The set this test pins is therefore three
+    keys, not one, and is still exact: a fourth permission slipping onto
+    this job is exactly as unwanted as it was before issue #182.
+    """
     workflow = _require_release_workflow()
     steps = _linearize_steps(workflow)
     job_key, permissions = _permissions_of_job_containing(
         workflow, steps, _find_step_index(steps, _is_publish_step), "publish"
     )
-    assert permissions == {"contents": "write"}, (
+    assert permissions == {
+        "contents": "write",
+        "id-token": "write",
+        "attestations": "write",
+    }, (
         f"job {job_key!r} (containing the publish step): expected permissions "
-        f"exactly {{'contents': 'write'}}, got {permissions!r} (SPEC 5.2: "
-        f"'contents: write and nothing else')"
+        f"exactly {{'contents': 'write', 'id-token': 'write', 'attestations': "
+        f"'write'}}, got {permissions!r} (SPEC 5.2, issue #182)"
     )
 
 
@@ -407,6 +419,117 @@ def test_only_the_publish_job_holds_contents_write():
     assert write_job_keys == [publish_job_key], (
         f"expected only {publish_job_key!r} to hold contents: write, got "
         f"{write_job_keys!r} (SPEC 5.2: 'only one of them holds the token')"
+    )
+
+
+@pytest.mark.parametrize("permission_key", ["id-token", "attestations"])
+def test_only_the_publish_job_holds_the_attestation_permissions(permission_key):
+    """SPEC 5.2, issue #182: 'id-token: write and attestations: write ... are
+    on the publish job and on no other, and a test asserts that.' The same
+    shape as `test_only_the_publish_job_holds_contents_write` above, checked
+    as a property of the whole job set for the identical reason: a mutant
+    granting either permission to `checks` or `build` as well would still
+    pass a test that only inspected `publish` in isolation.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    publish_job_key = _job_key_of(steps, _find_step_index(steps, _is_publish_step))
+    jobs = _jobs(workflow)
+    write_job_keys = [
+        key
+        for key, job in jobs.items()
+        if (job.get("permissions") or {}).get(permission_key) == "write"
+    ]
+    assert write_job_keys == [publish_job_key], (
+        f"expected only {publish_job_key!r} to hold {permission_key}: write, "
+        f"got {write_job_keys!r} (SPEC 5.2, issue #182: 'on the publish job "
+        f"and on no other')"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Build provenance attestation (SPEC 5.2, issue #182): "the publish job runs
+# actions/attest-build-provenance over dist.tgz, which records, signed by
+# GitHub, the workflow, the commit and the run that produced the file."
+# Textual: the step's presence, its job, its pin and what it names as its
+# subject.
+# ---------------------------------------------------------------------------
+
+
+def _is_attest_step(step):
+    return "attest-build-provenance" in _uses_of(step).lower()
+
+
+def test_attest_build_provenance_step_exists():
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    index = _find_step_index(steps, _is_attest_step)
+    assert index is not None, (
+        "expected a step using actions/attest-build-provenance over dist.tgz "
+        "(SPEC 5.2, issue #182)"
+    )
+
+
+def test_attest_build_provenance_step_is_in_the_publish_job():
+    """SPEC 5.2: 'the attestation is issued by the job that publishes, which
+    is the job that runs nothing third-party, so it fits.' A step in `checks`
+    or `build` using the same action would still exist and would still pass
+    `test_attest_build_provenance_step_exists`, but it would be attesting
+    from a job the permission-scoping argument was never made for.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    attest_index = _find_step_index(steps, _is_attest_step)
+    publish_index = _find_step_index(steps, _is_publish_step)
+    assert attest_index is not None, "no actions/attest-build-provenance step found"
+    assert publish_index is not None, "no release-publish step found"
+    assert _job_key_of(steps, attest_index) == _job_key_of(steps, publish_index), (
+        "expected the attest-build-provenance step to live in the same job as "
+        "the publish step (SPEC 5.2, issue #182)"
+    )
+
+
+def test_attest_build_provenance_step_is_pinned_by_a_40_hex_sha_with_a_version_comment():
+    """The same pinning idiom every other third-party action in this
+    repository's workflows already uses (`actions/checkout@<40 hex>
+    # vX.Y.Z`), checked here because the action is new and a floating tag
+    or branch reference would defeat provenance before it ever ran - a
+    step that is not itself pinned to a fixed commit is exactly the kind
+    of unverifiable input SPEC 13 is about.
+
+    Read from the raw file text rather than from the parsed YAML: PyYAML
+    discards comments on load, so a `# vX.Y.Z` trailer never survives into
+    `_uses_of`'s string and a check against the parsed value could not see
+    it however the file is written.
+    """
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    index = _find_step_index(steps, _is_attest_step)
+    assert index is not None, "no actions/attest-build-provenance step found"
+    text = RELEASE_WORKFLOW_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r"actions/attest-build-provenance@([0-9a-f]{40})[ \t]*#[ \t]*v\d+\.\d+\.\d+",
+        text,
+    )
+    assert match, (
+        f"expected a line reading `actions/attest-build-provenance@<40 hex "
+        f"SHA> # vX.Y.Z` in {RELEASE_WORKFLOW_PATH}, matching the pinning "
+        f"idiom every other action in this file's uses: lines already follows"
+    )
+
+
+def test_attest_build_provenance_step_subject_path_names_dist_tgz():
+    workflow = _require_release_workflow()
+    steps = _linearize_steps(workflow)
+    index = _find_step_index(steps, _is_attest_step)
+    assert index is not None, "no actions/attest-build-provenance step found"
+    subject_path = (steps[index].get("with") or {}).get("subject-path")
+    assert subject_path is not None, (
+        "expected the attest-build-provenance step to set with.subject-path"
+    )
+    assert "dist.tgz" in str(subject_path), (
+        f"expected with.subject-path to name dist.tgz (SPEC 5.2, issue #182: "
+        f"'attest-build-provenance over dist.tgz'), got {subject_path!r}"
     )
 
 

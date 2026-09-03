@@ -6983,6 +6983,24 @@ not happen, and the same refusal names it. A tag outside the grammar exits the w
 `check_release_version.py` exits for one, since the two run against the same tag in the same
 job.
 
+**`SHA256SUMS` proves the archive arrived intact, not who built it (issue #182).** The sums are
+generated in the same job that ran `npm ci`, after it, so a compromised lifecycle script
+writing into `dist/` is attested perfectly by a checksum computed beside it. What closes that
+is build provenance: the publish job runs `actions/attest-build-provenance` over `dist.tgz`,
+which records, signed by GitHub, the workflow, the commit and the run that produced the file,
+and `gh attestation verify` checks it against the repository. The permissions it needs,
+`id-token: write` and `attestations: write`, are on the publish job and on no other, and a test
+asserts that. The attestation is a second question the installer can ask, beside the one it
+already asks; §5.3 says how it asks it. This is the one piece of code in the publish job that
+the job did not write itself, and it sits in the job that holds `contents: write`; that tension
+is accepted with its reason written down. The action is GitHub's own, under the `actions`
+organisation, pinned by full SHA, and it is a thin wrapper over `actions/attest`, chosen by
+name because that is what the installer's signer check is written against. The alternative,
+minting the attestation in the build job, would hand an OIDC token to the job that runs
+third-party lifecycle scripts, which is the job the attestation exists to stand apart from; a
+token beside the code it is meant to vouch against is worse than a pinned GitHub action beside
+a write token.
+
 **What the coverage gate does not see.** `.github/check_release_version.py` and
 `.github/release_notes.py` sit outside
 `--cov=plugin`, as `check_pinned_facts.py` and `check_coverage.py` do, so the 85% floor says
@@ -7036,9 +7054,10 @@ deliberately, by hand.
 and a query that fails on a 401, a 5xx or a rate limit has not answered no. Reading any failure as
 "no release exists" is the §13 mistake in the one step whose entire purpose is to refuse.
 
-**Permissions are `contents: write` and nothing else**, declared on the job, with the workflow
-itself declaring `permissions: {}` so that a job added later inherits nothing rather than the
-repository default. The grant has to be written down to exist.
+**Permissions are `contents: write`, and since issue #182 `id-token: write` and `attestations:
+write`, and nothing else**, declared on the job, with the workflow itself declaring
+`permissions: {}` so that a job added later inherits nothing rather than the repository
+default. The grant has to be written down to exist.
 
 **The build and the publish are two jobs, and only one of them holds the token.** `npm ci` runs
 lifecycle scripts from the whole transitive dependency tree. A job that does that and later calls
@@ -7108,10 +7127,12 @@ ancestry rule is checked and not assumed, and why it fails loudly.
     install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]
                      [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]
                      [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]
+                     [--require-attestation]
 
 Runs **on the Pi**, as root. POSIX `sh`, `set -eu`, and nothing beyond `curl`, `tar` and
-`sha256sum`. Non-interactive: it never prompts, so it is the same invocation by hand, from a
-test and from a future CI job.
+`sha256sum`, and `gh` only where the owner wants the provenance check described further down.
+Non-interactive: it never prompts, so it is the same invocation by hand, from a test and from a
+future CI job.
 
 **It installs both halves, not just the web root.** §14 step 10 says to run this and then test
 end to end from the phone, which cannot work if the plugin is not on the unit: a script that
@@ -7219,6 +7240,28 @@ for every value that is a TOML string.
 for the same name is an error rather than a last-one-wins. A line for `other/dist.tgz` describes
 a different file; letting it satisfy a bare `dist.tgz` is how a sums file for one build blesses
 another.
+
+**Provenance is verified when it can be, and its absence is never silent (issue #182).** After
+the checksum passes, the installer asks a second question when it can: with `gh` on the unit,
+`gh attestation verify dist.tgz --repo <owner/name> --signer-workflow
+<owner/name>/.github/workflows/release.yml` must succeed, so that the answer is "release.yml
+built it" and not "someone in this repository attested something", and a signed attestation
+that does not match refuses the install with exit 1, since a file that verifies against nothing
+the repository built is worse than a file with no sums at all. Three cases are told apart,
+because §13 rule 6 says a check that could not run is not a clean one: **absent**, a release
+published before attestation existed, or a `--archive` built by hand, is a warning that names
+the release and continues, since refusing would refuse every release so far and every local
+build; **invalid**, a present attestation that fails verification, is exit 1; **unverifiable**,
+no `gh` on the unit, a `gh` that is not logged in (the verifier needs a token even for a public
+repository), or an answer from GitHub that is not a verdict, an HTTP 401, 403 or 5xx or a
+connection that never completed, is a warning that says the question could not be asked,
+distinct in its wording from the first, and continues; anything else the verifier says is a
+verdict and is treated as invalid, because a check that fails open on an unrecognised message
+is not a check. Requiring `gh` was considered and refused: the installer runs on a Pi Zero with
+`curl`, `tar` and `sha256sum`, and a verifier that needs a second package manager is a verifier
+nobody installs. `--require-attestation` turns both warnings into exit 1 for an owner who wants
+the stricter rule, is a usage error beside `--plugin-only` since there is then nothing to
+attest, and the dry run reports which of the three cases it found.
 
 **Resolving `main.custom_plugins`.** The key must be found in every spelling a real unit
 carries: the flat dotted form `main.custom_plugins = "..."`, with or without spaces around `=`;

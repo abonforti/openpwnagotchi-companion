@@ -1889,3 +1889,646 @@ def test_the_installed_modes_are_the_ones_spec_pins(pi):
     assert mode_of(pi.web_root / "index.html") == 0o644
     assert mode_of(pi.web_root / "assets" / "app.js") == 0o644
     assert mode_of(pi.installed_plugin) == 0o644
+
+
+# ---------------------------------------------------------------------------
+# Build provenance attestation (SPEC 5.3, issue #182): "the installer asks a
+# second question when it can: with gh on the unit, gh attestation verify
+# dist.tgz --repo <owner/name> must succeed ... Three cases are told apart
+# ... absent ... invalid ... unverifiable ... --require-attestation turns
+# both warnings into exit 1."
+#
+# Every case below except the --archive one (SPEC's own "absent" example) has
+# to exercise --tag/--repo, the download path, because SPEC 5.3 groups
+# "a --archive built by hand" under absent unconditionally - a hand-built
+# archive was never attested in the first place, so nothing here can drive
+# the gh call through --archive at all. That in turn means faking a download:
+# a `curl` stub good enough to serve a locally built dist.tgz/SHA256SUMS pair
+# without touching the network, in place of the real GitHub Releases fetch.
+# SPEC 5.3 pins curl as the download tool but not its exact invocation (-o
+# vs redirection, retry flags, ...), so the stub is deliberately liberal - it
+# matches on the release asset's own fixed name (dist.tgz or SHA256SUMS)
+# appearing anywhere in its argv, which is a fact about what a real release
+# asset is called rather than a guess about how the script calls curl, and
+# falls back to stdout when no -o/--output is present. This is the largest
+# assumption in this section; see the report for how it was validated and
+# what would have to change if it is wrong.
+# ---------------------------------------------------------------------------
+
+GH_ATTESTATION_REPO = "example/companion-fixture"
+
+
+def write_stub(path: Path, script: str) -> None:
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def write_recording_exit_stub(
+    path: Path, marker: Path, *, exit_code: int, stderr: str = ""
+) -> None:
+    """A stub that succeeds unconditionally for `gh auth status` - every
+    case below except the ones that specifically test that check assumes
+    the unit is already logged in, per SPEC 5.3's own ordering - and, for
+    anything else `gh` is called with (in practice `gh attestation
+    verify`), appends its own argv (space-joined) as one line to `marker`,
+    optionally writes `stderr`, and exits `exit_code`. Stands in for `gh`
+    in every verify-outcome case below: what matters is what the installer
+    called it with and how it reacted to the exit code and the message,
+    not a faithful reimplementation of `gh` itself.
+    """
+    write_stub(
+        path,
+        "#!/bin/sh\n"
+        'if [ "$1" = "auth" ]; then exit 0; fi\n'
+        f'printf \'%s\\n\' "$*" >> "{marker}"\n'
+        + (f'printf \'%s\' "{stderr}" >&2\n' if stderr else "")
+        + f"exit {exit_code}\n",
+    )
+
+
+def write_gh_not_logged_in_stub(path: Path, *, auth_marker: Path, verify_marker: Path) -> None:
+    """`gh auth status` fails the way a unit with no stored token does,
+    printing the `gh auth login` sentence SPEC 5.3 names. `gh attestation
+    verify` is stubbed to succeed - a permissive default - so the only way
+    this stub can look like it was called is through `verify_marker`
+    existing at all: SPEC 5.3 says a `gh` that is not logged in must never
+    reach the verify call.
+    """
+    write_stub(
+        path,
+        "#!/bin/sh\n"
+        'if [ "$1" = "auth" ]; then\n'
+        f'  printf \'%s\\n\' "$*" >> "{auth_marker}"\n'
+        '  echo "You are not logged into any GitHub hosts." >&2\n'
+        '  echo "To authenticate, run: gh auth login" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        f'printf \'%s\\n\' "$*" >> "{verify_marker}"\n'
+        "exit 0\n",
+    )
+
+
+def write_curl_download_stub(path: Path, *, archive: Path, sums: Path) -> None:
+    write_stub(
+        path,
+        "#!/bin/sh\n"
+        'out=""\n'
+        'prev=""\n'
+        'src=""\n'
+        'for arg in "$@"; do\n'
+        '  case "$prev" in\n'
+        '    -o|--output) out="$arg" ;;\n'
+        "  esac\n"
+        '  case "$arg" in\n'
+        f'    *SHA256SUMS*) src="{sums}" ;;\n'
+        f'    *dist.tgz*) src="{archive}" ;;\n'
+        "  esac\n"
+        '  prev="$arg"\n'
+        "done\n"
+        'if [ -z "$src" ]; then echo "stub curl: could not tell which release '
+        'asset was requested: $*" >&2; exit 22; fi\n'
+        'if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi\n'
+        "exit 0\n",
+    )
+
+
+def no_real_gh_path(tmp_path: Path, *front_dirs: Path) -> str:
+    """A PATH with every real executable this host's own PATH already
+    offers - `sh`, `tar`, `sha256sum`, `curl`, and everything else the
+    script might reach for - except a real `gh`, which this host has
+    installed and which must not be reachable for a "no gh on PATH" case to
+    test anything real. Built by mirroring every directory on the ambient
+    PATH with symlinks, one name at a time, skipping `gh` specifically:
+    excluding a whole directory would also remove `tar` and `sha256sum` on a
+    host where all three live in `/usr/bin`, which this one does.
+    """
+    mirror = tmp_path / "no-real-gh"
+    if not mirror.is_dir():
+        mirror.mkdir()
+        seen: set[str] = set()
+        for directory in os.environ.get("PATH", "").split(":"):
+            if not directory or not os.path.isdir(directory):
+                continue
+            try:
+                entries = os.listdir(directory)
+            except OSError:
+                continue
+            for name in entries:
+                if name == "gh" or name in seen:
+                    continue
+                target = os.path.join(directory, name)
+                if os.path.isdir(target) or not os.access(target, os.X_OK):
+                    continue
+                try:
+                    (mirror / name).symlink_to(target)
+                except OSError:
+                    continue
+                seen.add(name)
+    return ":".join([str(d) for d in front_dirs] + [str(mirror)])
+
+
+@pytest.fixture
+def release_assets(tmp_path):
+    """A built dist.tgz plus its matching SHA256SUMS, standing in for what a
+    real GitHub Release actually serves - what the stub curl below hands
+    back for both, so the checksum step downstream of the attestation check
+    still has something genuine to verify.
+    """
+    server = tmp_path / "server"
+    server.mkdir()
+    archive = build_archive(server / "dist.tgz", pwa_files("1.0.0"))
+    sums = write_sha256sums(archive)
+    return archive, sums
+
+
+def run_release_install(pi: "Pi", path_value: str, *extra: str) -> subprocess.CompletedProcess:
+    assert INSTALL.is_file(), f"{INSTALL} does not exist; SPEC section 5.3 requires it"
+    env = dict(os.environ)
+    env["PATH"] = path_value
+    args = [
+        "--web-root", str(pi.web_root),
+        "--config", str(pi.config),
+        "--tag", "v1.0.0",
+        "--repo", GH_ATTESTATION_REPO,
+        *extra,
+    ]
+    return subprocess.run(
+        ["sh", str(INSTALL), *args],
+        cwd=str(pi.root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+
+
+def test_gh_attestation_verify_is_called_and_a_verified_release_installs(
+    pi, tmp_path, release_assets
+):
+    """Case (a): the stub exits 0."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(stub_dir / "gh", marker, exit_code=0)
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+    combined = (result.stdout + result.stderr).lower()
+    assert "attestation ok" in combined, (
+        f"expected the installer to report the attestation as verified, got "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert marker.is_file(), "gh was never invoked"
+    argv = marker.read_text(encoding="utf-8")
+    assert "attestation verify" in argv, f"expected 'attestation verify' in gh's argv, got {argv!r}"
+    assert "dist.tgz" in argv, f"expected the archive path in gh's argv, got {argv!r}"
+    assert "--repo" in argv, f"expected --repo in gh's argv, got {argv!r}"
+    assert "--signer-workflow" in argv, (
+        f"expected --signer-workflow in gh's argv (SPEC 5.3: 'so that the "
+        f"answer is release.yml built it and not someone in this repository "
+        f"attested something'), got {argv!r}"
+    )
+    assert f"{GH_ATTESTATION_REPO}/.github/workflows/release.yml" in argv, (
+        f"expected --signer-workflow to name this repository's own "
+        f"release.yml, got {argv!r}"
+    )
+
+
+def test_gh_attestation_invalid_refuses_the_install(pi, tmp_path, release_assets):
+    """Case (b): the stub exits 1 with a message the script itself never
+    prints. Not "verification failed": the script's own boilerplate line
+    ("provenance verification failed for $tag") contains that exact phrase
+    too, so asserting it proves nothing about whether the stub's own text
+    reached stderr - a script that discarded the stub's message and only
+    ever printed its own boilerplate would still satisfy that assertion.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(
+        stub_dir / "gh", marker, exit_code=1,
+        stderr="signature does not match the expected public key",
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+    assert "signature does not match the expected public key" in result.stderr, (
+        f"expected the stub's own distinct message on stderr, got {result.stderr!r}"
+    )
+
+
+def test_gh_attestation_certificate_message_is_invalid(pi, tmp_path, release_assets):
+    """SPEC 5.3: 'anything else the verifier says is a verdict and is
+    treated as invalid' - a message containing "certificate" used to sit in
+    the unverifiable group; SPEC 5.3 now narrows that group to 'an HTTP 401,
+    403 or 5xx or a connection that never completed' specifically, so a
+    certificate complaint (an answer, not a connection failure) is invalid:
+    exit 1, not a warning that continues.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(
+        stub_dir / "gh", marker, exit_code=1,
+        stderr="verification error: certificate has expired",
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+
+
+def test_gh_not_logged_in_is_unverifiable_and_never_calls_verify(pi, tmp_path, release_assets):
+    """SPEC 5.3: 'a gh that is not logged in (the verifier needs a token
+    even for a public repository)' is one of the unverifiable cases, checked
+    with `gh auth status` before the verify call ever runs.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    auth_marker = tmp_path / "gh-auth-argv"
+    verify_marker = tmp_path / "gh-verify-argv"
+    write_gh_not_logged_in_stub(
+        stub_dir / "gh", auth_marker=auth_marker, verify_marker=verify_marker
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+    assert auth_marker.is_file(), "gh auth status was never invoked"
+    assert not verify_marker.exists(), (
+        "gh attestation verify must not run once gh auth status has already "
+        "answered that the unit is not logged in"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "not logged in" in combined, (
+        f"expected the warning to say gh is not logged in, got "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_require_attestation_with_gh_not_logged_in_refuses(pi, tmp_path, release_assets):
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    write_gh_not_logged_in_stub(
+        stub_dir / "gh",
+        auth_marker=tmp_path / "gh-auth-argv",
+        verify_marker=tmp_path / "gh-verify-argv",
+    )
+
+    result = run_release_install(
+        pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--require-attestation"
+    )
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+
+
+def test_require_attestation_with_plugin_only_is_a_usage_error(pi):
+    """SPEC 5.3: '--require-attestation ... is a usage error beside
+    --plugin-only since there is then nothing to attest' - --plugin-only
+    installs nothing from an archive, so there is no dist.tgz for the flag
+    to have an opinion about.
+    """
+    before = pi.state()
+
+    result = pi.run(
+        "--require-attestation", "--plugin-only",
+        "--web-root", str(pi.web_root), "--config", str(pi.config),
+    )
+
+    assert result.returncode == 2
+    assert result.stderr.strip()
+    assert pi.state() == before
+
+
+def test_dry_run_on_the_download_path_reports_a_verified_attestation(pi, tmp_path, release_assets):
+    """SPEC 5.3: 'the dry run reports which of the three cases it found' -
+    the verified case, driven through --tag/--repo rather than --archive so
+    this exercises the same download path as the other dry-run case below,
+    not the local-archive shortcut that never involves gh at all.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(stub_dir / "gh", tmp_path / "gh-argv", exit_code=0)
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert pi.state() == ({}, {})
+    combined = (result.stdout + result.stderr).lower()
+    assert "attestation ok" in combined, (
+        f"expected the dry run to report the verified attestation it found, "
+        f"got stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_dry_run_on_the_download_path_reports_an_absent_attestation(pi, tmp_path, release_assets):
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(
+        stub_dir / "gh", tmp_path / "gh-argv", exit_code=1,
+        stderr="HTTP 404: Not Found",
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert pi.state() == ({}, {})
+    combined = (result.stdout + result.stderr).lower()
+    assert "no attestation" in combined, (
+        f"expected the dry run to report the absent attestation it found, "
+        f"got stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_gh_attestation_unverifiable_warns_and_continues(pi, tmp_path, release_assets):
+    """Case (c): the stub exits 2 with a network-style message."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(
+        stub_dir / "gh", marker, exit_code=2,
+        stderr="dial tcp: connection refused",
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+
+
+def test_gh_attestation_absent_for_a_downloaded_release_warns_and_continues(
+    pi, tmp_path, release_assets
+):
+    """The downloaded-release counterpart to the hand-built-archive "absent"
+    case: a real `gh` reports no attestation for a release published before
+    attestation existed with `exit 1` and an "HTTP 404" line on stderr - the
+    same distinction the script's own `verify_provenance` docstring draws
+    ("404 is no attestation for this subject (absent)"). Wording must differ
+    from both the unverifiable case (gh ran but could not ask) and the
+    hand-built-archive case (gh was never asked at all), since a release
+    with nothing to attest and a question that could not be asked are not
+    the same fact.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(
+        stub_dir / "gh", marker, exit_code=1,
+        stderr='HTTP 404: Not Found (https://api.github.com/repos/example/attestations)',
+    )
+
+    result = run_release_install(pi, f"{stub_dir}:{os.environ.get('PATH', '')}")
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+    combined = (result.stdout + result.stderr).lower()
+    assert "no attestation" in combined and "v1.0.0" in combined, (
+        f"expected a warning naming the tag with no attestation found, got "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+    unverifiable_stub_dir = tmp_path / "unverifiable-stub"
+    unverifiable_stub_dir.mkdir()
+    write_curl_download_stub(unverifiable_stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(
+        unverifiable_stub_dir / "gh", tmp_path / "gh-argv-unverifiable", exit_code=2,
+        stderr="dial tcp: connection refused",
+    )
+    unverifiable = run_release_install(
+        pi, f"{unverifiable_stub_dir}:{os.environ.get('PATH', '')}"
+    )
+    assert unverifiable.returncode == 0, unverifiable.stderr
+
+    archive_only = pi.archive()
+    local_result = subprocess.run(
+        [
+            "sh", str(INSTALL),
+            "--web-root", str(pi.web_root), "--config", str(pi.config),
+            "--archive", str(archive_only),
+        ],
+        cwd=str(pi.root), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        timeout=120,
+    )
+    assert local_result.returncode == 0, local_result.stderr
+
+    absent_release_text = result.stdout + result.stderr
+    unverifiable_text = unverifiable.stdout + unverifiable.stderr
+    hand_built_text = local_result.stdout + local_result.stderr
+    assert absent_release_text != unverifiable_text, (
+        "SPEC 5.3: a release with no attestation and a question that could "
+        "not be asked must not be reported as the same thing"
+    )
+    assert absent_release_text != hand_built_text, (
+        "SPEC 5.3: a release with no attestation and a hand-built archive "
+        "that was never asked about must not be reported as the same thing"
+    )
+
+
+def test_require_attestation_with_no_attestation_for_the_release_refuses(
+    pi, tmp_path, release_assets
+):
+    """The downloaded-release "absent" case under --require-attestation:
+    SPEC 5.3 says the flag "turns both warnings into exit 1", and this is
+    one of the two warnings.
+    """
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(
+        stub_dir / "gh", marker, exit_code=1,
+        stderr='HTTP 404: Not Found (https://api.github.com/repos/example/attestations)',
+    )
+
+    result = run_release_install(
+        pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--require-attestation"
+    )
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+    assert "no attestation" in result.stderr.lower(), (
+        f"expected the refusal to name the missing attestation, got "
+        f"stderr={result.stderr!r}"
+    )
+
+
+def test_no_gh_on_path_warns_and_continues(pi, tmp_path, release_assets):
+    """Case (d): no gh anywhere on PATH."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+
+    result = run_release_install(pi, no_real_gh_path(tmp_path, stub_dir))
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+
+
+def test_the_unverifiable_and_no_gh_cases_print_different_sentences(pi, tmp_path, release_assets):
+    """Cases (c) and (d) both continue with a warning, but SPEC 5.3 requires
+    the wording to differ - "distinct in its wording from the first": a gh
+    that ran but could not answer and no gh at all are not the same fact.
+    """
+    archive, sums = release_assets
+
+    unverifiable_stub_dir = tmp_path / "unverifiable-stub"
+    unverifiable_stub_dir.mkdir()
+    write_curl_download_stub(unverifiable_stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(
+        unverifiable_stub_dir / "gh", tmp_path / "gh-argv-unverifiable", exit_code=2,
+        stderr="dial tcp: connection refused",
+    )
+    unverifiable = run_release_install(
+        pi, f"{unverifiable_stub_dir}:{os.environ.get('PATH', '')}"
+    )
+    assert unverifiable.returncode == 0, unverifiable.stderr
+
+    no_gh_stub_dir = tmp_path / "no-gh-stub"
+    no_gh_stub_dir.mkdir()
+    write_curl_download_stub(no_gh_stub_dir / "curl", archive=archive, sums=sums)
+    no_gh = run_release_install(pi, no_real_gh_path(tmp_path, no_gh_stub_dir))
+    assert no_gh.returncode == 0, no_gh.stderr
+
+    unverifiable_text = unverifiable.stdout + unverifiable.stderr
+    no_gh_text = no_gh.stdout + no_gh.stderr
+    assert unverifiable_text != no_gh_text, (
+        "SPEC 5.3: 'distinct in its wording from the first' - a gh that ran "
+        "but could not answer and no gh at all must not be reported as the "
+        "same thing"
+    )
+
+
+def test_require_attestation_with_no_gh_refuses(pi, tmp_path, release_assets):
+    """Case (e), first leg: --require-attestation with no gh at all."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+
+    result = run_release_install(
+        pi, no_real_gh_path(tmp_path, stub_dir), "--require-attestation"
+    )
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+
+
+def test_require_attestation_with_unverifiable_gh_refuses(pi, tmp_path, release_assets):
+    """Case (e), second leg: --require-attestation with an unverifiable gh."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(
+        stub_dir / "gh", tmp_path / "gh-argv", exit_code=2,
+        stderr="dial tcp: connection refused",
+    )
+
+    result = run_release_install(
+        pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--require-attestation"
+    )
+
+    assert result.returncode == 1
+    assert pi.state() == ({}, {})
+
+
+def test_require_attestation_with_verified_gh_proceeds(pi, tmp_path, release_assets):
+    """Case (e), third leg: --require-attestation with a verified gh."""
+    archive, sums = release_assets
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    write_curl_download_stub(stub_dir / "curl", archive=archive, sums=sums)
+    write_recording_exit_stub(stub_dir / "gh", tmp_path / "gh-argv", exit_code=0)
+
+    result = run_release_install(
+        pi, f"{stub_dir}:{os.environ.get('PATH', '')}", "--require-attestation"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (pi.web_root / "index.html").is_file()
+
+
+def test_archive_install_never_invokes_gh_even_when_present(pi, tmp_path):
+    """Case (f): --archive is treated as absent unconditionally, and never
+    calls gh even when a gh happens to be on PATH.
+    """
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    marker = tmp_path / "gh-argv"
+    write_recording_exit_stub(stub_dir / "gh", marker, exit_code=0)
+    archive = pi.archive()
+
+    env = dict(os.environ)
+    env["PATH"] = f"{stub_dir}:{os.environ.get('PATH', '')}"
+    result = subprocess.run(
+        [
+            "sh", str(INSTALL),
+            "--web-root", str(pi.web_root), "--config", str(pi.config),
+            "--archive", str(archive),
+        ],
+        cwd=str(pi.root),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists(), (
+        "gh must never be invoked for a hand-built --archive (SPEC 5.3: 'a "
+        "--archive built by hand ... is a warning that names the release "
+        "and continues')"
+    )
+    combined = (result.stdout + result.stderr).lower()
+    assert "provenance" in combined, (
+        f"expected a warning naming the provenance check as skipped, got "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
+
+def test_dry_run_reports_the_absent_attestation_case_and_writes_nothing(pi):
+    """Case (g): --dry-run reports which of the three cases it found. Driven
+    through --archive, the case with no gh involvement at all, so this test
+    does not also depend on the curl-stub assumption the download-path cases
+    above carry.
+    """
+    archive = pi.archive()
+
+    result = pi.install("--dry-run", archive=archive)
+
+    assert result.returncode == 0, result.stderr
+    assert pi.state() == ({}, {})
+    combined = (result.stdout + result.stderr).lower()
+    assert "provenance" in combined, (
+        f"expected the dry run to report the attestation case it found, got "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )

@@ -4,6 +4,7 @@
 #   install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]
 #                    [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]
 #                    [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]
+#                    [--require-attestation]
 #
 # Runs on the unit, as root. Non-interactive by design: the same invocation
 # works by hand, from the test suite and from a future CI job.
@@ -17,10 +18,13 @@
 #
 # Exit status: 0 success, 1 failure (missing tool or source file, no release,
 # download, checksum, an archive that refuses to stay inside its target, an
-# unresolved custom plugins directory), 2 usage error, including a value read
-# from a file on the unit that fails the checks in require_clean_dir_value
-# (SPEC.md 5.3.1, issue #166). Anything non-zero leaves the installation as it
-# was.
+# unresolved custom plugins directory, a build provenance refusal with
+# --require-attestation - SPEC.md 5.3, issue #182), 2 usage error, including
+# a value read from a file on the unit that fails the checks in
+# require_clean_dir_value (SPEC.md 5.3.1, issue #166), and
+# --require-attestation given together with --plugin-only, since provenance
+# is only checked on the web half. Anything non-zero leaves the installation
+# as it was.
 
 set -eu
 
@@ -28,6 +32,7 @@ usage() {
     echo "usage: install-on-pi.sh [--web-root DIR] [--plugins-dir DIR] [--config FILE]" >&2
     echo "                        [--tag vX.Y.Z] [--archive FILE] [--repo owner/name]" >&2
     echo "                        [--plugin-only] [--web-only] [--dry-run] [--pwn-prefix DIR]" >&2
+    echo "                        [--require-attestation]" >&2
 }
 
 # Strip leading and trailing spaces and tabs. Written out rather than shelled
@@ -191,6 +196,124 @@ verify_checksum() {
     return 0
 }
 
+# Ask a second question beside the checksum: did this repository build the
+# archive, not just does it match the sums it shipped with (SPEC.md 5.2, 5.3,
+# issue #182). Three outcomes, told apart because a check that could not run
+# is not a clean one (SPEC.md 13):
+#
+#   ok           a signed attestation for $_archive verifies against $repo,
+#                built by $repo/.github/workflows/release.yml specifically
+#                (--signer-workflow), so the answer is "release.yml built
+#                it" and not "someone in this repository attested something".
+#   absent       $_kind is "local" (a hand-built --archive, which nothing
+#                attested) or gh reports no attestation for this release (a
+#                release published before attestation existed). A warning
+#                that names what was checked, and the run continues.
+#   unverifiable the question itself could not be asked: gh is missing, gh
+#                is installed but not logged in (the verifier needs a token
+#                even for a public repository), or the answer from GitHub
+#                is not a verdict - an HTTP 401, 403 or 5xx, or a
+#                connection that never completed. A warning worded
+#                differently from "absent", and the run continues.
+#   invalid      an attestation exists and fails verification, or gh says
+#                anything else. Always exit 1: a check that fails open on
+#                an unrecognised message is not a check, and a file that
+#                verifies against nothing this repository built is worse
+#                than a file with no sums at all.
+#
+# gh's own exit codes do not distinguish these (`gh help exit-codes`
+# documents 0 success, 1 "fails for any reason", 2 cancelled, 4 requires
+# authentication - and 4 was not what `gh attestation verify` actually
+# returned for bad credentials when this was checked by hand, only 1, the
+# same code an absent attestation or a failed verification also returns).
+# What does distinguish them is the text gh prints on stderr, checked by
+# hand the same way: 404 is no attestation for this subject (absent); not
+# logged in is its own sentence, checked separately below before verify
+# ever runs; 401, 403 and 5xx, and the small set of network-failure
+# phrases below, are gh failing to reach GitHub at all, not a verdict
+# about the artifact (unverifiable). The phrase list is deliberately
+# narrow: gh's own verification failures are certificate- and identity-
+# centric (a wrong --signer-workflow, an expired cert, an unrecognised
+# issuer), so generic words like "certificate" or "timeout" would read a
+# real, negative verdict as "could not ask" instead - failing open on the
+# exact answer this check exists to catch. Only phrases a verdict cannot
+# carry are matched: they name a failure to complete the request, not a
+# request that completed and said no.
+#
+# --require-attestation turns "absent" and "unverifiable" into exit 1 too,
+# for an owner who wants the stricter rule; "invalid" is already exit 1
+# regardless. It is refused at the top of the script, before any of this
+# runs, when paired with --plugin-only: the check only happens in the web
+# half, so there would be nothing to attest.
+verify_provenance() {
+    _archive="$1"
+    _kind="$2"
+
+    if [ "$_kind" = "local" ]; then
+        echo "install-on-pi.sh: provenance: $_archive is a hand-built archive; nothing attested it, continuing" >&2
+        if [ $require_attestation -eq 1 ]; then
+            echo "install-on-pi.sh: --require-attestation refuses an archive with no attestation to check" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "install-on-pi.sh: provenance: gh is not on PATH, could not ask whether $tag is attested; continuing" >&2
+        if [ $require_attestation -eq 1 ]; then
+            echo "install-on-pi.sh: --require-attestation refuses an install whose provenance could not be checked" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    # A token is required even to verify an attestation on a public repository,
+    # so an installed-but-unauthenticated gh has to be told apart from one
+    # that ran and got a real answer: gh auth status is the question asked
+    # first, before verify ever runs, rather than trying to recognise its
+    # failure text after the fact (SPEC.md 5.3, issue #182).
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "install-on-pi.sh: provenance: gh is not logged in (gh auth login), could not ask whether $tag is attested; continuing" >&2
+        if [ $require_attestation -eq 1 ]; then
+            echo "install-on-pi.sh: --require-attestation refuses an install whose provenance could not be checked" >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    _err_file="$work_dir/attestation.err"
+    if gh attestation verify "$_archive" --repo "$repo" \
+        --signer-workflow "$repo/.github/workflows/release.yml" \
+        >"$work_dir/attestation.out" 2>"$_err_file"; then
+        echo "Attestation OK: $tag ($repo)"
+        return 0
+    fi
+    _stderr=$(cat "$_err_file")
+    case "$_stderr" in
+        *"HTTP 404"*)
+            echo "install-on-pi.sh: provenance: no attestation found for $tag ($repo); continuing" >&2
+            if [ $require_attestation -eq 1 ]; then
+                echo "install-on-pi.sh: --require-attestation refuses a release with no attestation" >&2
+                return 1
+            fi
+            ;;
+        *"HTTP 401"* | *"HTTP 403"* | *"HTTP 5"* | *"dial tcp"* | *"no such host"* | \
+        *"i/o timeout"* | *"connection refused"* | *"context deadline exceeded"* | *"x509:"*)
+            echo "install-on-pi.sh: provenance: could not ask whether $tag is attested (gh attestation verify could not reach GitHub): $_stderr" >&2
+            if [ $require_attestation -eq 1 ]; then
+                echo "install-on-pi.sh: --require-attestation refuses an install whose provenance could not be checked" >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "$_stderr" >&2
+            echo "install-on-pi.sh: provenance verification failed for $tag ($repo)" >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 # Pull "tag_name" out of a release document without a JSON parser. The field is
 # on its own line in what the API returns, and the alternative is depending on
 # python3 to read three characters.
@@ -274,6 +397,7 @@ repo_given=0
 plugin_only=0
 web_only=0
 dry_run=0
+require_attestation=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -393,6 +517,10 @@ while [ $# -gt 0 ]; do
             dry_run=1
             shift
             ;;
+        --require-attestation)
+            require_attestation=1
+            shift
+            ;;
         *)
             echo "install-on-pi.sh: unknown argument: $1" >&2
             usage
@@ -405,6 +533,15 @@ done
 # is a typo, and silently doing everything would hide it.
 if [ $plugin_only -eq 1 ] && [ $web_only -eq 1 ]; then
     echo "install-on-pi.sh: --plugin-only and --web-only are mutually exclusive" >&2
+    usage
+    exit 2
+fi
+
+# Build provenance is only asked about on the web half - the archive it names
+# is the PWA, not the plugin - so --require-attestation beside --plugin-only
+# is a request for a check that never runs, not a stricter one.
+if [ $require_attestation -eq 1 ] && [ $plugin_only -eq 1 ]; then
+    echo "install-on-pi.sh: --require-attestation has nothing to attest with --plugin-only" >&2
     usage
     exit 2
 fi
@@ -552,6 +689,7 @@ if [ $do_web -eq 1 ]; then
             exit 1
         fi
         verify_checksum "$archive" "$sums" || exit 1
+        verify_provenance "$archive" local || exit 1
     else
         if [ -z "$tag" ]; then
             if ! curl -fsSL -o "$work_dir/release.json" \
@@ -582,6 +720,7 @@ if [ $do_web -eq 1 ]; then
             exit 1
         fi
         verify_checksum "$archive" "$sums" || exit 1
+        verify_provenance "$archive" release || exit 1
     fi
 
     check_archive_paths "$archive" || exit 1

@@ -308,7 +308,23 @@ def test_both_hook_shapes_normalise_identically(router):
 
     assert from_strings["data"] == from_dicts["data"]
     assert from_strings["data"]["ap"] == "aa:bb:cc:dd:ee:ff"
-    assert from_strings["data"]["station"] == "11:22:33:44:55:66"
+
+
+def test_the_station_mac_never_reaches_the_wire(router):
+    """SPEC 2.13, issue #33: the hook is handed a station beside the access
+    point, and the push carries `{filename, ap, gps}` and nothing else - the
+    station is dropped after normalising nothing from it. Checked for both
+    argument shapes (F20), because a fix that only strips the string form
+    would still leak a client MAC through the dict path."""
+    from_strings = router.on_handshake_message(
+        "TestNet_001_aabbccddeeff.pcapng", *STRING_SHAPE
+    )
+    from_dicts = router.on_handshake_message(
+        "TestNet_001_aabbccddeeff.pcapng", *DICT_SHAPE
+    )
+
+    assert "station" not in from_strings["data"]
+    assert "station" not in from_dicts["data"]
 
 
 def test_the_handshake_push_carries_the_basename(router):
@@ -318,16 +334,17 @@ def test_the_handshake_push_carries_the_basename(router):
 
     assert message["type"] == "handshake"
     assert message["data"]["filename"] == "TestNet_001_aabbccddeeff.pcapng"
-    assert set(message["data"]) == {"filename", "ap", "station", "gps"}
+    assert set(message["data"]) == {"filename", "ap", "gps"}
 
 
 def test_an_unusable_mac_argument_becomes_null_not_a_crash(router):
+    # The unusable dict sits in the access point slot: the station slot is
+    # no longer read (SPEC 2.13, issue #33), so a value there exercises nothing.
     message = router.on_handshake_message(
-        "TestNet_001_aabbccddeeff.pcapng", None, {"hostname": "no mac here"}
+        "TestNet_001_aabbccddeeff.pcapng", {"hostname": "no mac here"}, None
     )
 
     assert message["data"]["ap"] is None
-    assert message["data"]["station"] is None
 
 
 @pytest.mark.parametrize(

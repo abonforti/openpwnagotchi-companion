@@ -124,6 +124,13 @@ These arrive unsolicited, driven by pwnagotchi hooks: `handshake`, `peer_detecte
 `wifi_update`, `channel_hop`, `status_change`, `face_status`, `gps_update`, `stats`,
 `restarting`, `keepalive`.
 
+What the wire carries about third parties, stated plainly: an access point's MAC, SSID,
+vendor, channel, signal and encryption, and a count of its clients; a pwngrid peer's
+advertised identity and name; a capture's access point MAC and, when the unit had a fix, the
+unit's own position at that moment. It does not carry the MAC of a client station: the
+`handshake` push dropped it (issue #33), because a client MAC is the identifier of a person's
+device and nothing in the app showed it.
+
 - `face_status` is pushed only when the face or status text actually changed. The face is
   unicode text; no image is ever transported for it.
 - `screen_image` is **never** pushed. The full e-ink PNG is on demand only — a Bluetooth PAN

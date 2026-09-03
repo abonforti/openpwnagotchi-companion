@@ -799,7 +799,7 @@ it cannot carry a `type`, and `bad_request` is the only enum member that fits.
 | `log_lines` | reply | `{lines: string[], path}` (§2.9) |
 | `screen_image` | reply | `{png: <base64>, mtime}` (§2.10) |
 | `face_status` | reply / push | `{face, status, mode}` |
-| `handshake` | push, `on_handshake` | `{filename, ap, station, gps}` (§2.13) |
+| `handshake` | push, `on_handshake` | `{filename, ap, gps}` (§2.13) |
 | `peer_detected` | push, `on_peer_detected` | `Peer` |
 | `wifi_update` | push, `on_wifi_update` | `AccessPoint[]` |
 | `channel_hop` | push, `on_channel_hop` | `{channel}` |
@@ -1799,6 +1799,16 @@ def _mac_of(x):
 ```
 
 This is tested in `tests/test_handshakes.py` with both shapes. Never assume the dict form.
+
+**The client station's MAC is not on the wire (issue #33).** The hook hands the plugin the
+station beside the access point, and until this decision the `handshake` push carried it as
+`station`. Nothing in the app showed it, and the Wi-Fi view's rule that `clients` is a count
+because the station MACs behind it stay on the unit was true of `AccessPoint` and false of this
+message. A client MAC is the identifier of a person's device, and the project has been careful
+about that everywhere else, so the field is gone rather than the claim corrected: the push is
+`{filename, ap, gps}`, the hook still accepts both argument shapes and drops the station after
+normalising nothing from it. A change to the shape of an existing message, so a MINOR bump
+under §12.
 
 ### 2.14 Hardening vs upstream `pwnios.py` (checklist)
 
@@ -3670,7 +3680,7 @@ whole of the defect this ticket describes: somebody taps shut down and is told t
 back.
 
 **A `handshake` push does not write the list, it asks for it.** The push carries `{filename,
-ap, station, gps}` (§2.13); an entry in the list carries `ssid`, `bssid`, `mtime` and `size`,
+ap, gps}` (§2.13); an entry in the list carries `ssid`, `bssid`, `mtime` and `size`,
 which the plugin gets from parsing the capture name and stat-ing the file (§2.7). The three
 ways to close that gap are to invent the missing fields, to reimplement the plugin's filename
 parsing in the client, or to ask. Inventing puts fabricated data on a screen, and a `size` of
@@ -4304,6 +4314,14 @@ header has found a regression of this section.
 This is the screen that decides which unit the app talks to, and on a fresh install it is the
 only screen that matters, because nothing else can be reached until it has been used. §4.7 owns
 the data; what follows is the shape.
+
+**No reachability pill on a host (issue #33).** The mockup marked hosts "Reachable" or
+"Unreachable" having never connected to them. There is no probe in the protocol, in §4.3 or in
+this list, and probing a host list over Bluetooth PAN from a battery-powered phone is a real
+cost for a guess. The cheap honest version, "what happened last time we tried", is a memory of
+a failure kept against an address the owner may have just corrected. The decision is none: the
+header says whether the active host answers (§4.5.1.2), the row says which host is active, and
+a host that has never been tried says nothing, because it has nothing to say.
 
 **The host list comes first and the add-host form sits under it.** The common visit is an owner
 correcting the address of the unit in front of them, not adding a second unit, and a form above
@@ -4959,6 +4977,15 @@ to be read twice.
 
 §4.5.2 says what this screen holds: pwngrid peers with signal, last-seen and pwnd counters. What
 follows is the rest, and most of it is §4.5.2.3's, which is the point.
+
+**No grid-health pill (issue #33).** The mockup showed "Grid up" above the list, green and
+permanent. Nothing on the wire reports pwngrid health: `peers_list` carries entries and nothing
+else, and `capabilities` names `pasv`, `pisugar`, `gpsSource` and `pluginVersion`. A pill that
+cannot be false is a conclusion the app has no right to, and its cost is precise: an owner
+whose pwngrid is down reads "Grid up" over an empty list and concludes nobody is nearby. So the
+view carries no such pill, and its empty state says only what it knows, that no peer has been
+reported, never that the grid is up. If the plugin ever reports grid health, that is a new
+capability and a new field, and the pill can come back with a fact behind it.
 
 ##### The refresh rule now has two callers, so it has one expression
 

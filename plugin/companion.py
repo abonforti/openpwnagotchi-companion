@@ -2205,16 +2205,18 @@ class Router:
     # -- pushes ------------------------------------------------------------
 
     def on_handshake_message(self, filename: str, access_point: Any, station: Any) -> dict:
-        """Builds the `handshake` push, normalising both hook signatures (SPEC F20)."""
+        """Builds the `handshake` push, normalising both hook signatures (SPEC F20).
+
+        `station` is accepted, matching the hook's argument shape, but never read: the
+        client station's MAC does not go on the wire (SPEC 2.13, issue #33).
+        """
         gps = self._gps.current()
         return self.push(
             "handshake",
             {
                 "filename": os.path.basename(filename or ""),
-                # Both hook signatures reach here: MAC strings on one path,
-                # bettercap dicts on the other (SPEC F20).
+                # MAC strings on one hook path, bettercap dicts on the other (SPEC F20).
                 "ap": mac_of(access_point),
-                "station": mac_of(station),
                 "gps": (
                     normalise_sidecar(sidecar_payload(gps, self._deps.now()))
                     if gps.get("fix")

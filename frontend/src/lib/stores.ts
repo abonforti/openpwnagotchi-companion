@@ -444,7 +444,7 @@ function handleMessage(message: OutgoingMessage, client: WsClient): void {
       break
     case 'handshake':
       // SPEC 4.4.1: a signal, not a payload. The push carries {filename, ap,
-      // station, gps}, not the {ssid, bssid, mtime, size} a list entry
+      // gps}, not the {ssid, bssid, mtime, size} a list entry
       // needs, and those come from parsing the capture name and stat-ing
       // the file server-side (SPEC 2.7). Rather than fabricate them or
       // duplicate that parsing here, ask for the list again. The push is

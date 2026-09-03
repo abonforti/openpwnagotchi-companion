@@ -167,6 +167,44 @@ def test_to_epoch_coerces_or_gives_up(value, expected):
         assert result == pytest.approx(expected)
 
 
+def test_to_epoch_refuses_a_bool_even_though_bool_is_an_int():
+    # isinstance(True, int) is True in Python, so a bool would otherwise sail
+    # through the int/float branch as 1.0/0.0 - a timestamp nobody wrote.
+    assert companion.to_epoch(True) is None
+    assert companion.to_epoch(False) is None
+
+
+def test_to_epoch_survives_a_timestamp_that_raises():
+    # datetime(1, 1, 1).timestamp() raises ValueError on every platform this
+    # runs on - year 0 is before what mktime/gmtime can represent - which is
+    # exactly the "timestamp() explodes" case, reached without faking a clock.
+    assert companion.to_epoch(datetime(1, 1, 1)) is None
+
+
+def test_to_epoch_treats_a_naive_iso_string_as_utc_not_local_time():
+    # A string with no offset is what Peer's own fallback formatting produces.
+    # The answer must not depend on the host's timezone, so this compares
+    # against an explicitly UTC-tagged datetime rather than datetime.timestamp()
+    # (which is local-time-based) - the two disagree on any host not set to UTC.
+    naive = "2025-08-01T12:00:00"
+    expected = datetime(2025, 8, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+
+    assert companion.to_epoch(naive) == pytest.approx(expected)
+
+
+def test_normalise_peer_of_something_with_no_peer_attributes_at_all_is_the_placeholder():
+    # Every field reader is `getattr(peer, name)` wrapped in its own
+    # try/except (SPEC 2.8): an object with none of Peer's attributes - not a
+    # Peer at all - must degrade field by field rather than raise once and
+    # lose the whole entry.
+    mapped = companion.normalise_peer(42)
+
+    assert mapped["name"] == "???"
+    assert mapped["fingerprint"] == "???"
+    assert mapped["rssi"] is None
+    assert mapped["channel"] is None
+
+
 # ---------------------------------------------------------------------------
 # Missing advertisement keys
 # ---------------------------------------------------------------------------
@@ -238,3 +276,86 @@ def test_peer_detected_carries_the_same_shape(router):
 
     assert message["type"] == "peer_detected"
     assert message["data"]["fullName"] == "TestPeer_001@aabbccddeeff00112233445566778899"
+
+
+# ---------------------------------------------------------------------------
+# An infinite rssi or pwnd_tot: OverflowError past a narrower except (issue #96)
+# ---------------------------------------------------------------------------
+
+
+def _peers_list_validator(schemas_dir):
+    import json
+
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+    from referencing.jsonschema import DRAFT202012
+
+    def load(path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    common = Resource.from_contents(
+        load(schemas_dir / "common.json"), default_specification=DRAFT202012
+    )
+    registry = Registry().with_resources(
+        [("common.json", common), ("outgoing/common.json", common)]
+    )
+    schema = load(schemas_dir / "outgoing" / "peers_list.json")
+    schema.pop("$id", None)
+    return Draft202012Validator(schema, registry=registry)
+
+
+def test_an_infinite_rssi_or_pwnd_total_costs_only_that_field_not_the_reply(
+    router_factory, agent_factory, schemas_dir
+):
+    """A pwngrid advertisement is attacker-controlled JSON on a point-to-point
+    link (SPEC 2.8): `json.loads` happily produces `float('inf')` from an
+    `Infinity` literal in the wire text, and `int(float('inf'))` raises
+    `OverflowError` - not `TypeError` or `ValueError`. A narrower except
+    around the integer coercion lets that one raise past the per-field
+    guard and, from there, past `Router.peers()`'s own per-entry guard too -
+    one hostile advertisement anywhere in the mesh would cost the whole
+    `get_peers` reply, not just the one field it actually broke.
+
+    `rssi` and `pwndTotal` (from `pwnd_tot`) are both integer-coerced
+    fields (SPEC 2.8); both are exercised here, beside an unaffected peer,
+    so the guard is proven for each rather than for only whichever one
+    happened to be fixed first.
+    """
+    good = make_peer(adv={**FULL_ADVERTISEMENT, "identity": "1111", "name": "Good"})
+    bad_rssi = make_peer(
+        adv={**FULL_ADVERTISEMENT, "identity": "2222", "name": "BadRssi"},
+        rssi=float("inf"),
+    )
+    bad_pwnd = make_peer(
+        adv={
+            **FULL_ADVERTISEMENT,
+            "identity": "3333",
+            "name": "BadPwnd",
+            "pwnd_tot": float("inf"),
+        }
+    )
+    agent = agent_factory(
+        peers={"good": good, "bad_rssi": bad_rssi, "bad_pwnd": bad_pwnd}
+    )
+
+    replies = router_factory(agent).handle({"type": "get_peers"}, authenticated=True)
+
+    # Never an internal_error, and never a reply dropped in favour of one:
+    # exactly the peers_list a well-formed mesh would have produced.
+    assert [reply["type"] for reply in replies] == ["peers_list"]
+    reply = replies[0]
+    _peers_list_validator(schemas_dir).validate(reply)
+
+    entries = {entry["fingerprint"]: entry for entry in reply["data"]["entries"]}
+    assert set(entries) == {"1111", "2222", "3333"}, (
+        "an inf field must cost only itself, never the whole peer entry"
+    )
+
+    assert entries["1111"]["rssi"] == -61
+    assert entries["1111"]["pwndTotal"] == 91
+
+    assert entries["2222"]["rssi"] is None
+    assert entries["2222"]["pwndTotal"] == 91
+
+    assert entries["3333"]["rssi"] == -61
+    assert entries["3333"]["pwndTotal"] is None

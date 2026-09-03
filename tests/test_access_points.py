@@ -63,6 +63,17 @@ def test_missing_keys_get_defaults(router_factory, agent_factory):
     }
 
 
+def test_a_non_mapping_entry_is_skipped_the_rest_still_mapped(router_factory, agent_factory):
+    agent = agent_factory(
+        access_points=["not-a-dict-at-all", {"mac": "aa:bb:cc:dd:ee:ff"}]
+    )
+
+    points = router_factory(agent).access_points()
+
+    assert len(points) == 1
+    assert points[0]["bssid"] == "aa:bb:cc:dd:ee:ff"
+
+
 def test_an_empty_list_maps_to_an_empty_list(router_factory, agent_factory):
     agent = agent_factory(access_points=[])
 

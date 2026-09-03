@@ -49,6 +49,42 @@ def test_a_usable_pair_builds_a_server_context(tls_material):
     assert context.minimum_version >= ssl.TLSVersion.TLSv1_2
 
 
+def test_an_empty_string_certificate_path_yields_no_context(tmp_path, tls_material):
+    # Distinct from "missing": configured as an empty string is what a blank
+    # tls_cert = "" in config.toml produces, and must be told apart in the log
+    # from a path that points somewhere nothing lives.
+    assert companion.build_ssl_context("", str(tls_material["key"])) is None
+
+
+def test_an_empty_string_key_path_yields_no_context(tmp_path, tls_material):
+    assert companion.build_ssl_context(str(tls_material["cert"]), "") is None
+
+
+def test_an_empty_certificate_path_is_logged_as_not_configured(tmp_path, tls_material, caplog):
+    with caplog.at_level("ERROR"):
+        companion.build_ssl_context("", str(tls_material["key"]))
+
+    assert any("not configured" in record.getMessage() for record in caplog.records)
+
+
+def test_an_empty_key_path_is_logged_as_not_configured_and_names_the_key(
+    tmp_path, tls_material, caplog
+):
+    # The certificate case above only proves *some* record says "not
+    # configured" - true even with the guard deleted, since os.path.isfile("")
+    # is also False and the second check's message happens to contain neither
+    # "not configured" nor a way to tell which of the two paths was empty.
+    # Naming the key is what actually discriminates the two failures a client
+    # reads back through get_log (SPEC 2.9).
+    with caplog.at_level("ERROR"):
+        companion.build_ssl_context(str(tls_material["cert"]), "")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "not configured" in message and "tls_key" in message for message in messages
+    ), messages
+
+
 def test_a_missing_certificate_yields_no_context(tmp_path, tls_material):
     assert companion.build_ssl_context(
         str(tmp_path / "absent.crt"), str(tls_material["key"])

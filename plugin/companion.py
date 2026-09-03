@@ -525,7 +525,9 @@ def normalise_peer(peer: Any) -> dict:
     def as_int(value: Any) -> int | None:
         try:
             return int(value)
-        except (TypeError, ValueError):
+        # OverflowError alongside TypeError/ValueError: int(float("inf"))
+        # raises it, and a mesh advertisement can carry inf off the air.
+        except (TypeError, ValueError, OverflowError):
             return None
 
     return {
@@ -1983,16 +1985,15 @@ class Router:
         return mapped
 
     def peers(self) -> list[dict]:
-        """Maps agent._peers values. grid.peers() is not used: different shape (SPEC 2.8)."""
+        """Maps agent._peers values. grid.peers() is not used: different shape (SPEC 2.8).
+
+        No try/except here: normalise_peer is total, because every field
+        reader inside it is - including as_int, which also catches
+        OverflowError for a value like float("inf").
+        """
         agent = self._agent()
         peers = getattr(agent, "_peers", {}) or {}
-        out = []
-        for peer in peers.values():
-            try:
-                out.append(normalise_peer(peer))
-            except Exception:
-                continue
-        return out
+        return [normalise_peer(peer) for peer in peers.values()]
 
     def log_lines(self, count: int | None) -> dict:
         """Tails the configured log. Path comes from config, never hardcoded (SPEC F17).
@@ -2536,10 +2537,12 @@ def make_http_handler(
     same reason.
 
     A GET that resolves to no file and does not look like an asset serves
-    index.html, so deep links and refreshes work in a single-page app. Paths
-    containing .. are rejected with 400 before any resolution, directory
-    listings are disabled, and index.html and the service worker are sent
-    no-cache while hashed assets are not.
+    index.html, so deep links and refreshes work in a single-page app. That
+    same fallback is what a directory request hits, since a directory is
+    never a file: it never reaches a listing, it gets index.html. Paths
+    containing .. are rejected with 400 before any resolution, and
+    index.html and the service worker are sent no-cache while hashed assets
+    are not.
 
     `bound_addresses` is called on every response, not just once at bind time,
     so the Content-Security-Policy header (SPEC 2.15.1) reflects the bound set
@@ -2679,10 +2682,6 @@ def make_http_handler(
         def log_message(self, fmt: str, *args: Any) -> None:
             # At info this would flood the pwnagotchi log on every asset.
             log.debug("[companion:http] " + fmt, *args)
-
-        def list_directory(self, path: str) -> None:
-            self.send_error(404, "Not Found")
-            return None
 
         def translate_path(self, path: str) -> str:
             resolved = super().translate_path(path)

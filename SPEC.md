@@ -6729,6 +6729,54 @@ alphabet tests and is refused only by the exclusion: a probe that fails on shape
 nothing about the word list, and a word list with one probe standing for all of it is a list
 where deleting eight entries is invisible.
 
+**Two categories §13 names and the scanner did not know (issue #7).** The generic patterns
+catch key material and provider tokens; they do not catch the two things a pwnagotchi leaks
+that no other project does, and both were caught by filename alone. Filename is not content: a
+whitelist pasted into a README, or coordinates in a fixture that is not called `.gps.json`,
+went through. Two content patterns, each high-confidence by construction, because the English
+word-list check was removed from this project for producing more noise than findings and a
+noisy gate is ignored:
+
+- **A pwnagotchi whitelist block.** The user configuration lists the owner's own networks as
+  `whitelist = [ "ssid", ... ]` under `[main]` (F36). The pattern is the key and the bracket
+  followed by at least one quoted string that is not a placeholder: a whitelist with no entry
+  is nobody's, and a fixture that says `"TestNet_001"` or `"example"` is the shape without the
+  data. Placeholders are the documented synthetic values the tests already use, named in the
+  scanner beside the pattern rather than guessed at.
+- **A non-zero coordinate pair.** The gps plugin writes bettercap's fix beside each capture
+  as JSON with `Latitude` and `Longitude` keys (F35), and a real pair in that shape is location
+  data about a person. The pattern is both keys with a non-zero decimal value each, in either
+  order, within a few lines of one another. Zero is what the plugin writes when it has no fix
+  and what a fixture writes when it wants the shape, so zero is not a hit. The tests of the
+  GPS path need a fix that is not zero, because zero is exactly the "no fix" case they must
+  tell apart, and the pair they use, `-33.512345` beside `-25.098765` and its short form
+  `-33.5` beside `-25.0`, is the shape without the data only because nobody lives in the
+  South Atlantic at those numbers; the scanner cannot know that, so the pair is **declared
+  beside the pattern as the project's one synthetic fix**, the way the placeholder SSIDs are,
+  and a value in that set counts as zero. Any other non-zero pair is a hit, and a test that
+  wants a second fix uses the declared one with a different altitude or timestamp rather than
+  inventing coordinates the scanner would have to be taught. What the set costs, named so it
+  is not discovered later: the pattern needs both values non-zero and not declared, so a real
+  longitude beside the declared latitude is not a hit, and that pair is a full location. An
+  exemption on one value would not have that composition; the suite's need for a fix that is
+  not zero is why the set exists anyway. The keys are matched as the plugin writes them,
+  `Latitude` and `Longitude`, case-sensitive: this is F35's shape, not general coordinate
+  coverage, and `lat` beside `lon` in some other file is not caught. Zero is recognised as a
+  whole value, not as a leading digit: the first version of the pattern ended its zero on a
+  word boundary, and since a dot is not a word character every magnitude under one degree,
+  the longitude band over Britain and Iberia among them, read as zero. The review caught it
+  with a probe, and the probe is now a test.
+
+Both patterns come with the pair §5.1.2 asks of every pattern: a test that the pattern fires on
+a hit, and a test that the whole tree, fixtures included, is clean, and every entry of both
+declared sets has a case of its own, so deleting one is visible. Two gaps stay open by
+construction and are named rather than inferable from the pattern list: a whitelist written
+with TOML's single-quoted literal strings is not matched, since the pattern reads the
+double-quoted form the documentation and the defaults use; and a real SSID or BSSID anywhere
+outside a whitelist block, in a log line or a fixture, is still undetected, because nothing
+distinguishes one from a synthetic one by shape. The synthetic MACs and SSIDs the fixtures use
+stay clean for that reason, not because the scanner recognised them.
+
 #### 5.1.3 The frontend gets a formatter and not a linter (issue #113)
 
 `frontend/` had neither. The gates were `tsc --noEmit`, `svelte-check` and `vitest`, all of which
@@ -8100,6 +8148,8 @@ below says which of two questions a given run is asking.
 | F33 | Module-level `pwnagotchi.name()` returns the unit's name: it reads `/etc/hostname` once, strips it, and caches the result in a module global for the life of the process. Nothing refreshes it, so a hostname changed on a running unit is seen at the next restart. `stats.name` comes from here (§2.6). **Machine-checked entry**: F33 pins that the function is still defined. | `pwnagotchi/__init__.py:46-51` |
 | F28 | `agent.view()` returns whatever the agent was constructed with, which on a running unit is **not a bare `View` but a `pwnagotchi.ui.display.Display`**: `cli.py` builds a `Display` and passes it as `view=`. `Display` subclasses `View` and **defines no `get` of its own**, so `agent.view().get(key)` lands on `View.get` - the whole reason the delegation chain below holds and the plugin needs no widget handling. `View.get(key)` delegates to `State.get`, whose contract is **the element's `.value`, never the widget**, and `None` for a key the state does not hold. The initial state always defines `'face'` and `'status'`, so on a running unit both keys exist and both carry a `str`; a `None` can therefore only mean a future version renamed a key. Reading the view is passive - `get` takes the state lock and returns, with no render and no event. **Machine-checked entries**: F28a-d pin `Agent.view`, the body of `View.get`, the body of `State.get`, and the absence of a `get` on `Display`. That last entry exists because the absence is what makes the other three load-bearing, and an absence nobody asserts is an assumption | `pwnagotchi/cli.py:198` (`display = Display(config=config, ...)`), `:204` (`Agent(view=display, ...)`); `pwnagotchi/ui/display.py:10` (`class Display(View)`, no `get` in its body at `4a03bf169e2f`); `pwnagotchi/agent.py:41` (`self._view = view`), `:68-69` (`def view`); `pwnagotchi/ui/view.py:161-162` (`def get` → `return self._state.get(key)`), `:75` (`'face': Text(value=faces.SLEEP, ...)`), `:84` (`'status': Text(value=self._voice.default(), ...)`); `pwnagotchi/ui/state.py:30-32` (`return self._state[key].value if key in self._state else None`) |
 | F34 | **Upstream `BraedenP232/PwnIOS` states two licences about itself.** A dated observation, not a claim about today: on its default branch at commit `20a3aca0d39c` (2026-05-15), `pwnios.py` declares `__license__ = "GPL3"` in the plugin class (line 62, beside `__author__ = "PellTech"` and `__version__ = "1.0.3.1"`), and the repository's `LICENSE` file is the MIT License, `Copyright (c) 2025 Bready2Crumble`. This project is GPL-3.0 under either reading and retains the MIT notice verbatim in `NOTICE`; `docs/LICENSING.md` carries the reasoning (issue #25). Not machine-checked: the evidence is in another repository, like F12 and F22, and a change upstream is a change to record, not a failure to catch. | `BraedenP232/PwnIOS` `pwnios.py:60-62`, `LICENSE:1-3` at `20a3aca0d39c` |
+| F35 | The gps plugin saves bettercap's fix beside a capture as `<name>.gps.json`, the JSON of a dict that carries `Latitude` and `Longitude` keys, and only when both are truthy. **Machine-checked entry**: F35 pins the file name suffix and the two keys in the plugin source. | `pwnagotchi/plugins/default/gps.py:50-59` |
+| F36 | The user's own networks are listed as `whitelist = [ ... ]` under `[main]` in the configuration, and that list is the one thing in `config.toml` that names the owner's networks by SSID. **Machine-checked entry**: F36 pins the key in `defaults.toml`. | `pwnagotchi/defaults.toml:12` |
 | F29 | `pisugarx_ext.py` defines **two** classes. `plugins.loaded['pisugarx_ext']` is the `PiSugar(plugins.Plugin)` at line 544, which holds its hardware client as `self.ps = PiSugarServer()`. The battery state lives on that client, not on the plugin: `PiSugarServer.__init__` sets `battery_level` and `power_plugged`, and the accessors are `get_battery_level()` and `get_battery_power_plugged()`. **The attributes are kept current, and the accessors touch no hardware**: `start_timer()` runs `update_value()` on a `daemon=True` thread, and that loop rewrites the attributes on a `time.sleep(3)` cycle; each accessor is a one-line `return` of the corresponding attribute. **`ready` says whether any of it is real**: it is `False` from the constructor and is set `True` only at the end of `_connect_device`, after a device has been found and its 256 registers have been read, and nothing anywhere in the file sets it back to `False`. `start_timer()` is likewise called only after a device is found, so a loaded plugin with no PiSugar attached loops on `time.sleep(5)` forever with `ready` `False`, no refresh running, and `battery_level` and `power_plugged` still at their constructor values `0` and `False`. The plugin mirrors the flag as `self.ready = self.ps.ready`. **`battery_charging` is dead**: it is assigned `0` in that same constructor and nowhere else in the file, and `get_battery_charging()` has a body of `pass`, so it returns `None`. Upstream `jayofelony` `pisugarx.py` has the identical shape, so the same traversal reaches both tiers; that file is on branch **`noai`** and does **not** exist on `master`, which 404s | [`abonforti/pwnagotchi-plugins` @ `abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/blob/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be/pisugarx_ext.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61 (`battery_level`, `battery_charging`), 63 (`power_plugged`), 75-96 (`_connect_device`, `time.sleep(5)` when no device is found), 99 (`self.start_timer()`, reached only after one is), 102 (`self.ready = True`), 105-109 (`start_timer`, `timer_thread.daemon = True` at 108), 111 (`def update_value`), 203 and 206 (`time.sleep(3)`), 330-336 (`get_battery_level`), 528-534 (`get_battery_charging`, body `pass`), 520-526 (`get_battery_power_plugged`), 544 (`class PiSugar(plugins.Plugin)`), 655 (`self.ps = None`), 658 (`self.ps = PiSugarServer()`), 664 (`self.ready = False`), 731 and 947 (`self.ready = self.ps.ready`), and commit [`abbc8777`](https://github.com/abonforti/pwnagotchi-plugins/commit/abbc87774dbd2ca1ff4b8f83b6210ec1984fb6be) (whose message is about display behaviour when the PiSugar does not answer on I2C; the bit-7 belief is in the file it touches, as a comment at line 985, see 2.11.1). Upstream: [`jayofelony/pwnagotchi` branch `noai` @ `9fc1b6f0`, `pwnagotchi/plugins/default/pisugarx.py`](https://github.com/jayofelony/pwnagotchi/blob/9fc1b6f0cc4b7002ecbf5f3ab1e7623109fe5bf9/pwnagotchi/plugins/default/pisugarx.py) lines 48 (`class PiSugarServer`), 54 (`self.ready = False`), 60-61, 63, 102 (`self.ready = True`), 105-109 (`start_timer`, `daemon = True` at 108), 111 (`def update_value`), 202 and 205 (`time.sleep(3)`), 329-335 (`get_battery_level`), 519-525 (`get_battery_power_plugged`), 543 (`class PiSugar(plugins.Plugin)`), 566 (`self.ps = None`), 569 (`self.ps = PiSugarServer()`), 575 (`self.ready = False`), 619 and 811 (`self.ready = self.ps.ready`) |
 
 ### 11.1 Explicitly forbidden

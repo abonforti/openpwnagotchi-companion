@@ -33,6 +33,7 @@ line - since that shape is exactly what makes the probe fire at all. The
 produces are placeholders, not anything a token generator or a real
 registry ever issued.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -396,6 +397,63 @@ PROBES = {
     "private key in a URL": _url_credential_probe(),
     "credential assignment": _credential_assignment_probe(),
 }
+
+
+# Issue #7 / SPEC.md 5.1.2, "Two categories §13 names and the scanner did
+# not know": the pwnagotchi-specific content patterns. The key and the two
+# JSON key names are assembled from separate pieces below, for the same
+# reason the npm probes above are - this module's own tracked source is
+# itself scanned by test_scanner_is_clean_over_the_tracked_tree, and a probe
+# spelled out whole would turn this file into the very finding it tests for.
+_WHITELIST_KEY = "white" + "list"
+_LATITUDE_KEY = "Lat" + "itude"
+_LONGITUDE_KEY = "Long" + "itude"
+
+
+def _whitelist_block_probe(entries, section=True):
+    """Assembles a `[main]` / `whitelist = [ ... ]` TOML block (F36) from
+    separate pieces - section header, key, bracket and each quoted entry are
+    all joined at runtime rather than typed as one contiguous literal.
+    """
+    lines = []
+    if section:
+        lines.append("[" + "main" + "]")
+    lines.append(_WHITELIST_KEY + " = [")
+    for entry in entries:
+        lines.append('  "' + entry + '",')
+    lines.append("]")
+    return "\n".join(lines) + "\n"
+
+
+def _gps_coordinate_probe(lat, lon, order="latlon", filler=""):
+    """Assembles a JSON fragment carrying `Latitude` and `Longitude` (F35)
+    from separate pieces, for the same reason as above. `filler` sits
+    between the two keys, so a caller can probe the "within a few lines"
+    window without the two keys landing on the same line.
+    """
+    lat_fragment = '"' + _LATITUDE_KEY + '": ' + str(lat)
+    lon_fragment = '"' + _LONGITUDE_KEY + '": ' + str(lon)
+    if order == "latlon":
+        first, second = lat_fragment, lon_fragment
+    else:
+        first, second = lon_fragment, lat_fragment
+    return "{\n  " + first + ",\n" + filler + "  " + second + "\n}\n"
+
+
+# Wholly invented: not a real network name, and a coordinate pair whose
+# fractions are the digit sequences 123456 and 654321, which is the evidence
+# it was typed rather than captured. Whether the numbers land on a map is not
+# the point and is not claimed.
+WHITELIST_PROBE_ENTRIES = ("SomeInvented-Net", "Another-Invented")
+GPS_PROBE_LAT = "71.123456"
+GPS_PROBE_LON = "12.654321"
+# Magnitudes under one degree, invented the same way: the case the first
+# version of the pattern read as zero (SPEC 5.1.2).
+GPS_PROBE_SMALL_LAT = "0.123456"
+GPS_PROBE_SMALL_LON = "-0.654321"
+
+PROBES["pwnagotchi whitelist entry"] = _whitelist_block_probe(WHITELIST_PROBE_ENTRIES)
+PROBES["GPS coordinate pair"] = _gps_coordinate_probe(GPS_PROBE_LAT, GPS_PROBE_LON)
 
 
 def test_every_pattern_label_in_PATTERNS_has_a_probe():
@@ -1201,4 +1259,223 @@ def test_no_probe_value_appears_contiguously_in_this_modules_own_source():
         f"probe value(s) appear as one contiguous literal in this module's own tracked "
         f"source, the same shape a real pasted credential would take - assemble them from "
         f"separate pieces at runtime instead: {offenders!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #7, SPEC.md 5.1.2 "Two categories §13 names and the scanner did not
+# know": a pwnagotchi whitelist block (F36) and a non-zero GPS coordinate
+# pair (F35) are content, not filename, and each pattern is exercised
+# end-to-end through main() over a real file - not just the single-line
+# probe.search() checks above - because both shapes are multi-line and the
+# "not a placeholder" and "both keys present and non-zero" rules are exactly
+# what a bare probe.search() on a hand-picked probe would not exercise.
+# Every hit/no-hit pair below follows SPEC.md 5.1.2's own "pair" rule.
+# ---------------------------------------------------------------------------
+
+
+def test_whitelist_block_with_real_entries_is_reported(tmp_path, monkeypatch, capsys):
+    """A `[main]` / `whitelist = [ ... ]` block naming two invented,
+    non-placeholder SSIDs is a finding, and the finding names the file and
+    the category.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(_whitelist_block_probe(WHITELIST_PROBE_ENTRIES), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 1, f"expected a finding for a real whitelist entry, got exit {rc}\nstderr:\n{err}"
+    assert str(target) in err, f"expected the file to be named in the finding: stderr:\n{err}"
+    assert "possible pwnagotchi whitelist entry" in err, (
+        f"expected the category to be named in the finding: stderr:\n{err}"
+    )
+
+
+def test_empty_whitelist_is_not_reported(tmp_path, monkeypatch, capsys):
+    """`whitelist = []` is the shape with no data - nobody's network list -
+    and must not be a finding.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(_WHITELIST_KEY + " = []\n", encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, f"an empty whitelist must not be a finding, got exit {rc}\nstderr:\n{err}"
+    assert str(target) not in out and str(target) not in err, (
+        f"a clean file must not be named in the output: stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
+def test_whitelist_with_only_the_documented_placeholder_ssid_is_not_reported(
+    tmp_path, monkeypatch, capsys
+):
+    """`TestNet_001` is the exact synthetic SSID `tests/conftest.py` and
+    `tests/test_handshakes.py` already use throughout the fixture fabric
+    (grepped, not assumed). A whitelist naming only that placeholder is the
+    shape without the data and must not be a finding.
+    """
+    target = tmp_path / "notes.md"
+    target.write_text(_whitelist_block_probe(("TestNet_001",), section=False), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, (
+        f"the documented placeholder SSID must not be a finding, got exit {rc}\nstderr:\n{err}"
+    )
+    assert str(target) not in out and str(target) not in err, (
+        f"a clean file must not be named in the output: stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
+@pytest.mark.parametrize("order", ["latlon", "lonlat"], ids=["latitude-first", "longitude-first"])
+def test_gps_coordinate_pair_is_reported_regardless_of_key_order(
+    order, tmp_path, monkeypatch, capsys
+):
+    """A real, non-zero `Latitude`/`Longitude` pair a few lines apart is a
+    finding whichever key comes first, and the finding names the file and
+    the category. The coordinates are typed digit runs, not drawn from any
+    capture; where they land on a map is not claimed.
+    """
+    target = tmp_path / "capture.gps.json"
+    filler = '  "Note": "synthetic",\n  "Updated": "2026-01-01T00:00:00Z",\n'
+    content = _gps_coordinate_probe(GPS_PROBE_LAT, GPS_PROBE_LON, order=order, filler=filler)
+    target.write_text(content, encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 1, f"expected a finding for a real coordinate pair, got exit {rc}\nstderr:\n{err}"
+    assert str(target) in err, f"expected the file to be named in the finding: stderr:\n{err}"
+    assert "possible GPS coordinate pair" in err, (
+        f"expected the category to be named in the finding: stderr:\n{err}"
+    )
+
+
+@pytest.mark.parametrize(
+    "zero", ["0.0", "0", "-0.0"], ids=["zero-point-zero", "bare-zero", "negative-zero-point-zero"]
+)
+def test_zero_coordinate_pair_is_not_reported(zero, tmp_path, monkeypatch, capsys):
+    """Zero is what the gps plugin writes when it has no fix, and what a
+    fixture writes for the shape without the data (F35) - none of its three
+    written forms is a finding.
+    """
+    target = tmp_path / "capture.gps.json"
+    target.write_text(_gps_coordinate_probe(zero, zero), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, f"a zero fix must not be a finding, got exit {rc}\nstderr:\n{err}"
+    assert str(target) not in out and str(target) not in err, (
+        f"a clean file must not be named in the output: stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
+def test_gps_coordinate_pair_needs_both_keys_present(tmp_path, monkeypatch, capsys):
+    """A single non-zero `Latitude` with no `Longitude` key anywhere in the
+    file is not the pair the pattern looks for and must not be a finding.
+    """
+    target = tmp_path / "capture.gps.json"
+    content = '{\n  "' + _LATITUDE_KEY + '": ' + GPS_PROBE_LAT + "\n}\n"
+    target.write_text(content, encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, f"one coordinate key alone must not be a finding, got exit {rc}\nstderr:\n{err}"
+    assert str(target) not in out and str(target) not in err, (
+        f"a clean file must not be named in the output: stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
+def test_gps_coordinate_pair_needs_both_values_nonzero(tmp_path, monkeypatch, capsys):
+    """Both keys present, but only one carries a non-zero value, is not a
+    finding either - SPEC.md 5.1.2 requires "both keys with a non-zero
+    decimal value each".
+    """
+    target = tmp_path / "capture.gps.json"
+    target.write_text(_gps_coordinate_probe(GPS_PROBE_LAT, "0.0"), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, (
+        f"a fix with only one non-zero coordinate must not be a finding, got exit {rc}\n"
+        f"stderr:\n{err}"
+    )
+    assert str(target) not in out and str(target) not in err, (
+        f"a clean file must not be named in the output: stdout:\n{out}\nstderr:\n{err}"
+    )
+
+
+@pytest.mark.parametrize("value", ["", "x"], ids=["latitude", "longitude"])
+def test_a_magnitude_under_one_degree_is_not_zero(value, tmp_path, monkeypatch, capsys):
+    """`0.123456` is a coordinate, not a zero with something after it. The
+    first version of the pattern ended its zero alternative on a word
+    boundary, and a dot is not a word character, so every fix under one
+    degree on either side passed (SPEC 5.1.2). Both sides checked."""
+    lat, lon = (
+        (GPS_PROBE_SMALL_LAT, GPS_PROBE_LON)
+        if value == ""
+        else (GPS_PROBE_LAT, GPS_PROBE_SMALL_LON)
+    )
+    target = tmp_path / "fix.json"
+    target.write_text(_gps_coordinate_probe(lat, lon), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 1, f"a sub-degree magnitude must still be a hit, got exit {rc}\nstderr:\n{err}"
+    assert "GPS coordinate pair" in out + err
+
+
+@pytest.mark.parametrize("declared", cs.SYNTHETIC_COORDINATE_VALUES)
+def test_every_declared_synthetic_coordinate_counts_as_zero(
+    declared, tmp_path, monkeypatch, capsys
+):
+    """One case per entry of the declared set, so deleting an entry is visible
+    (SPEC 5.1.2). The declared value sits beside an invented real one: the
+    pair is clean only because the declared side is exempt, which is the
+    composition cost SPEC records."""
+    target = tmp_path / "fix.json"
+    target.write_text(_gps_coordinate_probe(declared, GPS_PROBE_LON), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, f"declared value {declared!r} must count as zero, got exit {rc}\nstderr:\n{err}"
+
+
+@pytest.mark.parametrize("placeholder", cs.WHITELIST_PLACEHOLDER_SSIDS)
+def test_every_placeholder_ssid_is_exempt_on_its_own(placeholder, tmp_path, monkeypatch, capsys):
+    """One case per entry of the placeholder set, so deleting an entry is
+    visible (SPEC 5.1.2)."""
+    target = tmp_path / "notes.md"
+    target.write_text(_whitelist_block_probe((placeholder,), section=False), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 0, (
+        f"placeholder {placeholder!r} must not be a finding, got exit {rc}\nstderr:\n{err}"
+    )
+
+
+def test_a_real_entry_behind_placeholders_is_still_reported(tmp_path, monkeypatch, capsys):
+    """The pattern skips past placeholder entries explicitly rather than
+    assuming the real one comes first; this is the case that claim is for."""
+    entries = cs.WHITELIST_PLACEHOLDER_SSIDS[:2] + (WHITELIST_PROBE_ENTRIES[0],)
+    target = tmp_path / "notes.md"
+    target.write_text(_whitelist_block_probe(entries), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 1, f"a real entry behind placeholders must be a hit, got exit {rc}\nstderr:\n{err}"
+    assert "pwnagotchi whitelist entry" in out + err
+
+
+def test_an_entry_containing_a_placeholder_as_a_substring_is_still_reported(
+    tmp_path, monkeypatch, capsys
+):
+    """Exact-value exclusion: `exampleFoo` is a name, `example` is a placeholder."""
+    target = tmp_path / "notes.md"
+    target.write_text(_whitelist_block_probe(("exampleFoo",), section=False), encoding="utf-8")
+
+    rc, out, err = _run_main(monkeypatch, capsys, str(target))
+
+    assert rc == 1, (
+        f"a substring of a placeholder is not a placeholder, got exit {rc}\nstderr:\n{err}"
     )

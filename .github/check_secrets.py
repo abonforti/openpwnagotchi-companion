@@ -45,6 +45,64 @@ FORBIDDEN_NAMES = {"config.toml", "ca.crt", "server.crt", "id_rsa", "id_ed25519"
 # auditor, not by this scanner. Nothing else in the tree gets an exemption.
 FIXTURE_PREFIX = "tests/fakes/fixtures/"
 
+# Synthetic SSIDs used across the test and fixture fabric, plus the generic
+# words a document uses to mean "put yours here". Named here rather than
+# guessed at inline, so a probe added later extends this list instead of
+# duplicating it, and so the whitelist pattern below can tell a real entry
+# from the shape everybody already uses for one.
+WHITELIST_PLACEHOLDER_SSIDS = (
+    "TestNet_001",
+    "TestNet_002",
+    "TestNet_003",
+    "TestNet_004",
+    "TestNet_005",
+    "TestNet",
+    "Legacy_Net",
+    "Ocean_Buoy",
+    "example",
+    "placeholder",
+    "your-ssid",
+    "ssid",
+    # Upstream's own defaults.toml ships these two, so quoting it is not a hit.
+    "EXAMPLE_NETWORK",
+    "ANOTHER_EXAMPLE_NETWORK",
+)
+_WHITELIST_PLACEHOLDER_ALTERNATION = "|".join(
+    re.escape(name) for name in WHITELIST_PLACEHOLDER_SSIDS
+)
+
+# The project's one synthetic GPS fix - the tests of the GPS path need a fix
+# that is not zero, because zero is exactly the "no fix" case they must tell
+# apart, and this pair (long form and its short form) is what they use.
+# Declared here, beside the pattern, the way the placeholder SSIDs above are:
+# a value in this set counts as zero for the pattern below, and any other
+# non-zero pair is a hit. A test that wants a second fix uses this one with a
+# different altitude or timestamp rather than inventing coordinates the
+# scanner would have to be taught (SPEC 5.1.2).
+SYNTHETIC_COORDINATE_VALUES = (
+    "-33.512345",
+    "-25.098765",
+    "-33.5",
+    "-25.0",
+)
+_SYNTHETIC_COORDINATE_ALTERNATION = "|".join(
+    re.escape(value) for value in SYNTHETIC_COORDINATE_VALUES
+)
+
+# A decimal that is neither zero nor the declared synthetic fix above, in any
+# of the shapes a fixture or the gps plugin itself writes zero: `0`, `0.0`,
+# `-0.0`. The sign and the fractional part are both optional on the value it
+# does accept, because a real fix is not guaranteed to carry either. The zero
+# alternative must not end on `\b`: `.` is not a word character, so `0.1276`
+# would read as a zero followed by something, and every fix with a magnitude
+# under one degree, the longitude band over Britain and Iberia among them,
+# would pass. It ends on "not a digit and not a dot" instead. The synthetic
+# alternation keeps `\b`, so that `-33.5` does not swallow `-33.512345`.
+_NONZERO_DECIMAL = (
+    r"(?!(?:-?0(?:\.0+)?(?![\d.])|(?:" + _SYNTHETIC_COORDINATE_ALTERNATION + r")\b))"
+    r"-?\d+(?:\.\d+)?"
+)
+
 # (label, pattern). Each targets a shape that is a credential in essentially every
 # context, so a hit is worth a human look even when it turns out to be a sample.
 PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -175,6 +233,45 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             [^"'\s]{8,}
             ["']
             """
+        ),
+    ),
+    # Two things a pwnagotchi leaks that no other project does, and both were
+    # previously caught by filename alone, which a whitelist pasted into a
+    # README or a coordinate pair in a fixture not called `.gps.json` walks
+    # straight past (issue #7). Filename is not content.
+    (
+        "pwnagotchi whitelist entry",
+        # F36: the owner's own networks, `whitelist = [ "ssid", ... ]` under
+        # `[main]` in config.toml. An empty list is nobody's, and a list of
+        # nothing but the synthetic SSIDs below is the shape without the
+        # data, so the match requires at least one quoted entry that is not
+        # one of them. The list can span lines - a TOML list usually does -
+        # so the placeholder entries ahead of the real one are skipped
+        # explicitly rather than assumed to be on the same line.
+        re.compile(
+            r"\bwhitelist\s*=\s*\["
+            r"(?:\s*,?\s*\"(?:" + _WHITELIST_PLACEHOLDER_ALTERNATION + r")\")*"
+            r"\s*,?\s*\"(?!(?:" + _WHITELIST_PLACEHOLDER_ALTERNATION + r")\")[^\"\n]+\""
+        ),
+    ),
+    (
+        "GPS coordinate pair",
+        # F35: the gps plugin writes a fix beside a capture as JSON with
+        # `Latitude` and `Longitude` keys, only when both are truthy. A real
+        # pair in that shape is location data about a person. Zero is what
+        # the plugin writes with no fix and what a fixture writes for the
+        # shape, so a zero (`0`, `0.0`, `-0.0`) on either side is not a hit,
+        # and neither is the project's one declared synthetic fix above -
+        # any other non-zero pair is. Both orders are matched, and the two
+        # keys have to sit within a short window of each other - a few lines
+        # of JSON, not the whole file - or this would fire on two unrelated
+        # coordinate pairs on opposite ends of a large fixture.
+        re.compile(
+            r"\"Latitude\"\s*:\s*" + _NONZERO_DECIMAL + r"[\s\S]{0,120}?"
+            r"\"Longitude\"\s*:\s*" + _NONZERO_DECIMAL
+            + r"|"
+            r"\"Longitude\"\s*:\s*" + _NONZERO_DECIMAL + r"[\s\S]{0,120}?"
+            r"\"Latitude\"\s*:\s*" + _NONZERO_DECIMAL
         ),
     ),
 ]

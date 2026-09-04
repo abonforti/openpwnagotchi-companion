@@ -2551,7 +2551,7 @@ def make_http_handler(
     """
     import http.server
 
-    root = os.path.abspath(web_root)
+    root = os.path.realpath(web_root)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         # Declared rather than inherited from the system database: a minimal
@@ -2687,8 +2687,15 @@ def make_http_handler(
             resolved = super().translate_path(path)
             # Belt and braces: the base class normalises away traversal, and
             # send_head rejects it earlier, but web_root is the boundary and it
-            # is worth enforcing where the answer is computed.
-            if not os.path.abspath(resolved).startswith(root):
+            # is worth enforcing where the answer is computed. This compares
+            # real paths, not request paths, so a symlink inside the root
+            # pointing outside it is caught even though the base class never
+            # sees anything resembling traversal - and the comparison is on
+            # path components, through commonpath, never a string prefix, so
+            # a sibling directory whose name merely starts with the root's is
+            # still outside it.
+            real = os.path.realpath(resolved)
+            if os.path.commonpath([real, root]) != root:
                 return os.path.join(root, "index.html")
             return resolved
 

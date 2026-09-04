@@ -278,3 +278,146 @@ def test_requests_are_not_logged_at_info(get, caplog):
     # A request log at info floods the pwnagotchi log on a device that also
     # writes the UI there.
     assert not [record for record in caplog.records if "GET" in record.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# Symlinks (SPEC 2.15, issue #244)
+# ---------------------------------------------------------------------------
+
+MARKER = "eel-cave-turquoise-41"
+
+
+def test_a_symlink_inside_the_web_root_pointing_outside_it_is_not_served(get, web_root, tmp_path):
+    """Before the fix `translate_path` only checked the request path for `..`,
+    never the real path a symlink resolves to, so a link planted inside the
+    root could still hand back a file that lives outside it. This test fails
+    on that code: it gets the marker back with 200 instead of the app shell.
+    """
+    outside = tmp_path / "outside-the-root"
+    outside.mkdir()
+    (outside / "secret.txt").write_text(MARKER)
+    try:
+        (web_root / "leak").symlink_to(outside / "secret.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    status, _, body = get("/leak")
+
+    assert MARKER.encode() not in body
+    assert status == 200
+    assert body.decode() == INDEX
+
+
+def test_a_dangling_symlink_whose_target_would_sit_outside_the_root_gets_the_shell(
+    get, web_root, tmp_path
+):
+    """The resolution does not require the target to exist: a link whose
+    target would sit outside the root is treated as outside even when there is
+    nothing there, and answered with `index.html` rather than with an error
+    that says where it pointed."""
+    try:
+        (web_root / "leak").symlink_to(tmp_path / "never-created" / "secret.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    status, _, body = get("/leak")
+
+    assert status == 200
+    assert body.decode() == INDEX
+    assert b"never-created" not in body
+
+
+def test_a_dangling_symlink_whose_target_would_sit_inside_the_root_is_missing(get, web_root):
+    """A dangling link that stays inside the root reaches the base class, and
+    a name with a dot in it is an asset request, so it is a missing file, not
+    the app shell."""
+    try:
+        (web_root / "gone.txt").symlink_to(web_root / "never-created.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    status, _, body = get("/gone.txt")
+
+    assert status == 404
+    assert b"never-created" not in body
+
+
+def test_a_symlink_that_stays_inside_the_web_root_is_followed(get, web_root):
+    (web_root / "inside.txt").write_text("kept inside the root")
+    try:
+        (web_root / "alias").symlink_to(web_root / "inside.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    status, _, body = get("/alias")
+
+    assert status == 200
+    assert body.decode() == "kept inside the root"
+
+
+def test_a_sibling_directory_whose_name_starts_with_the_root_is_outside(tmp_path):
+    """The web root is `tmp_path/www` and the sibling is `tmp_path/www-evil`: a
+    guard built on `str.startswith` on the resolved path would treat the
+    sibling as inside the root, because its name starts with the root's.
+    `os.path.commonpath` on path components does not make that mistake.
+    """
+    root = tmp_path / "www"
+    root.mkdir()
+    (root / "index.html").write_text(INDEX)
+    evil = tmp_path / "www-evil"
+    evil.mkdir()
+    (evil / "secret.txt").write_text(MARKER)
+    try:
+        (root / "leak").symlink_to(evil / "secret.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    handler = companion.make_http_handler(str(root), lambda: ["172.20.10.2"], 8082)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+        connection.request("GET", "/leak")
+        response = connection.getresponse()
+        status = response.status
+        body = response.read()
+        connection.close()
+
+        assert MARKER.encode() not in body
+        assert status == 200
+        assert body.decode() == INDEX
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_the_web_root_itself_may_be_a_symlink(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "index.html").write_text(INDEX)
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    handler = companion.make_http_handler(str(link), lambda: ["172.20.10.2"], 8082)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        status = response.status
+        body = response.read()
+        connection.close()
+
+        assert status == 200
+        assert body.decode() == INDEX
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)

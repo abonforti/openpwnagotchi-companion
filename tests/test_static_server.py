@@ -308,6 +308,38 @@ def test_a_symlink_inside_the_web_root_pointing_outside_it_is_not_served(get, we
     assert body.decode() == INDEX
 
 
+def test_the_shell_served_for_a_link_out_of_the_root_is_not_cacheable(get, web_root, tmp_path):
+    """Before the fix (issue #253), the shell the web-root guard answers with
+    carried no `Cache-Control` header at all, whichever request produced it.
+    This test fails on that code: the header is absent instead of `no-cache`.
+    """
+    outside = tmp_path / "outside-the-root"
+    outside.mkdir()
+    (outside / "secret.txt").write_text(MARKER)
+    try:
+        (web_root / "leak").symlink_to(outside / "secret.txt")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    status, headers, body = get("/leak")
+
+    assert status == 200
+    assert body.decode() == INDEX
+    assert "no-cache" in headers.get("cache-control", "")
+
+
+def test_a_hashed_asset_is_still_cacheable_after_the_change(get, web_root):
+    """Guards against the fix widening the no-cache rule beyond the fallback
+    shell: an ordinary content-hashed asset must stay cacheable.
+    """
+    (web_root / "assets" / "app-abc123.js").write_text("export const app = 2;")
+
+    status, headers, _ = get("/assets/app-abc123.js")
+
+    assert status == 200
+    assert "no-cache" not in headers.get("cache-control", "")
+
+
 def test_a_dangling_symlink_whose_target_would_sit_outside_the_root_gets_the_shell(
     get, web_root, tmp_path
 ):
@@ -381,12 +413,16 @@ def test_a_sibling_directory_whose_name_starts_with_the_root_is_outside(tmp_path
         connection.request("GET", "/leak")
         response = connection.getresponse()
         status = response.status
+        headers = {k.lower(): v for k, v in response.getheaders()}
         body = response.read()
         connection.close()
 
         assert MARKER.encode() not in body
         assert status == 200
         assert body.decode() == INDEX
+        # The shell the guard answers with carries the shell's own cache rule,
+        # whichever request produced it (issue #253).
+        assert "no-cache" in headers.get("cache-control", "")
     finally:
         httpd.shutdown()
         httpd.server_close()

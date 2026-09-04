@@ -2553,6 +2553,17 @@ def make_http_handler(
 
     root = os.path.realpath(web_root)
     fallback = os.path.join(root, "index.html")
+    # Handed back when even the fallback resolves outside root (issue #256).
+    # A "/" can never appear inside a filename on Linux, so no file planted
+    # under root can ever be this answer; send_head recognises it and sends
+    # the 404 itself before the base class looks at the path.
+    missing = fallback + "/"
+
+    def inside(real: str) -> bool:
+        # On path components through commonpath, never a string prefix, so a
+        # sibling directory whose name merely starts with the root's is
+        # outside it. Both arguments are absolute, so commonpath cannot raise.
+        return os.path.commonpath([real, root]) == root
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         # Declared rather than inherited from the system database: a minimal
@@ -2691,14 +2702,19 @@ def make_http_handler(
             # is worth enforcing where the answer is computed. This compares
             # real paths, not request paths, so a symlink inside the root
             # pointing outside it is caught even though the base class never
-            # sees anything resembling traversal - and the comparison is on
-            # path components, through commonpath, never a string prefix, so
-            # a sibling directory whose name merely starts with the root's is
-            # still outside it.
-            real = os.path.realpath(resolved)
-            if os.path.commonpath([real, root]) != root:
+            # sees anything resembling traversal.
+            if inside(os.path.realpath(resolved)):
+                return resolved
+            # The fallback gets the same check as any other answer (issue
+            # #256): if index.html is itself a link whose target lies outside
+            # the root there is nothing left inside it to hand back, and
+            # returning `fallback` unchecked would open the very file this
+            # guard exists to keep closed. Resolved per request, like the
+            # answer above: a link planted after the server started is the
+            # case, not the exception.
+            if inside(os.path.realpath(fallback)):
                 return fallback
-            return resolved
+            return missing
 
         def send_head(self):  # type: ignore[override]
             raw = self.path.split("?", 1)[0].split("#", 1)[0]
@@ -2710,6 +2726,7 @@ def make_http_handler(
                 # Single-page app: a deep link is not a missing file, it is a
                 # route the client will resolve once index.html has loaded.
                 self.path = "/index.html"
+                target = self.translate_path(self.path)
             elif target == fallback and raw != "/index.html":
                 # The symlink guard (issue #244) answers an out-of-root
                 # target with the same index.html shell, but end_headers
@@ -2718,6 +2735,16 @@ def make_http_handler(
                 # applied to the original request, and could be cached as
                 # if it were the requested asset (issue #253).
                 self.path = "/index.html"
+            # A shell that is itself a link out of the root leaves nothing in
+            # the root to serve, for this request and for the single-page
+            # rewrite above alike (issue #256). Decided here, not left to the
+            # base class: its own trailing-slash 404 sits behind an isdir
+            # check, so a link at a directory would be redirected into that
+            # directory instead, and on 3.13 a `%2f` spelling of the slash
+            # walks it and serves its index page.
+            if target == missing:
+                self.send_error(404, "File not found")
+                return None
             return super().send_head()
 
         def end_headers(self) -> None:

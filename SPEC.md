@@ -76,6 +76,7 @@ openpwnagotchi-companion/
 │   ├── workflows/
 │   │   ├── ci.yml                    # lint + tests + build on push/PR (§5.1)
 │   │   ├── codeql.yml                # CodeQL, Python and JavaScript
+│   │   ├── housekeeping.yml          # daily: close what the auto-merge left open (§5.4)
 │   │   ├── pull-request.yml          # labelling and documentation-only auto-merge
 │   │   ├── release.yml               # build dist.tgz + create Release on tag (§5.2)
 │   │   └── upstream-drift.yml        # scheduled run of check_pinned_facts.py
@@ -84,6 +85,7 @@ openpwnagotchi-companion/
 │   ├── check_no_inline_script.py     # inline-script gate over the built page (§2.15.1)
 │   ├── check_pinned_facts.py         # §11 against upstream (§11.2)
 │   ├── check_release_version.py      # tag against CHANGELOG and package.json (§5.2)
+│   ├── close_linked_issues.py        # issues a token-made merge did not close (§5.4)
 │   ├── check_schemas.py              # JSON Schema validity and framing invariants (§5.1)
 │   ├── check_secrets.py              # generic credential scan (§5.1)
 │   ├── check_shipped_files.py        # what ships, and nothing else (§13.2)
@@ -184,6 +186,7 @@ openpwnagotchi-companion/
 │   │   ├── test_check_coverage.py
 │   │   ├── test_check_dependabot_node.py
 │   │   ├── test_check_release_version.py
+│   │   ├── test_close_linked_issues.py
 │   │   ├── test_gen_protocol_types.py
 │   │   ├── test_install.py
 │   │   ├── test_pinned_facts.py
@@ -7406,6 +7409,53 @@ entire test suite unrunnable as an ordinary user, and a test suite that cannot r
 suite that does not run.
 
 ---
+
+### 5.4 `housekeeping.yml`: closing what the auto-merge leaves open (issue #252)
+
+`pull-request.yml` enables auto-merge on a documentation-only pull request with the job's
+own `GITHUB_TOKEN`, and GitHub then performs the merge as the Actions app once the required
+checks pass. Two things do not happen on a merge made that way, and both were observed on
+2026-09-03 with pull request #239: the issues the body closes with `Closes #N` stay open,
+although the pull request's `closingIssuesReferences` did list them, and no workflow runs on
+the resulting push to `master`, because an event raised with `GITHUB_TOKEN` never starts
+another workflow. The second rules out the obvious repair, a job on `pull_request: closed` or
+on `push`, since neither would fire. The job that enables the auto-merge cannot close anything
+either: the merge happens later, and only if the checks pass.
+
+The repair is a scheduled job, `housekeeping.yml`, that runs once a day and on
+`workflow_dispatch`, with `contents: read` for the checkout, `issues: write`, `pull-requests:
+read` and nothing else, on this repository only (the same `github.repository` guard
+`upstream-drift.yml` carries, so a fork's clone does not start closing its owner's issues). It
+runs `.github/close_linked_issues.py`, which lists the pull requests merged into `master` in
+the last two days through the GraphQL search API, reads each one's `closingIssuesReferences`,
+and for every referenced issue that is still open leaves a comment naming the pull request and
+the merge time, then closes it as completed. Two days, not one, so a run that fails, or a day
+the schedule skips, still catches up on the next; an issue closed twice is not a thing, because
+the script reads the state before acting. The search asks for `base:master`, so a pull request
+merged into any other branch closes nothing, and both lists are asked for their `pageInfo`: a
+page that says there is more is a run that fails, since a window this short never fills a page
+and a partial answer acted on quietly is the advisory shape §13 forbids. Nothing is closed for
+a pull request that was closed without merging, and nothing is closed that a person reopened
+after the pull request merged: the script only acts on issues whose state is open and whose
+reference comes from a merged pull request, and a reopened issue is recognised by a `reopened`
+event in its timeline later than the pull request's merge; the script skips those and says so
+in the log, so a deliberate reopen stays reopened.
+
+The script is plain Python on `urllib`, the way `check_dependabot_node.py` reaches GitHub,
+authenticated with `GH_TOKEN` from the environment and refusing to run without it. A fetch
+failure is a red job, never a silent pass, the rule §13 states for every scan. `--dry-run`
+prints what would be closed and touches nothing, and `--days` sets the window; the workflow
+passes neither, so the defaults are what runs. The half that decides is separated from the
+half that talks to GitHub, and `tests/tools/test_close_linked_issues.py` exercises the deciding
+half against fixture responses: a merged pull request with an open reference closes it with the
+comment; a closed reference is left alone; an unmerged pull request closes nothing; a reopened
+issue is skipped; a response missing a field, or a token missing from the environment, fails
+rather than closing nothing quietly. `tests/test_ci_gates.py` pins the workflow's permissions,
+its repository guard, that its actions are pinned to the same commits as `upstream-drift.yml`,
+and that the step runs the script. What the tests do not execute is named here rather than left
+to the coverage floor: the bodies of `graphql()` and `rest()`, the two thin wrappers that build
+a request and hand it to `_send`, are replaced in every test, so their own `errors`, `data` and
+JSON-decode branches run only against GitHub.
 
 ## 6. GitHub project setup
 

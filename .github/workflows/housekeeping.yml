@@ -1,0 +1,58 @@
+name: housekeeping
+
+# Closes the issues a token-made auto-merge leaves open (SPEC.md 5.4, issue
+# #252). `pull-request.yml` enables auto-merge with the job's own
+# GITHUB_TOKEN, and GitHub performs the merge later as the Actions app; that
+# merge never closes the issues its body says it closes, and it never starts
+# another workflow either, because an event raised with GITHUB_TOKEN cannot
+# trigger one. That rules out `pull_request: closed` and `push` alike, so
+# this runs on a schedule instead, catching up on whatever a merge like that
+# left open.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print what would be closed without closing anything"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: housekeeping
+  cancel-in-progress: false
+
+jobs:
+  close-linked-issues:
+    # A fork inherits the schedule and would start closing its own copy of
+    # somebody else's issues.
+    if: github.repository == 'abonforti/openpwnagotchi-companion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Close the issues a token-made merge left open
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed as an environment variable rather than interpolated into
+          # the run script: `${{ }}` is substituted before the shell parses
+          # the line, and this value comes from a workflow_dispatch input.
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python .github/close_linked_issues.py --dry-run
+          else
+            python .github/close_linked_issues.py
+          fi

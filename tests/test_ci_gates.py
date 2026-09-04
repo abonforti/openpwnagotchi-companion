@@ -785,3 +785,109 @@ def test_check_dependabot_node_step_has_no_continue_on_error():
     assert dependabot_node_step is not None, "no step running check_dependabot_node.py found"
     assert not dependabot_node_step.get("continue-on-error")
     assert not job.get("continue-on-error")
+
+
+# ---------------------------------------------------------------------------
+# housekeeping.yml (SPEC.md 5.4, issue #252): the repair for what a
+# token-made auto-merge leaves open. It must carry no more permission than
+# `contents: read, issues: write, pull-requests: read`, run only on this
+# repository (the same guard `upstream-drift.yml` carries), run on a
+# schedule, and actually invoke `.github/close_linked_issues.py`.
+# ---------------------------------------------------------------------------
+
+
+def _load_housekeeping_workflow():
+    with open(WORKFLOWS_DIR / "housekeeping.yml", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def test_housekeeping_permissions_are_exactly_the_three_named():
+    workflow = _load_housekeeping_workflow()
+    assert workflow.get("permissions") == {
+        "contents": "read",
+        "issues": "write",
+        "pull-requests": "read",
+    }
+
+
+def test_housekeeping_runs_only_on_this_repository():
+    workflow = _load_housekeeping_workflow()
+    jobs = workflow.get("jobs", {})
+    assert jobs, "housekeeping.yml has no jobs"
+    guarded = [
+        job
+        for job in jobs.values()
+        if job.get("if") == "github.repository == 'abonforti/openpwnagotchi-companion'"
+    ]
+    assert guarded, (
+        "expected a job in housekeeping.yml guarded by "
+        "github.repository == 'abonforti/openpwnagotchi-companion', found none"
+    )
+
+
+def test_housekeeping_has_a_schedule_trigger():
+    workflow = _load_housekeeping_workflow()
+    # PyYAML parses the bare key `on:` as the boolean True, not the string "on".
+    triggers = workflow.get(True, workflow.get("on", {}))
+    assert "schedule" in triggers, f"expected a schedule trigger, found {triggers!r}"
+
+
+def test_housekeeping_runs_close_linked_issues_script():
+    workflow = _load_housekeeping_workflow()
+    jobs = workflow.get("jobs", {})
+    invoking_steps = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if ".github/close_linked_issues.py" in (step.get("run") or "")
+    ]
+    assert invoking_steps, "no step in housekeeping.yml runs .github/close_linked_issues.py"
+
+
+def _pinned_action_steps(workflow):
+    """The `actions/checkout` and `actions/setup-python` steps of a
+    workflow's single job, keyed by action name, so the two workflows'
+    pins can be compared step-for-step.
+    """
+    jobs = workflow.get("jobs", {})
+    steps = [step for job in jobs.values() for step in job.get("steps", [])]
+    found = {}
+    for step in steps:
+        uses = step.get("uses", "")
+        if uses.startswith("actions/checkout@"):
+            found["checkout"] = step
+        elif uses.startswith("actions/setup-python@"):
+            found["setup-python"] = step
+    return found
+
+
+def test_housekeeping_pins_the_same_actions_as_upstream_drift():
+    """housekeeping.yml and upstream-drift.yml are the two schedule-only
+    workflows introduced together; a Dependabot bump that reaches one and
+    not the other would leave them pinned to different commits of the same
+    action with no test noticing. `uses:` (the exact pinned SHA and version
+    comment) and `python-version` must be byte-identical between the two.
+    """
+    housekeeping = _load_housekeeping_workflow()
+    with open(WORKFLOWS_DIR / "upstream-drift.yml", encoding="utf-8") as handle:
+        drift = yaml.safe_load(handle)
+
+    housekeeping_steps = _pinned_action_steps(housekeeping)
+    drift_steps = _pinned_action_steps(drift)
+
+    for action in ("checkout", "setup-python"):
+        assert action in housekeeping_steps, f"no {action} step found in housekeeping.yml"
+        assert action in drift_steps, f"no {action} step found in upstream-drift.yml"
+        assert housekeeping_steps[action]["uses"] == drift_steps[action]["uses"], (
+            f"{action} `uses:` differs between housekeeping.yml and upstream-drift.yml: "
+            f"{housekeeping_steps[action]['uses']!r} != {drift_steps[action]['uses']!r}"
+        )
+
+    housekeeping_python_version = (
+        housekeeping_steps["setup-python"].get("with", {}).get("python-version")
+    )
+    drift_python_version = drift_steps["setup-python"].get("with", {}).get("python-version")
+    assert housekeeping_python_version == drift_python_version, (
+        "python-version differs between housekeeping.yml and upstream-drift.yml: "
+        f"{housekeeping_python_version!r} != {drift_python_version!r}"
+    )

@@ -59,6 +59,7 @@ depends on and cannot also be what proves that path works.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import threading
@@ -415,10 +416,10 @@ def test_broadcast_with_the_loop_never_started_delivers_nothing(harness):
 def test_a_client_whose_send_call_itself_raises_is_dropped(harness):
     """The exception guard around the fan-out drops a client whose `send()`
     call fails *synchronously*, when the coroutine object is constructed -
-    the shape a client with a broken `send` attribute produces. (A client
-    whose coroutine only raises once awaited on the loop is a separate
-    failure this guard does not see, because `run_coroutine_threadsafe`
-    schedules it without waiting on the result.)"""
+    the shape a client with a broken `send` attribute produces. The other
+    failure shape - a coroutine that raises or is cancelled only once
+    awaited on the loop, which is what a closed WebSocket produces - is
+    covered by the tests below (SPEC 2.3.3, issue #243)."""
 
     class SyncFailingClient:
         def send(self, payload):
@@ -436,6 +437,137 @@ def test_a_client_whose_send_call_itself_raises_is_dropped(harness):
         time.sleep(0.2)
 
         assert bad not in plugin._clients.snapshot()
+    finally:
+        plugin._listeners.stop()
+
+
+def _poll_until(predicate, timeout: float = 2.0, step: float = 0.02) -> bool:
+    """Poll `predicate` (a zero-arg callable) until it is true or `timeout`
+    elapses. Returns the last observed value of `predicate()`."""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = predicate()
+        if result:
+            return result
+        if time.monotonic() >= deadline:
+            return result
+        time.sleep(step)
+
+
+def test_a_client_whose_send_fails_on_the_loop_is_dropped(harness):
+    """A client whose `send()` returns a coroutine that only raises once
+    awaited on the loop - the shape a closed WebSocket produces, e.g. a
+    `ConnectionClosedError` - must still be dropped (SPEC 2.3.3, issue
+    #243). This is the failure the synchronous test above cannot see,
+    because `run_coroutine_threadsafe` schedules the coroutine without
+    waiting on it; the drop has to come from a done-callback on the future
+    it returns.
+
+    This test fails against the code before the #243 fix: nothing observes
+    the future, so a client that fails only on the loop stays in the set
+    forever.
+    """
+
+    class LoopFailingClient:
+        async def send(self, payload):
+            raise ConnectionResetError("peer went away mid-send")
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    plugin._listeners._ensure_loop()
+    bad = LoopFailingClient()
+    plugin._clients.add(bad)
+
+    try:
+        plugin.broadcast({"type": "wifi_update", "data": {}})  # must not raise
+
+        gone = _poll_until(lambda: bad not in plugin._clients.snapshot())
+        assert gone, "client whose send raised on the loop was never dropped"
+    finally:
+        plugin._listeners.stop()
+
+
+def test_a_client_whose_send_is_cancelled_on_the_loop_is_dropped(harness):
+    """A client whose `send()` coroutine is cancelled once awaited on the
+    loop must also be dropped - `asyncio.CancelledError` is not caught by
+    a bare `except Exception`, so the done-callback has to check
+    `future.cancelled()` as well as `future.exception()` (SPEC 2.3.3, issue
+    #243)."""
+
+    class CancelledClient:
+        async def send(self, payload):
+            raise asyncio.CancelledError()
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    plugin._listeners._ensure_loop()
+    bad = CancelledClient()
+    plugin._clients.add(bad)
+
+    try:
+        plugin.broadcast({"type": "wifi_update", "data": {}})  # must not raise
+
+        gone = _poll_until(lambda: bad not in plugin._clients.snapshot())
+        assert gone, "client whose send was cancelled on the loop was never dropped"
+    finally:
+        plugin._listeners.stop()
+
+
+def test_a_client_whose_send_succeeds_on_the_loop_stays(harness):
+    """A client whose send completes normally must remain in the set - the
+    done-callback that drops a failed or cancelled future must leave a
+    successful one alone (SPEC 2.3.3, issue #243)."""
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    plugin._listeners._ensure_loop()
+    good = RecordingClient()
+    plugin._clients.add(good)
+
+    try:
+        plugin.broadcast({"type": "wifi_update", "data": {}})
+
+        good.wait_for_count(1)
+        assert good.received, "the send never ran"
+        time.sleep(0.2)
+        assert good in plugin._clients.snapshot()
+    finally:
+        plugin._listeners.stop()
+
+
+def test_a_slow_send_does_not_block_the_hook_thread(harness):
+    """`broadcast()` runs on a pwnagotchi hook thread and must never wait on
+    the future `run_coroutine_threadsafe` returns - a slow client would
+    otherwise stall every hook in the process (SPEC 2.3.3, issue #243)."""
+
+    finished = threading.Event()
+
+    class SlowClient:
+        async def send(self, payload):
+            await asyncio.sleep(0.3)
+            finished.set()
+
+    plugin = companion.Companion()
+    plugin.deps = harness.deps
+    plugin._listeners = companion.Listeners({}, harness.deps, None, None)
+    plugin._listeners._ensure_loop()
+    plugin._clients.add(SlowClient())
+
+    try:
+        started = time.monotonic()
+        plugin.broadcast({"type": "wifi_update", "data": {}})
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.5, f"broadcast() blocked the hook thread for {elapsed}s"
+        # Let the slow send finish before tearing the loop down, so its task
+        # is not destroyed mid-flight and does not leak an "ignored
+        # exception" warning into whichever test runs next. Waiting on the
+        # event rather than sleeping keeps the wait as long as the send and
+        # no longer, on a loaded host too.
+        assert finished.wait(timeout=5), "the slow send never completed"
     finally:
         plugin._listeners.stop()
 

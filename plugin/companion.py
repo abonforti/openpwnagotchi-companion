@@ -4188,7 +4188,13 @@ class Companion(plugins.Plugin):
         return HandshakeStore(directory)
 
     def broadcast(self, message: Mapping[str, Any]) -> None:
-        """Sends one message to every connected client. A dead client is dropped."""
+        """Sends one message to every connected client.
+
+        A dead client is dropped whichever way its send fails: synchronously,
+        when the coroutine object cannot be built, or on the loop, when the
+        awaited coroutine raises or is cancelled, which is what a closed
+        WebSocket does (SPEC 2.3.3, issue #243).
+        """
         if not message:
             return
         payload = json.dumps(message)
@@ -4197,12 +4203,24 @@ class Companion(plugins.Plugin):
         if listeners is None or listeners._loop is None:
             return
         import asyncio
+        import concurrent.futures
 
         for client in targets:
             try:
-                asyncio.run_coroutine_threadsafe(client.send(payload), listeners._loop)
+                future = asyncio.run_coroutine_threadsafe(client.send(payload), listeners._loop)
             except Exception:
+                # The coroutine object could not even be built, which is the
+                # shape a client with a broken `send` produces.
                 self._clients.discard(client)
+                continue
+
+            def _drop_on_failure(fut: concurrent.futures.Future, client=client) -> None:
+                # Runs on the loop thread once the awaited coroutine settles.
+                # Must never raise, and must not touch a successful result.
+                if fut.cancelled() or fut.exception() is not None:
+                    self._clients.discard(client)
+
+            future.add_done_callback(_drop_on_failure)
 
     def _background(self) -> None:
         """Refreshes the session and gpsd caches, and reconciles the listeners.

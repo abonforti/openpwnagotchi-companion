@@ -2552,6 +2552,7 @@ def make_http_handler(
     import http.server
 
     root = os.path.realpath(web_root)
+    fallback = os.path.join(root, "index.html")
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         # Declared rather than inherited from the system database: a minimal
@@ -2696,7 +2697,7 @@ def make_http_handler(
             # still outside it.
             real = os.path.realpath(resolved)
             if os.path.commonpath([real, root]) != root:
-                return os.path.join(root, "index.html")
+                return fallback
             return resolved
 
         def send_head(self):  # type: ignore[override]
@@ -2708,6 +2709,14 @@ def make_http_handler(
             if not os.path.isfile(target) and "." not in os.path.basename(raw):
                 # Single-page app: a deep link is not a missing file, it is a
                 # route the client will resolve once index.html has loaded.
+                self.path = "/index.html"
+            elif target == fallback and raw != "/index.html":
+                # The symlink guard (issue #244) answers an out-of-root
+                # target with the same index.html shell, but end_headers
+                # keys the no-cache rule off self.path: without this, the
+                # guard's shell would be served with whatever caching
+                # applied to the original request, and could be cached as
+                # if it were the requested asset (issue #253).
                 self.path = "/index.html"
             return super().send_head()
 

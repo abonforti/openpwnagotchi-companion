@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import http.client
 import threading
+from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -372,6 +373,176 @@ def test_a_dangling_symlink_whose_target_would_sit_inside_the_root_is_missing(ge
 
     assert status == 404
     assert b"never-created" not in body
+
+
+@contextmanager
+def _serving(root):
+    """Stand up a server on a caller-built root instead of the `web_root`
+    fixture, which always ships a real `index.html`; these tests need the
+    shell itself to be the link.
+    """
+    handler = companion.make_http_handler(str(root), lambda: ["172.20.10.2"], 8082)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+
+        def _get(path: str, method: str = "GET"):
+            connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+            try:
+                connection.request(method, path)
+                response = connection.getresponse()
+                headers = {name.lower(): value for name, value in response.getheaders()}
+                return response.status, headers, response.read()
+            finally:
+                connection.close()
+
+        yield _get
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_a_shell_that_is_itself_a_link_out_of_the_root_is_not_served(tmp_path):
+    """Before the fix (issue #256), `translate_path` resolved the request path
+    but handed the fallback back unresolved, so a shell linked out of the root
+    was served for every request the guard redirected. This test fails on
+    that code: both requests come back 200 with the marker instead of 404.
+    """
+    root = tmp_path / "web"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.html").write_text(MARKER)
+    try:
+        (root / "index.html").symlink_to(outside / "secret.html")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    with _serving(root) as get:
+        for path in ("/", "/index.html"):
+            status, _, body = get(path)
+            assert status == 404
+            assert MARKER.encode() not in body
+
+
+def test_a_route_and_an_asset_with_a_linked_out_shell_are_not_served_either(tmp_path):
+    """The single-page fallback and a missing asset both end up asking the
+    guard for the shell, so both must be refused when the shell itself is a
+    link out of the root."""
+    root = tmp_path / "web"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.html").write_text(MARKER)
+    try:
+        (root / "index.html").symlink_to(outside / "secret.html")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    with _serving(root) as get:
+        for path in ("/some-route", "/assets/app-abc123.js"):
+            status, _, body = get(path)
+            assert status == 404
+            assert MARKER.encode() not in body
+
+
+def test_a_shell_that_is_a_link_inside_the_root_still_serves(tmp_path):
+    root = tmp_path / "web"
+    root.mkdir()
+    (root / "real.html").write_text(INDEX)
+    try:
+        (root / "index.html").symlink_to(root / "real.html")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    with _serving(root) as get:
+        status, _, body = get("/")
+        assert status == 200
+        assert body.decode() == INDEX
+
+        status, _, body = get("/some-route")
+        assert status == 200
+        assert body.decode() == INDEX
+
+
+def test_a_shell_that_is_a_link_at_a_directory_out_of_the_root_is_not_served(tmp_path):
+    """The link may point at a directory rather than a file. The base class
+    would redirect a directory-shaped answer into the directory and, given
+    a `%2f` spelling of the slash, walk it and serve its own `index.html`;
+    `send_head` sends the 404 itself so neither happens."""
+    root = tmp_path / "www"
+    root.mkdir()
+    outside = tmp_path / "outside-dir"
+    outside.mkdir()
+    (outside / "index.html").write_text(MARKER)
+    try:
+        (root / "index.html").symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    with _serving(root) as get:
+        for path in ("/", "/index.html", "/index.html/", "/index.html%2f", "/some-route"):
+            status, headers, body = get(path)
+            assert status == 404, path
+            assert "location" not in headers, path
+            assert MARKER.encode() not in body, path
+
+
+def test_a_shell_linked_out_after_the_server_started_is_not_served_either(tmp_path):
+    """The fallback is resolved per request, not once when the handler class
+    is built: a server that started with a real shell and had it replaced by
+    a link out of the root while running answers 404 from then on. A check
+    computed once at construction would keep serving the outside file."""
+    root = tmp_path / "www"
+    root.mkdir()
+    (root / "index.html").write_text(INDEX)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "planted.html").write_text(MARKER)
+
+    with _serving(root) as get:
+        status, _, body = get("/")
+        assert status == 200
+        assert body.decode() == INDEX
+
+        (root / "index.html").unlink()
+        try:
+            (root / "index.html").symlink_to(outside / "planted.html")
+        except OSError as error:
+            pytest.skip(f"filesystem does not support symlinks: {error}")
+
+        for path in ("/", "/index.html", "/some-route"):
+            status, _, body = get(path)
+            assert status == 404, path
+            assert MARKER.encode() not in body, path
+
+
+def test_a_link_out_of_the_root_with_a_linked_out_shell_is_not_served(tmp_path):
+    """The shape issue #256 names: a request the guard redirects (the `leak`
+    link) must not land on the outside shell either, even though both the
+    request path and the fallback resolve outside the root.
+    """
+    root = tmp_path / "web"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker_a = "eel-cave-turquoise-41-a"
+    marker_b = "eel-cave-turquoise-41-b"
+    (outside / "shell.html").write_text(marker_a)
+    (outside / "leak.html").write_text(marker_b)
+    try:
+        (root / "index.html").symlink_to(outside / "shell.html")
+        (root / "leak").symlink_to(outside / "leak.html")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support symlinks: {error}")
+
+    with _serving(root) as get:
+        status, _, body = get("/leak")
+        assert status == 404
+        assert marker_a.encode() not in body
+        assert marker_b.encode() not in body
 
 
 def test_a_symlink_that_stays_inside_the_web_root_is_followed(get, web_root):
